@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!--
+    §1 — inverted with the header logo: a white tile carrying the oxblood mark,
+    so the tab icon and the wordmark on the bar are the same object. The pair is
+    the same 9.33:1 either way round, which is what lets it invert at all.
+  -->
+  <rect width="64" height="64" rx="15" fill="#FFFFFF"/>
+  <path d="M44 15.5a21 21 0 1 0 0 33" fill="none" stroke="#7A2E2A" stroke-width="7" stroke-linecap="round"/>
+  <path d="M31 21.5 45.5 32 31 42.5" fill="none" stroke="#7A2E2A" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

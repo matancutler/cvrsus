@@ -1,0 +1,62 @@
+{
+  "name": "cvrsvs",
+  "private": true,
+  "version": "0.1.0",
+  "description": "CV intake and job-description matching for recruiters",
+  "workspaces": [
+    "server",
+    "client"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,client -c blue,magenta \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:server": "npm run dev -w server",
+    "dev:client": "npm run dev -w client",
+    "build": "npm run build -w client",
+    "start": "npm run start -w server",
+    "test": "node test/skills.test.mjs",
+    "test:api": "node test/api.test.mjs",
+    "test:phase1": "node test/phase1.test.mjs",
+    "test:matching": "node test/matching-check.mjs",
+    "test:summary": "node test/summary-limit-check.mjs",
+    "test:summary-ai": "node test/summary-ai-check.mjs",
+    "test:wiring": "node test/wiring-check.mjs",
+    "test:signin": "node test/auto-signin-check.mjs",
+    "db": "node scripts/inspect-db.mjs",
+    "test:reveal": "node test/team-reveal-check.mjs",
+    "test:freshness": "node test/freshness-check.mjs",
+    "test:security": "node test/security-check.mjs",
+    "test:landing": "node test/landing-check.mjs",
+    "test:cookies": "node test/cookie-auth-check.mjs",
+    "test:stats": "node test/stats-banner-check.mjs",
+    "test:pricing": "node test/pricing-check.mjs",
+    "test:legal": "node test/legal-check.mjs",
+    "test:folders": "node test/folder-status-check.mjs",
+    "test:portal": "node test/portal-check.mjs",
+    "test:persistence": "node test/persistence-check.mjs",
+    "test:usage": "node test/usage-check.mjs",
+    "test:export": "node test/export-check.mjs",
+    "test:comms": "node test/comms-check.mjs",
+    "test:summary-companies": "node test/summary-companies-check.mjs",
+    "test:workspace": "node test/workspace-check.mjs",
+    "test:shared-folders": "node test/shared-folders-check.mjs",
+    "test:demo": "node test/public-demo-check.mjs",
+    "contact": "node server/scripts/contact.mjs",
+    "test:single-session": "node test/single-session-check.mjs",
+    "test:recruiter-profile": "node test/recruiter-profile-check.mjs",
+    "test:recruiter-usage": "node test/recruiter-usage-check.mjs",
+    "test:triage": "node test/triage-check.mjs",
+    "test:triage-funnel": "node test/triage-funnel-check.mjs",
+    "test:triage-capacity": "node test/triage-capacity-check.mjs"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "pdfkit": "^0.19.1"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "allowScripts": {
+    "better-sqlite3@12.11.1": true,
+    "esbuild@0.25.12": true
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "name": "cvrsvs-server",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "node --watch --watch-preserve-output src/index.js",
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.115.0",
+    "better-sqlite3": "^12.2.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "mammoth": "^1.9.0",
+    "multer": "^2.0.2",
+    "pdfjs-dist": "^6.2.108"
+  }
+}

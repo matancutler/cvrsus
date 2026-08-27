@@ -1,0 +1,19 @@
+# Line endings, settled once.
+#
+# The working copy is Windows and the source is LF, so without this every file
+# looks modified the first time git touches it and diffs fill up with noise
+# that is not a change. Normalise to LF in the repository and let git hand the
+# platform whatever it wants in the working tree.
+* text=auto eol=lf
+
+# Binary, so git never tries to translate them.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.svg text
+*.pdf binary
+*.xlsx binary
+*.ico binary
+*.woff binary
+*.woff2 binary

@@ -1,0 +1,29 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+Thumbs.db
+
+# Secrets.
+#
+# Every env file except the template. SESSION_SECRET signs sessions and hashes
+# sign-in codes, so publishing it would let anyone forge either; .env.development
+# and .env.production carry real values and were not covered by a bare `.env`.
+.env
+.env.*
+!.env.example
+
+# The live database and everything uploaded to it.
+#
+# cking.db holds real candidates — names, email addresses, phone numbers — and
+# server/uploads holds their actual CVs. Neither belongs in a repository,
+# private or otherwise.
+server/data/
+server/uploads/
+
+# Working material rather than source: notes, screenshots, invoices, sample
+# profiles. Some of it is personal or financial.
+surroundings/
+
+# Local editor and tool settings, which are per-machine rather than per-project.
+.claude/settings.local.json
