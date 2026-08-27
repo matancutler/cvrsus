@@ -24,6 +24,7 @@
     "db": "node scripts/inspect-db.mjs",
     "test:reveal": "node test/team-reveal-check.mjs",
     "test:freshness": "node test/freshness-check.mjs",
+    "test:identity": "node test/identity-check.mjs",
     "test:security": "node test/security-check.mjs",
     "test:landing": "node test/landing-check.mjs",
     "test:cookies": "node test/cookie-auth-check.mjs",

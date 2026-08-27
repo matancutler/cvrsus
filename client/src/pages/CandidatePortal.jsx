@@ -149,6 +149,24 @@ function SignInCard({ onSignedIn }) {
         <button type="button" className="btn btn-quiet" onClick={() => { setStep('identify'); setCode('') }}>
           Use a different email address
         </button>
+
+        {/*
+          The one question this screen could not answer.
+
+          Somebody who cannot open that mailbox has nowhere to go: the code is
+          unreadable and the button above only returns them to a field they have
+          nothing new to type into. Left there, the next thing they meet is an
+          offer to create a profile — which orphans the one they already have,
+          CV, messages and paid-for reveals with it.
+
+          Changing the address on an account is deliberately not self-service:
+          it is the credential now, so it is handled by a person who can check
+          who is asking. This is the door to that.
+        */}
+        <p className="field-hint">
+          Lost access to this address? <Link to="/contact">Contact us</Link> and we will move your
+          profile to a new one. Do not create a second profile — your first one would stay behind.
+        </p>
       </form>
     )
   }
@@ -213,6 +231,14 @@ function SignInCard({ onSignedIn }) {
           >
             Try another email address
           </button>
+          {/* Before the offer to create one, because the person who has lost
+              their mailbox and the person who is genuinely new both read this,
+              and only one of them should sign up. */}
+          <p className="field-hint">
+            Applied before but cannot reach that address any more?{' '}
+            <Link to="/contact">Contact us</Link> rather than signing up again — a second profile
+            leaves the first one behind.
+          </p>
           <p className="field-hint">
             Never applied? <Link to="/">Create a profile</Link> — it takes a minute, and afterwards
             you can sign in here.

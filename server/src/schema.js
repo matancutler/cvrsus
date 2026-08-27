@@ -1044,6 +1044,22 @@ export const ADDED_COLUMNS = {
      * candidate stale.
      */
     ['last_seen_at', 'TEXT'],
+    /*
+     * The one mailbox and the one number an account belongs to.
+     *
+     * Derived, never typed: emailKey folds the dots and +tags that Gmail treats
+     * as decoration, phoneKey keeps the last nine digits so "+972 50 123 4567"
+     * and "050-123-4567" are one number. A UNIQUE index sits on each, which is
+     * what makes "two accounts cannot share a contact detail" a fact about the
+     * database rather than a promise made by whichever route happens to be
+     * checking.
+     *
+     * Indexing the raw columns instead would have missed exactly the cases that
+     * have cost real accounts here: the same inbox spelled differently, and the
+     * same phone written in another format.
+     */
+    ['email_key', 'TEXT'],
+    ['phone_key', 'TEXT'],
     ['missed_checkins', 'INTEGER NOT NULL DEFAULT 0'],
     /*
      * Which reminder in the inactivity sequence has already gone out.

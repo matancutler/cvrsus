@@ -27,7 +27,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import { SUMMARY_MAX_CHARS } from '../src/ai.js'
-import db, { UPLOAD_DIR, getCandidate, updateCandidate } from '../src/db.js'
+import db, { UPLOAD_DIR, emailKey, getCandidate, phoneKey, updateCandidate } from '../src/db.js'
 import {
   activityStatus, deactivate, deleteCandidateCompletely, deletionPreview,
   effectiveProfile, listDocuments, reactivate,
@@ -188,7 +188,36 @@ else if (command === 'set') {
     fail('Nothing to change. See --help for the fields you can set.')
   }
 
-  if (Object.keys(changes).length > 0) updateCandidate(candidate.id, changes)
+  /*
+   * The database refuses a contact detail another account already holds, and
+   * this turns that into something an operator can act on.
+   *
+   * It matters most on the recovery path: somebody who has lost access to their
+   * mailbox is moved to a new address from here, and a typo that lands on an
+   * address already in use would otherwise have produced two accounts on one
+   * identity — after which sign-in resolves to the newer row and the older
+   * profile is unreachable. Naming the account that already holds it is what
+   * lets the operator see they have the wrong person before trying again.
+   */
+  if (Object.keys(changes).length > 0) {
+    try {
+      updateCandidate(candidate.id, changes)
+    } catch (error) {
+      if (!/UNIQUE|constraint/i.test(error.message)) throw error
+
+      const clash = changes.email
+        ? db.prepare(`SELECT id, name, email FROM candidates WHERE email_key = ?`)
+          .get(emailKey(changes.email))
+        : db.prepare(`SELECT id, name, phone FROM candidates WHERE phone_key = ?`)
+          .get(phoneKey(changes.phone))
+
+      fail(changes.email
+        ? `That email address already belongs to candidate ${clash?.id} (${clash?.name}). `
+          + 'One mailbox is one account.'
+        : `That phone number already belongs to candidate ${clash?.id} (${clash?.name}). `
+          + 'One number is one account.')
+    }
+  }
 
   /*
    * The same rule the app applies (§6.1/§6.2): only a change matching depends

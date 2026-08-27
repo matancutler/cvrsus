@@ -499,39 +499,15 @@ check('correct code signs the candidate in', typeof signedIn.token === 'string',
 check('a code cannot be reused', (await verify(`dana.${RUN}${MARKER}`, byEmail.devCode)).status === 401)
 
 /*
- * The candidate chooses the channel, so the phone number must work too, and in
- * a different format from the one they registered with.
+ * The phone number used to be a second way in, and this is where that was
+ * proved — registered as 052-..., signed in as +972 52 ..., same account.
  *
- * Built from the registered number rather than written out, because the
- * fixtures are per run now — a literal here went on testing a number that
- * belonged to a previous run's candidate, and then to nobody at all.
+ * Sign-in is the email address alone now, so there is nothing left here to
+ * assert. The property that number formats are folded to one identity is not
+ * gone and still matters: it is what stops one person holding two profiles.
+ * It is proved in persistence-check, where a rival profile tries to take a
+ * number another account already uses and is refused.
  */
-const samDigits = phoneFor('6543').replace(/\D/g, '')
-const samInternational = `+972 ${samDigits.slice(1, 3)} ${samDigits.slice(3, 6)} ${samDigits.slice(6)}`
-/*
- * One number, however it is written — still true, and still load-bearing.
- *
- * It used to be proved by signing in with the international spelling. A phone
- * number opens nothing now, so the property is proved where it still matters:
- * a second application using the same number in a different format has to be
- * recognised as the same person and refused. That is the failure this
- * normalisation exists to prevent — one human, two profiles.
- */
-const twinForm = new FormData()
-twinForm.append('cv', new Blob([await makePdf(CV)], { type: 'application/pdf' }), 'cv.pdf')
-for (const [k, v] of Object.entries({
-  firstName: 'Sam', lastName: 'Twin', email: `sam.twin.${RUN}${MARKER}`,
-  phone: samInternational, location: 'Tel Aviv', availability: 'Immediately',
-  capacity: 'Full time', consent: 'true',
-})) twinForm.append(k, v)
-for (const [k, v] of Object.entries(await contactProofs({
-  email: `sam.twin.${RUN}${MARKER}`, phone: samInternational,
-}))) twinForm.append(k, v)
-const twin = await fetch(`${BASE}/api/candidates`, { method: 'POST', body: twinForm })
-check('the same number in another format is recognised as the same person',
-  twin.status === 409, `HTTP ${twin.status}`)
-check('and the refusal names the number rather than the email',
-  /phone/i.test((await twin.json()).error ?? ''))
 
 const danaToken = signedIn.token
 check('recruiter routes reject a candidate token',
@@ -593,9 +569,11 @@ check('edit enforces the same required fields as the application form',
     method: 'PATCH', headers: { Authorization: `Bearer ${danaToken}` }, body: badEdit,
   })).status === 400)
 
-// Signing in with the updated phone number proves the change really landed.
-const afterEdit = await requestCode(phoneFor('9999'))
-check('updated phone works for sign-in', /^\d{6}$/.test(afterEdit.devCode ?? ''))
+/* That the change really landed, read off the profile. It used to be proved by
+   signing in with the new number, which a phone number no longer does. */
+const afterEdit = await json(await fetch(`${BASE}/api/candidate/me`, { headers: jsonHeaders(danaToken) }))
+check('the updated phone is on the profile', afterEdit.candidate.phone === phoneFor('9999'),
+  afterEdit.candidate.phone)
 
 // ------------------------------------------------------------- view counter ---
 

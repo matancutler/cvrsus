@@ -670,14 +670,29 @@ const insertStmt = db.prepare(`
     name, first_name, middle_name, last_name, email, phone, location,
     years_experience, current_title, desired_role,
     availability, links, notes, file_name, stored_name, file_size, photo_name,
-    cv_text, skills, detected_years, created_at
+    cv_text, skills, detected_years, created_at, email_key, phone_key
   ) VALUES (
     @name, @first_name, @middle_name, @last_name, @email, @phone, @location,
     @years_experience, @current_title, @desired_role,
     @availability, @links, @notes, @file_name, @stored_name, @file_size, @photo_name,
-    @cv_text, @skills, @detected_years, @created_at
+    @cv_text, @skills, @detected_years, @created_at, @email_key, @phone_key
   )
 `)
+
+/**
+ * The canonical keys for whatever contact details a write carries.
+ *
+ * One function, used by the insert and the update, so the two cannot drift.
+ * Only ever derives a key for a field actually being written: an update that
+ * touches nobody's email must not blank the key and quietly free the address
+ * for somebody else to take.
+ */
+function contactKeys(fields) {
+  const keys = {}
+  if ('email' in fields) keys.email_key = fields.email ? emailKey(fields.email) : null
+  if ('phone' in fields) keys.phone_key = fields.phone ? phoneKey(fields.phone) : null
+  return keys
+}
 
 /** Columns every read returns except cv_text, which is large and rarely needed in lists. */
 const LIST_COLUMNS = `
@@ -716,6 +731,11 @@ export function insertCandidate(record) {
     ...record,
     links: JSON.stringify(record.links ?? []),
     skills: JSON.stringify(record.skills ?? []),
+    /* Always both, because this is an INSERT and every named parameter has to
+       be bound — contactKeys omits a field the caller did not mention, which
+       is right for an UPDATE and wrong here. */
+    email_key: record.email ? emailKey(record.email) : null,
+    phone_key: record.phone ? phoneKey(record.phone) : null,
   })
   return Number(info.lastInsertRowid)
 }
@@ -819,9 +839,15 @@ export function updateCandidate(id, fields) {
   const entries = Object.entries(fields).filter(([column]) => UPDATABLE_COLUMNS.has(column))
   if (entries.length === 0) return false
 
-  const assignments = entries.map(([column]) => `${column} = @${column}`).join(', ')
+  /* Derived here rather than by the caller. Every route, script and repair that
+     changes an address goes through this function, so this is the one place
+     that can guarantee the key moves with it. */
+  const derived = Object.entries(contactKeys(Object.fromEntries(entries)))
+  const all = [...entries, ...derived]
+
+  const assignments = all.map(([column]) => `${column} = @${column}`).join(', ')
   const payload = Object.fromEntries(
-    entries.map(([column, value]) => [column, column === 'skills' ? JSON.stringify(value ?? []) : value]),
+    all.map(([column, value]) => [column, column === 'skills' ? JSON.stringify(value ?? []) : value]),
   )
 
   return db.prepare(`UPDATE candidates SET ${assignments} WHERE id = @id`)
@@ -881,6 +907,71 @@ export function emailKey(value) {
   if (!ALIASING_DOMAINS.has(domain)) return text
 
   return `${local.split('+')[0].replace(/\./g, '')}@${domain}`
+}
+
+/*
+ * One mailbox, one number, one account — made true, then kept true.
+ *
+ * Runs at boot, before anything can write. Two steps, in this order:
+ *
+ *   1. derive email_key/phone_key for rows that predate the columns, and for
+ *      any row a repair touched without going through updateCandidate;
+ *   2. put a UNIQUE index on each, which is what actually stops a second
+ *      account taking a contact detail the first one holds.
+ *
+ * Step 2 can fail, and the failure is the point. SQLite refuses to build a
+ * unique index over data that already violates it, so a database with two
+ * accounts on one mailbox will not get the constraint — and this says so
+ * loudly with the ids rather than carrying on and letting everyone believe
+ * duplicates are impossible. Resolving those is a decision about whose CV and
+ * whose paid-for reveals survive, which is not a decision a migration should
+ * make on its own.
+ *
+ * Both indexes are partial. A candidate with no phone number is normal, and
+ * NULLs are distinct in SQLite anyway; the WHERE clause makes that explicit and
+ * keeps the index off rows it says nothing about.
+ */
+{
+  const backfilled = db.transaction(() => {
+    let touched = 0
+    const rows = db.prepare(`
+      SELECT id, email, phone FROM candidates
+      WHERE (email IS NOT NULL AND email_key IS NULL)
+         OR (phone IS NOT NULL AND phone_key IS NULL)
+    `).all()
+
+    for (const row of rows) {
+      db.prepare(`UPDATE candidates SET email_key = ?, phone_key = ? WHERE id = ?`).run(
+        row.email ? emailKey(row.email) : null,
+        row.phone ? phoneKey(row.phone) : null,
+        row.id,
+      )
+      touched += 1
+    }
+    return touched
+  })()
+
+  if (backfilled > 0) console.log(`  keyed ${backfilled} candidate contact detail(s)`)
+
+  for (const [what, column] of [['mailbox', 'email_key'], ['phone number', 'phone_key']]) {
+    try {
+      db.exec(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_candidates_${column}
+          ON candidates(${column}) WHERE ${column} IS NOT NULL
+      `)
+    } catch (error) {
+      const clashes = db.prepare(`
+        SELECT ${column} AS key, GROUP_CONCAT(id) AS ids
+        FROM candidates WHERE ${column} IS NOT NULL
+        GROUP BY ${column} HAVING COUNT(*) > 1
+      `).all()
+
+      console.warn(`  WARNING: cannot enforce one account per ${what} — `
+        + `${clashes.length} already shared. Nothing prevents more until these are resolved:`)
+      for (const clash of clashes) console.warn(`    ${clash.key} → candidate ids ${clash.ids}`)
+      console.warn(`    (${error.message})`)
+    }
+  }
 }
 
 export function findCandidateByContact(identifier) {
