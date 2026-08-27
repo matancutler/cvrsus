@@ -147,7 +147,7 @@ function SignInCard({ onSignedIn }) {
           {busy ? 'Checking…' : 'Sign in'}
         </button>
         <button type="button" className="btn btn-quiet" onClick={() => { setStep('identify'); setCode('') }}>
-          Use a different email or number
+          Use a different email address
         </button>
       </form>
     )
@@ -159,8 +159,8 @@ function SignInCard({ onSignedIn }) {
           leads to is the account. */}
       <h1>Sign In</h1>
       <p className="muted">
-        Enter the email address or phone number you applied with. We will send a confirmation code;
-        there is no password.
+        Enter the email address you applied with. We will send a confirmation code; there is
+        no password.
       </p>
 
       {/*
@@ -170,51 +170,48 @@ function SignInCard({ onSignedIn }) {
         reader announces, so the placeholder carries the verb instead.
       */}
       <div className="field">
-        <label className="field-label" htmlFor="sign-in-identifier">Email or phone number</label>
+        <label className="field-label" htmlFor="sign-in-identifier">Email address</label>
         <input
           id="sign-in-identifier"
           autoFocus
           value={identifier}
           onChange={(e) => { setIdentifier(e.target.value); setNotFound('') }}
-          placeholder="Enter your email or phone number"
+          type="email"
+          autoComplete="email"
+          placeholder="Enter your email address"
         />
       </div>
 
       <StatusNotice error={error} onDismiss={() => setError('')} />
 
       {/*
-        Nothing matched — which is far more often the wrong detail than a missing
-        account.
+        Nothing matched — which is far more often the wrong address than a
+        missing account.
 
-        This used to lead with "You need to submit a CV before you have an
-        account" over a primary "Create a profile" button, with "try the other
-        one" as a grey hint underneath. For somebody who had applied and simply
-        reached for the wrong contact detail, that is the site telling them
-        their profile is gone and offering to replace it — and following the
-        offer is how people ended up with a second account.
+        It used to offer the phone number as the other thing to try, because
+        either one signed you in. Only the email does now, so the second answer
+        is a different spelling of the same mailbox rather than a different
+        channel: people apply from work and try to sign in from a personal
+        address, or the other way round.
 
-        Every account carries a verified email AND a verified phone, because
-        both are proved before it can be created. So there is always another
-        thing to try, and it goes first. Creating a profile is still here,
-        because somebody genuinely new is also reading this, but it is the
-        second answer rather than the first.
+        Creating a profile stays, because somebody genuinely new reads this too
+        — but it is the second answer. Leading with it told people who had
+        simply mistyped that their profile was gone, and following the offer is
+        how they ended up with two accounts.
       */}
       {notFound && (
         <div className="not-found">
           <strong>{notFound}</strong>
           <p className="muted">
-            Every Cursus profile has both an email address and a phone number on it, and either one
-            signs you in. Try your {looksLikeEmail(identifier) ? 'phone number' : 'email address'}{' '}
-            {looksLikeEmail(identifier)
-              ? 'instead — any format works.'
-              : 'instead.'}
+            Sign-in goes to the email address on your profile. If you have more than one, try the
+            other — the address you applied with is the one that works.
           </p>
           <button
             type="button"
             className="btn btn-primary btn-block"
             onClick={() => { setNotFound(''); setIdentifier('') }}
           >
-            Try my {looksLikeEmail(identifier) ? 'phone number' : 'email address'}
+            Try another email address
           </button>
           <p className="field-hint">
             Never applied? <Link to="/">Create a profile</Link> — it takes a minute, and afterwards
@@ -241,10 +238,6 @@ function SignInCard({ onSignedIn }) {
       </p>
     </form>
   )
-}
-
-function looksLikeEmail(value) {
-  return String(value ?? '').includes('@')
 }
 
 // -------------------------------------------------------------- portal ---

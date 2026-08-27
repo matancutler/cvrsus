@@ -115,12 +115,29 @@ check('the CV is still attached', returned.documents?.length === initial.documen
 check('the city is still theirs', returned.candidate?.location === 'Tel Aviv')
 check('and so are their preferences', returned.preferences?.openToAll === true)
 
-section('Either contact detail opens the same account')
+section('The email is the door; the phone is not a second one')
 
+/*
+ * Both details are still proved before an account exists, and both are still
+ * one identity — the duplicate-account bug this suite exists for turned on
+ * exactly that. What changed is which of them signs you in.
+ *
+ * Only the email does. Every message the product depends on goes to that
+ * address, so signing in through it is what keeps an active-looking profile
+ * genuinely reachable. A code by SMS would let somebody whose inbox is dead
+ * reset their freshness clock and stay Green for recruiters who are paying to
+ * reach them.
+ */
 const byPhone = await signIn(first.phone)
-check('signing in by phone works', byPhone.status === 200 && Boolean(byPhone.token))
-check('and reaches the same row', (await me(byPhone.token)).candidate?.id === id,
-  'an email and a phone on one account are one identity, not two')
+check('a phone number does not sign anybody in', byPhone.status === 400,
+  `HTTP ${byPhone.status}`)
+check('and no session comes back with it', !byPhone.token)
+
+/* The phone is still on the account and still theirs — it is sold to
+   recruiters as part of a Reveal. It is simply not a credential. */
+const stillTheirs = await me(back.token)
+check('the phone is still on the profile', Boolean(stillTheirs.candidate?.phone),
+  'proved at signup, and part of what a Reveal unlocks')
 
 section('A second application on the same details is refused')
 
@@ -273,8 +290,11 @@ const stolen = await fetch(`${BASE}/api/candidate/me`, {
 })
 check('taking a contact detail another profile uses is refused', stolen.status === 409,
   `HTTP ${stolen.status}`)
-check('and the number still opens the original profile',
-  (await me((await signIn(first.phone)).token)).candidate?.id === id)
+/* The number still belongs to the original profile — which is the point of
+   refusing the theft. Asserted through the profile rather than through a
+   sign-in, because a phone number no longer opens anything. */
+check('and the number still belongs to the original profile',
+  (await me((await signIn(first.email)).token)).candidate?.phone === first.phone)
 
 section('And the form can still change a contact detail')
 
@@ -303,8 +323,13 @@ const changed = await fetch(`${BASE}/api/candidate/me`, {
   body: change,
 })
 check('a proved new number saves', changed.ok, `HTTP ${changed.status}`)
-check('and signing in with it opens the same profile',
-  (await me((await signIn(moved)).token)).candidate?.id === id)
+/* The number moved to this profile and to no other. Read off the account
+   rather than signed in with, since a phone number is no longer a door — what
+   the edit had to get right is whose row it landed on. */
+const afterMove = await me((await signIn(first.email)).token)
+check('and it lands on the same profile',
+  afterMove.candidate?.id === id && afterMove.candidate?.phone === moved,
+  `${afterMove.candidate?.phone}`)
 
 
 section('One mailbox is one account')

@@ -463,11 +463,21 @@ check('unknown email is reported as having no account', unknownEmail.status === 
 check('the message names the email address', /email address/i.test(unknownEmailBody.error),
   unknownEmailBody.error)
 
-const unknownPhone = await rawRequestCode('050-000-0000')
-const unknownPhoneBody = await unknownPhone.json()
-check('unknown phone is reported as having no account', unknownPhone.status === 404)
-check('the message names the phone number', /phone number/i.test(unknownPhoneBody.error),
-  unknownPhoneBody.error)
+/*
+ * A phone number is not an identifier here, and the refusal is not a lookup.
+ *
+ * 400 rather than 404 on purpose: the number is never checked against the
+ * database, so this endpoint cannot be asked whether a given number is on file.
+ * The email branch above does answer that, deliberately, because the sign-in
+ * page offers to create a profile when there is none.
+ */
+const byPhoneNumber = await rawRequestCode('050-000-0000')
+const byPhoneNumberBody = await byPhoneNumber.json()
+check('a phone number is refused rather than looked up', byPhoneNumber.status === 400,
+  `HTTP ${byPhoneNumber.status}`)
+check('and the message sends them to their email instead',
+  /email address you applied with/i.test(byPhoneNumberBody.error),
+  byPhoneNumberBody.error)
 
 const byEmail = await requestCode(`dana.${RUN}${MARKER}`)
 check('email is detected as the channel', byEmail.channel === 'email')
@@ -498,12 +508,30 @@ check('a code cannot be reused', (await verify(`dana.${RUN}${MARKER}`, byEmail.d
  */
 const samDigits = phoneFor('6543').replace(/\D/g, '')
 const samInternational = `+972 ${samDigits.slice(1, 3)} ${samDigits.slice(3, 6)} ${samDigits.slice(6)}`
-const byPhone = await requestCode(samInternational)
-check('phone is detected as the channel', byPhone.channel === 'phone')
-const samSignedIn = await json(await verify(samInternational, byPhone.devCode))
-check('phone in a different format resolves to the same account',
-  typeof samSignedIn.token === 'string', samSignedIn.name)
-check('phone sign-in reached the right person', samSignedIn.name === 'Sam Chidi Okafor')
+/*
+ * One number, however it is written — still true, and still load-bearing.
+ *
+ * It used to be proved by signing in with the international spelling. A phone
+ * number opens nothing now, so the property is proved where it still matters:
+ * a second application using the same number in a different format has to be
+ * recognised as the same person and refused. That is the failure this
+ * normalisation exists to prevent — one human, two profiles.
+ */
+const twinForm = new FormData()
+twinForm.append('cv', new Blob([await makePdf(CV)], { type: 'application/pdf' }), 'cv.pdf')
+for (const [k, v] of Object.entries({
+  firstName: 'Sam', lastName: 'Twin', email: `sam.twin.${RUN}${MARKER}`,
+  phone: samInternational, location: 'Tel Aviv', availability: 'Immediately',
+  capacity: 'Full time', consent: 'true',
+})) twinForm.append(k, v)
+for (const [k, v] of Object.entries(await contactProofs({
+  email: `sam.twin.${RUN}${MARKER}`, phone: samInternational,
+}))) twinForm.append(k, v)
+const twin = await fetch(`${BASE}/api/candidates`, { method: 'POST', body: twinForm })
+check('the same number in another format is recognised as the same person',
+  twin.status === 409, `HTTP ${twin.status}`)
+check('and the refusal names the number rather than the email',
+  /phone/i.test((await twin.json()).error ?? ''))
 
 const danaToken = signedIn.token
 check('recruiter routes reject a candidate token',

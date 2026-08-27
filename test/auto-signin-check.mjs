@@ -108,6 +108,33 @@ check('signing in with that address opens the original profile',
   (await json(await meWith(signedIn.token))).candidate.id === first.body.id,
   'the whole of the persistence bug was this line disagreeing with the token above')
 
+section('The door is the email address, and only that')
+/*
+ * The phone is proved once, at signup, and sold to recruiters as part of a
+ * Reveal. It is not a way in.
+ *
+ * Every email this product depends on goes to one address — the freshness
+ * reminders, the notice that somebody revealed them, the warning before the
+ * profile is hidden. Signing in through that mailbox is what keeps "active"
+ * meaning something. A code by SMS would let a candidate whose inbox is dead
+ * reset their activity clock and go on looking current to recruiters who are
+ * paying to reach them.
+ */
+const byPhone = await fetch(`${BASE}/api/candidate/request-code`, {
+  method: 'POST', headers: { 'content-type': 'application/json' },
+  /* Any phone-shaped string does: the refusal is about the channel, not about
+     whether this number is on file. */
+  body: JSON.stringify({ identifier: '052-123-4567' }),
+})
+check('a phone number is refused at sign-in', byPhone.status === 400, `${byPhone.status}`)
+check('and the refusal says where to go instead',
+  /email address you applied with/.test((await byPhone.clone().json()).error))
+/* 400 rather than 404: the number is not being looked up and failing, it is
+   not being accepted as an identifier at all. */
+check('the account is not consulted to decide that',
+  byPhone.status !== 404,
+  'a 404 would leak whether a number is on file, to anyone who asks')
+
 section('The session is a real candidate session, not a bypass')
 const recruiterRoute = await fetch(`${BASE}/api/hr/candidates`, {
   headers: { authorization: `Bearer ${first.body.token}` },

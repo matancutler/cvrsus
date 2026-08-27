@@ -22,6 +22,7 @@ import {
   sendRecruiterDeclined,
   sendRecruiterUnderReview,
 } from '../server/src/notify.js'
+import { isUnroutable } from '../server/src/notify.js'
 import { createReporter } from './helpers.mjs'
 
 const { section, check, finish } = createReporter('Automated communications')
@@ -204,6 +205,42 @@ check('a candidate hiding themselves is not announced internally',
   /Candidate automatically hidden/.test(sweepSource)
   && !/notifySlack\([^)]*manually/i.test(sweepSource),
   'using a control the product offers is not an event to report on somebody')
+
+section('A live key cannot turn this suite into a mailing')
+
+/*
+ * Every fixture in this repository writes to `@cking-<run>.example.com`, and
+ * RFC 2606 reserves that domain precisely so nobody tries to deliver to it.
+ * Email now goes through a real provider when RESEND_API_KEY is set, and the
+ * suite loads whatever .env the machine has — so without this rule, one
+ * developer with a key in their environment turns a test run into several
+ * hundred live sends to addresses that cannot exist.
+ *
+ * The cost of that is not the quota. It is the bounce rate, which is what
+ * deliverability is scored on, and the mail it would damage is the sign-in
+ * code that must never land in spam.
+ */
+for (const address of [
+  `pat@${MARK}.example.com`,
+  'someone@example.com',
+  'a@sub.example.net',
+  'x@localhost',
+  'y@anything.test',
+  'z@nope.invalid',
+]) {
+  check(`${address} is refused delivery`, isUnroutable(address))
+}
+
+/* The rule has to be narrow, or it silently swallows real candidates. */
+for (const address of [
+  'matanyacutler@gmail.com',
+  'pat@cvrsvs.com',
+  'someone@example-recruiting.com',
+  'person@testing-labs.co.il',
+]) {
+  check(`${address} is deliverable`, !isUnroutable(address),
+    'a guard that eats real addresses is worse than none')
+}
 
 /* ------------------------------------------------------------ cleanup --- */
 

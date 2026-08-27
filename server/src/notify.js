@@ -1,31 +1,54 @@
 /**
- * Delivery of candidate sign-in codes.
+ * Every message the product sends, and where it goes.
  *
- * There is no email or SMS provider wired up, so codes are written to the
- * server console. This is the single place to change when you add one: swap the
- * body of `sendLoginCode` for a Nodemailer / Twilio / provider call and
- * everything else keeps working.
+ * Email is delivered through Resend when RESEND_API_KEY is set and printed to
+ * the console when it is not. SMS has no provider yet, so a sign-in code sent
+ * to a phone is still console-only — which is the one reason OTP_ECHO cannot be
+ * turned off yet.
  *
- * Until then, `OTP_ECHO` controls whether the API also returns the code to the
- * browser so the flow is usable without a mailbox. It MUST be off in
- * production — with it on, anyone who knows a candidate's email address can
- * sign in as them.
+ * `OTP_ECHO` controls whether the API also returns the code to the browser so
+ * the flow is usable without a mailbox. It MUST be off in production — with it
+ * on, anyone who knows a candidate's email address can sign in as them.
  */
 export const OTP_ECHO = process.env.OTP_ECHO === 'true'
   || (process.env.OTP_ECHO === undefined && process.env.NODE_ENV !== 'production')
 
 export async function sendLoginCode({ channel, destination, code, expiresInMinutes }) {
-  const target = channel === 'phone' ? 'phone' : 'email'
+  /*
+   * No SMS provider yet, so a code going to a phone is printed. Kept as its own
+   * branch rather than folded into deliver(): the day Twilio is wired, this is
+   * the single line that changes, and nothing about the email path moves.
+   */
+  if (channel === 'phone') {
+    console.log('')
+    console.log('  ┌─ candidate sign-in code (SMS not wired) ─────────────')
+    console.log(`  │  to phone:  ${destination}`)
+    console.log(`  │  code:      ${code}`)
+    console.log(`  │  valid for: ${expiresInMinutes} minutes`)
+    console.log('  └──────────────────────────────────────────────────────')
+    console.log('')
 
-  console.log('')
-  console.log('  ┌─ candidate sign-in code ─────────────────────────────')
-  console.log(`  │  to ${target}: ${destination}`)
-  console.log(`  │  code:        ${code}`)
-  console.log(`  │  valid for:   ${expiresInMinutes} minutes`)
-  console.log('  └──────────────────────────────────────────────────────')
-  console.log('')
+    return { delivered: 'console', channel: 'phone' }
+  }
 
-  return { delivered: 'console' }
+  /*
+   * The code is in the subject on purpose. It is the first thing shown in a
+   * notification preview, and a candidate who can read it there does not have
+   * to open anything — which is the difference between a code that gets used
+   * and one that expires.
+   */
+  return deliver({
+    to: destination,
+    subject: `${code} is your Cursus sign-in code`,
+    lines: [
+      'Hi,',
+      `Your Cursus sign-in code is ${code}.`,
+      `It is valid for ${expiresInMinutes} minutes and can be used once.`,
+      'If you did not ask to sign in, you can ignore this email — nobody can '
+        + 'use the code without it.',
+      '— Cursus',
+    ],
+  })
 }
 
 if (OTP_ECHO) {
@@ -287,22 +310,120 @@ export async function sendDeactivationEmail({ to, name }) {
    whole notification surface visible in development.
    ========================================================================== */
 
-/**
- * One email, printed.
+/*
+ * Where email actually goes.
  *
- * Returns the subject and body so a caller — or a test — can assert on what
- * would have been sent rather than on the fact that something was.
+ * Resend when a key is configured, the console otherwise. The fallback is not
+ * a stub to be removed later — it is what makes the whole suite runnable
+ * without credentials, and what a developer sees when they run the server with
+ * no .env at all.
  */
-async function deliver({ to, subject, lines }) {
+const RESEND_KEY = process.env.RESEND_API_KEY ?? ''
+
+/*
+ * The From address, and why it is not simply an address.
+ *
+ * Resend will only send from a domain verified in the account. Until
+ * mail.cvrsvs.com is verified this default is Resend's own shared sender,
+ * which delivers ONLY to the address that owns the Resend account — useful for
+ * proving the wiring works, useless for candidates. Set MAIL_FROM once the
+ * domain is verified.
+ */
+const MAIL_FROM = process.env.MAIL_FROM ?? 'Cursus <onboarding@resend.dev>'
+
+/* Where a candidate's reply goes, since the From is a no-reply. Several of
+   these emails do invite an answer in practice. */
+const MAIL_REPLY_TO = process.env.MAIL_REPLY_TO ?? ''
+
+/*
+ * Addresses that must never reach a provider.
+ *
+ * RFC 2606 reserves example.com, .test, .invalid and localhost precisely so
+ * that they can be used in documentation and test fixtures without anybody
+ * trying to deliver to them — and every fixture in this repository uses
+ * `@cking-<run>.example.com`. Without this guard, running the test suite on a
+ * machine whose .env carries a real key would fire hundreds of live sends at
+ * addresses that cannot exist, burn quota, and teach the provider that this
+ * domain generates hard bounces. That last part is the expensive one: bounce
+ * rate is what deliverability is scored on, and sign-in codes are the mail
+ * that must never land in spam.
+ *
+ * Checked here rather than in the tests, because the tests are not the only
+ * thing that could do it.
+ */
+const UNROUTABLE = /@(?:[a-z0-9-]+\.)*(?:example\.(?:com|net|org)|test|invalid|localhost)$/i
+
+/** Exported so the rule can be tested without a live key and a real send. */
+export const isUnroutable = (address) => UNROUTABLE.test(String(address ?? ''))
+
+/** True when mail would really be sent, so callers can log honestly. */
+export const MAIL_LIVE = Boolean(RESEND_KEY)
+
+function printed(to, subject, lines, note) {
   console.log('')
   console.log('  ┌─ email ──────────────────────────────────────────────')
   console.log(`  │  to:      ${to}`)
   console.log(`  │  subject: ${subject}`)
   for (const line of lines) console.log(`  │  ${line}`)
+  if (note) console.log(`  │  (${note})`)
   console.log('  └──────────────────────────────────────────────────────')
   console.log('')
+}
 
-  return { delivered: 'console', to, subject, body: lines.join('\n') }
+/**
+ * One email, sent or printed.
+ *
+ * Returns the subject and body either way, so a caller — or a test — can
+ * assert on what would have been sent rather than on the fact that something
+ * was. That is why every template in this file goes through here.
+ *
+ * Throws on a provider failure rather than swallowing it. Callers that must
+ * not fail because of the outbox already wrap this in try/catch or .catch();
+ * making the failure invisible here would take that choice away from them.
+ */
+async function deliver({ to, subject, lines }) {
+  const body = lines.join('\n\n')
+  const result = { to, subject, body }
+
+  if (!RESEND_KEY) {
+    printed(to, subject, lines)
+    return { ...result, delivered: 'console' }
+  }
+
+  if (UNROUTABLE.test(String(to ?? ''))) {
+    printed(to, subject, lines, 'reserved test domain — not sent')
+    return { ...result, delivered: 'skipped' }
+  }
+
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${RESEND_KEY}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      from: MAIL_FROM,
+      to: [to],
+      subject,
+      text: body,
+      ...(MAIL_REPLY_TO ? { reply_to: MAIL_REPLY_TO } : {}),
+    }),
+  })
+
+  if (!response.ok) {
+    /*
+     * The provider's own words, and nothing of ours. Resend explains refusals
+     * usefully — an unverified domain, a malformed From — and those are the
+     * failures worth reading. The key is never in this string.
+     */
+    const detail = await response.text().catch(() => '')
+    throw new Error(`Resend refused the message (${response.status}): ${detail.slice(0, 300)}`)
+  }
+
+  const { id } = await response.json().catch(() => ({}))
+  console.log(`  email sent to ${to} — ${subject}${id ? ` [${id}]` : ''}`)
+
+  return { ...result, delivered: 'resend', id: id ?? null }
 }
 
 /** 1 — the candidate's account exists and is already working for them. */

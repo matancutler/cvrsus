@@ -2057,9 +2057,28 @@ function maskContact(value, channel) {
 app.post('/api/candidate/request-code', limits.requestCode, async (req, res, next) => {
   try {
     const identifier = String(req.body?.identifier ?? '').trim()
-    if (!identifier) throw new HttpError(400, 'Enter the email address or phone number you applied with.')
+    if (!identifier) throw new HttpError(400, 'Enter the email address you applied with.')
 
-    const channel = looksLikeEmail(identifier) ? 'email' : 'phone'
+    /*
+     * Email only, and the phone number is not a second door.
+     *
+     * Every email this product depends on goes to the same address: the
+     * freshness reminders, the notice that a recruiter revealed them, the
+     * warning before the profile is hidden. If that mailbox is dead the
+     * product does not work for them — so signing in through it is what keeps
+     * "active" meaning something. Signing in by SMS would let a candidate with
+     * an unreachable inbox reset their activity clock and go on looking
+     * current to recruiters who are paying to reach them.
+     *
+     * The phone is still proved at signup and still sold to recruiters as part
+     * of a Reveal. It is simply not a way in.
+     */
+    if (!looksLikeEmail(identifier)) {
+      throw new HttpError(400, 'Sign in with the email address you applied with. '
+        + 'We no longer send sign-in codes by text message.')
+    }
+
+    const channel = 'email'
     const candidate = findCandidateByContact(identifier)
 
     // Deliberately tells the caller that no account exists, so the sign-in page
@@ -2067,12 +2086,7 @@ app.post('/api/candidate/request-code', limits.requestCode, async (req, res, nex
     // check whether a given person has applied — throttle it before exposing
     // this server to the internet.
     if (!candidate) {
-      throw new HttpError(
-        404,
-        channel === 'email'
-          ? 'No application was found for that email address.'
-          : 'No application was found for that phone number.',
-      )
+      throw new HttpError(404, 'No application was found for that email address.')
     }
 
     const code = generateLoginCode()
