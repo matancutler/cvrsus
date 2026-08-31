@@ -289,7 +289,7 @@ export async function extractContactDetails(cvText, { signal } = {}) {
  * editable. This covers where CVs on this market actually come from, and
  * everyone else types four characters.
  */
-const KNOWN_CITIES = [
+export const KNOWN_CITIES = [
   'Tel Aviv-Yafo', 'Tel Aviv', 'Jerusalem', 'Haifa', 'Rishon LeZion', 'Petah Tikva',
   'Ashdod', 'Netanya', 'Beer Sheva', "Be'er Sheva", 'Bnei Brak', 'Holon', 'Ramat Gan',
   'Rehovot', 'Bat Yam', 'Herzliya', 'Kfar Saba', 'Modiin', "Modi'in", 'Raanana',

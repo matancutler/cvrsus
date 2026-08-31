@@ -317,6 +317,7 @@ check('and it is reachable on a phone',
   read('../client/src/components/MobileNav.jsx').includes('onDemo'))
 
 const liveDemo = read('../client/src/components/LiveDemo.jsx')
+const demoCss = read('../client/src/styles.css')
 
 section('The demo shows the product, not a form in a box')
 /*
@@ -395,18 +396,85 @@ check('and the opened profile still asks for the account',
   /className="btn btn-primary demo-reveal"/.test(liveDemo))
 
 /*
- * Both destinations in the rail, drawn with the panel's own nav classes.
+ * The rail, drawn with the panel's own classes so the two cannot drift.
  *
  * Triage is a separately paid product area and the rail is the only place the
- * demo says it exists; showing Folders alone described a workspace with one
- * destination. Scenery, like the rest of the aside, which is inert as a whole.
+ * demo says it exists — but it is no longer a destination beside Folders. It
+ * is the other half of the switch over the history list, which is where the
+ * product moved it, and a demo showing the old pair would teach a rail the
+ * visitor will never meet.
+ *
+ * The aside used to be inert as a whole. It cannot be now, because two of its
+ * controls really work: + New opens, and the switch switches. Everything else
+ * stays a <div> — not focusable, not pressable, not pretending to be — so the
+ * rule is no longer "one attribute on the container" but "exactly three
+ * buttons in the whole aside, and these are they".
  */
-check('the rail carries Folders and Triage, in the panel’s own nav',
+/*
+ * The panel must not sit inside a backdrop-filtered element.
+ *
+ * The tint and the blur were on .demo-backdrop, which is the panel's parent —
+ * and an element with backdrop-filter is promoted to its own compositing
+ * layer, taking every descendant with it. The browser then drops subpixel text
+ * antialiasing for the whole subtree and draws it greyscale, so the type
+ * inside the demo came out thinner and paler than the identical type on the
+ * page behind. Nothing was blurred; it was being rendered by another path.
+ *
+ * The fix is structural, so the check is too: the filter belongs to a sibling
+ * that sits behind the panel, and the backdrop must carry none.
+ */
+check('the blur is on a veil, not on the parent of the panel',
+  /\.demo-veil \{[^}]*backdrop-filter: blur/.test(demoCss)
+  && !/\.demo-backdrop \{[^}]*backdrop-filter/.test(demoCss),
+  'backdrop-filter on an ancestor costs every word inside it subpixel antialiasing')
+check('and the veil does not swallow the click that closes the demo',
+  /\.demo-veil \{[^}]*pointer-events: none/.test(demoCss),
+  'clicking outside the panel closes it, and the backdrop underneath is what hears that')
+check('the veil is drawn before the panel and below it',
+  liveDemo.indexOf('className="demo-veil"') < liveDemo.indexOf('className="demo-panel"')
+  && /\.demo-panel \{[\s\S]{0,400}z-index: 1/.test(demoCss))
+
+/*
+ * + Triage changes the page, not just the list beside it.
+ *
+ * The switch and the + New menu both write one piece of state that the main
+ * panel reads, so pressing + Triage moves the visitor to the Triage screen —
+ * which is what the product does. Flipping a list beside a search box would be
+ * the demo contradicting itself in one gesture.
+ */
+check('the demo has one view, read by the rail and the panel alike',
+  /const \[view, setView\] = useState\('searches'\)/.test(liveDemo)
+  && /view=\{view\}[\s\S]{0,40}onView=\{setView\}/.test(liveDemo))
+check('and the Triage view replaces the composer',
+  /\{view === 'triage' \? <DemoTriagePage \/> : \(/.test(liveDemo))
+check('the Triage page is built from the classes of the real screen',
+  /className="triage-page"/.test(liveDemo) && /className="triage-step"/.test(liveDemo),
+  'a lookalike drifts from the screen it is showing')
+check('and nothing on it can be typed into or pressed',
+  (() => {
+    const from = liveDemo.indexOf('function DemoTriagePage')
+    const to = liveDemo.indexOf('function DemoCard', from)
+    const body = liveDemo.slice(from, to)
+    return !/<input|<textarea|<button/.test(body)
+  })(),
+  'a control that answers a click by doing nothing is worse than one that does not invite it')
+
+check('the rail carries Folders in the panel’s own nav',
   /className="ws-nav-item">Folders<span className="ws-nav-count">/.test(liveDemo)
-  && /className="ws-nav-item">Triage<span className="ws-nav-count">/.test(liveDemo))
-check('and the whole rail stays unpressable',
-  /<aside className="demo-rail" inert=""/.test(liveDemo),
-  'one attribute on the container rather than a disabled state on each item')
+  && !/className="ws-nav-item">Triage/.test(liveDemo),
+  'Triage moved to the switch below')
+check('and the switch is the panel’s own, not a lookalike',
+  /className="rail-toggle ws-rail-heading"/.test(liveDemo)
+  && /className="rail-scope"/.test(liveDemo))
+check('the two live controls are + New and the switch',
+  (liveDemo.slice(liveDemo.indexOf('function DemoRail'), liveDemo.indexOf('function DemoCard'))
+    .match(/<button/g) ?? []).length === 5,
+  'the New button, its two menu items and the two halves of the switch — '
+  + 'every other row in the rail is a div and cannot be pressed')
+check('and the scenery is still scenery',
+  /<div aria-hidden="true">[\s\S]{0,200}railList === 'searches'/.test(liveDemo),
+  'the history rows are hidden from assistive tech rather than announced as '
+  + 'a list that does nothing')
 check('which is a different layer from the sign-up gate',
   /const \[profile, setProfile\]/.test(liveDemo) && !/setGateFor\(card\)[\s\S]{0,60}setProfile/.test(liveDemo))
 /*

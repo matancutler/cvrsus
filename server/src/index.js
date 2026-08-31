@@ -140,6 +140,7 @@ import db, {
   listCandidatesWithText,
   referencedUploadNames,
   updateCandidate,
+  contactIsExempt,
 } from './db.js'
 import {
   TRIAGE,
@@ -1478,6 +1479,35 @@ function assertConsent(body) {
   }
 }
 
+/**
+ * The refusal a candidate sees when a contact detail is already on a profile.
+ *
+ * Named, because "those details" is not enough to act on.
+ *
+ * Two people share a household phone, or somebody mistypes one digit into a
+ * number that happens to be in use: told only that a profile exists, they
+ * cannot tell which of the two fields to change, and "you already have a
+ * profile" is not even true. Saying which one collided makes the next step
+ * obvious and stops the message asserting something we do not know.
+ *
+ * Both, when both collide — which is the ordinary case of a person
+ * re-applying, and the one where "sign in" really is the answer.
+ */
+function duplicateContactError(onEmail, onPhone) {
+  const both = onEmail && onPhone
+  const what = both
+    ? 'That email address and phone number are'
+    : onEmail ? 'That email address is' : 'That phone number is'
+
+  return new HttpError(
+    409,
+    `${what} already on a Cursus profile. `
+    + (both || onEmail
+      ? 'Sign in to open it — you can change anything on it from there, including your CV.'
+      : 'Sign in with it to open that profile, or use a different number here.'),
+  )
+}
+
 app.post('/api/candidates', limits.apply, applicationUpload, async (req, res, next) => {
   const documents = uploadedDocuments(req)
   const photoFile = req.files?.photo?.[0]
@@ -1538,36 +1568,19 @@ app.post('/api/candidates', limits.apply, applicationUpload, async (req, res, ne
      * to replace, and there is no undo for that. Sending them to sign in costs
      * one step and destroys nothing.
      */
-    const byEmail = findCandidateByContact(profile.email)
-    const byPhone = profile.phone ? findCandidateByContact(profile.phone) : null
+    /*
+     * The operator's own contacts are allowed to collide — see contactIsExempt.
+     * Checked here as well as in the index because this refusal happens first
+     * and would otherwise refuse with a 409 before the insert was ever tried.
+     */
+    const byEmail = contactIsExempt(profile.email)
+      ? null
+      : findCandidateByContact(profile.email)
+    const byPhone = profile.phone && !contactIsExempt(profile.phone)
+      ? findCandidateByContact(profile.phone)
+      : null
 
-    if (byEmail || byPhone) {
-      /*
-       * Named, because "those details" is not enough to act on.
-       *
-       * Two people share a household phone, or somebody mistypes one digit into
-       * a number that happens to be in use: told only that a profile exists,
-       * they cannot tell which of the two fields to change, and "you already
-       * have a profile" is not even true. Saying which one collided makes the
-       * next step obvious and stops the message asserting something we do not
-       * know.
-       *
-       * Both, when both collide — which is the ordinary case of a person
-       * re-applying, and the one where "sign in" really is the answer.
-       */
-      const both = byEmail && byPhone
-      const what = both
-        ? 'That email address and phone number are'
-        : byEmail ? 'That email address is' : 'That phone number is'
-
-      throw new HttpError(
-        409,
-        `${what} already on a Cursus profile. `
-        + (both || byEmail
-          ? 'Sign in to open it — you can change anything on it from there, including your CV.'
-          : 'Sign in with it to open that profile, or use a different number here.'),
-      )
-    }
+    if (byEmail || byPhone) throw duplicateContactError(Boolean(byEmail), Boolean(byPhone))
 
     const id = insertCandidate({
       /* The optional three, for the INSERT's named parameters. readProfileFields
@@ -1635,6 +1648,26 @@ app.post('/api/candidates', limits.apply, applicationUpload, async (req, res, ne
     })
   } catch (error) {
     discard(everyFile)
+
+    /*
+     * A unique-index violation is the same refusal arriving by the other road.
+     *
+     * The check above and the index are two answers to one question, and they
+     * can disagree: the check reads a list held in memory since import, the
+     * index holds the list that was current when it was last written. A
+     * process that rebuilt the index from a different list — which is what a
+     * test run used to do — leaves the route allowing a signup the database
+     * then refuses, and the candidate was shown the raw text of that refusal:
+     * "UNIQUE constraint failed: candidates.email_key", in the form, under
+     * their own email address.
+     *
+     * That underlying disagreement is fixed at its source, but the translation
+     * belongs here regardless. A constraint is a sentence about a person's
+     * details, and they should read it as one however it comes to be broken.
+     */
+    const clash = /UNIQUE constraint failed: candidates\.(email|phone)_key/.exec(error?.message ?? '')
+    if (clash) return next(duplicateContactError(clash[1] === 'email', clash[1] === 'phone'))
+
     next(error)
   }
 })
@@ -5586,11 +5619,32 @@ app.post('/api/hr/search/:sessionId/save', recruiterOnly, (req, res, next) => {
     const job = getJob(session.jobId)
     const chat = job?.chat_id ? getSearchChat(req.session.id, job.chat_id) : null
 
-    // The folder the search already owns, but only if it still exists — a
-    // recruiter who deleted it should get a new one, not an error.
-    let folderId = chat?.folder_id && getFolder(req.session.id, chat.folder_id)
-      ? chat.folder_id
-      : null
+    /*
+     * The folder the recruiter named, if they named one.
+     *
+     * Filing used to be a single destination — the folder the search owns —
+     * which is right for "save this, I will sort it later" and wrong for
+     * "put this one with the others". Naming a folder goes through this route
+     * rather than through POST /folders/:id/items because only this one has
+     * the score in front of it: the displayed score is never stored, it is
+     * normalised against the pool that was searched, and the /items route
+     * would file the candidate with no reading at all. One path for filing
+     * from a search, and it keeps the reading whichever folder is chosen.
+     *
+     * Checked through getFolder, so naming somebody else's folder is a 404
+     * rather than a write.
+     */
+    const named = Number(req.body?.folderId)
+    if (req.body?.folderId !== undefined
+        && (!Number.isInteger(named) || !getFolder(req.session.id, named))) {
+      throw new HttpError(404, 'Folder not found.')
+    }
+
+    // Otherwise the folder the search already owns, but only if it still
+    // exists — a recruiter who deleted it should get a new one, not an error.
+    let folderId = Number.isInteger(named) && named
+      ? named
+      : (chat?.folder_id && getFolder(req.session.id, chat.folder_id) ? chat.folder_id : null)
 
     if (!folderId) {
       const name = chat?.title

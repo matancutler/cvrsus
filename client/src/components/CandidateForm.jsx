@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 
+import CityField from './CityField.jsx'
 import DocumentPicker, {
   CV_ACCEPT,
   MAX_DOCUMENT_BYTES,
@@ -70,6 +71,26 @@ const FIELD_NAMES = {
   city: 'city',
 }
 
+/**
+ * The stored answer to "open to relocation", as the Yes/No the toggle speaks.
+ *
+ * SQLite has no boolean type, so this column comes back over the API as 0 or 1
+ * and never as false — which made `=== false` a comparison that could not be
+ * true. A candidate who answered No was shown Yes on their own profile, and
+ * the next save wrote that Yes back over their answer. It went unseen for as
+ * long as the default was also Yes, because the wrong branch happened to
+ * produce the right word.
+ *
+ * Unanswered is not No, but it has to be shown as one of the two: a profile
+ * from before the question existed has nothing stored, and No is the answer to
+ * assume for somebody who never said. Being asked again costs a click; being
+ * put in front of employers in another country does not undo.
+ */
+export function relocationAnswer(value) {
+  if (value === null || value === undefined || value === '') return 'no'
+  return Number(value) ? 'yes' : 'no'
+}
+
 function toFormState(candidate, preferences) {
   if (!candidate) return EMPTY
 
@@ -82,10 +103,7 @@ function toFormState(candidate, preferences) {
     // Free text now, so what is stored is simply what is shown.
     city: candidate.location ?? '',
     availability: candidate.availability ?? '',
-    /* An older profile can have no answer stored. It is a yes-or-no question
-       now, so an absent one reads as the default rather than as a third
-       state the form can no longer express. */
-    openToRelocation: candidate.open_to_relocation === false ? 'no' : 'yes',
+    openToRelocation: relocationAnswer(candidate.open_to_relocation),
     capacity: candidate.capacity ?? '',
     notes: candidate.notes ?? '',
     /*
@@ -853,13 +871,17 @@ export default function CandidateForm({
       )}
 
       <div className="grid-2">
-        {/* Free text and required. It was a dropdown of Israeli cities with an
-            "Other" escape, which asked everyone outside that list to describe
-            themselves as an exception; matching reads the string either way. */}
+        {/* Free text, with the cities offered under it — see CityField. It was
+            once a closed dropdown with an "Other" escape, which asked everyone
+            outside the list to describe themselves as an exception; the
+            suggestions are back, the exception is not, and matching reads the
+            string either way. */}
         <Field label="City" required>
-          <input
-            required value={form.city} placeholder="New York"
-            onChange={(e) => update('city', e.target.value)}
+          <CityField
+            required
+            value={form.city}
+            placeholder="New York"
+            onChange={(next) => update('city', next)}
           />
         </Field>
         {shown(form.availability) && (
@@ -1178,7 +1200,9 @@ function Field({ label, hint, required = false, action = null, children }) {
  * with no gap is what keeps each question attached to its own answer; the
  * fieldset makes that grouping true for a screen reader as well as visually.
  */
-function YesNo({ name, label, hint, value, onChange, onClear = null, required = false }) {
+/* Exported so the onboarding dialog draws the same control rather than a
+   lookalike that would drift from it. */
+export function YesNo({ name, label, hint, value, onChange, onClear = null, required = false }) {
   return (
     <fieldset className="yesno-field">
       {/* The same marker every other required label on the site uses, so one

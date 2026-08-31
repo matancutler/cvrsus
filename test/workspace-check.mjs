@@ -510,7 +510,8 @@ check('what a folder brings that is not a CV is dropped and counted',
  */
 check('the row the recruiter was looking at is sent with the save',
   /const snapshot = row \? \{/.test(panel)
-  && /`\/api\/hr\/search\/\$\{session\.id\}\/save`, \{ candidateId, snapshot \}/.test(panel))
+  && /folderId \? \{ candidateId, snapshot, folderId \} : \{ candidateId, snapshot \}/.test(panel),
+  'the folder is optional; the reading never is')
 const server = read('../server/src/index.js')
 check('and the server bounds it rather than trusting it',
   /Math\.max\(0, Math\.min\(100, Math\.round\(Number\(shown\.score\)\)\)\)/.test(server)
@@ -656,15 +657,55 @@ const cardCorner = card.slice(
 )
 check('the actions are behind the dots every other row uses',
   cardCorner.includes('<PopMenu'))
-check('and they are: add to folder, reveal, not relevant',
-  /label: saved \? `Saved in/.test(panel)
+check('and they are: save in folder, reveal, not relevant',
+  /key: 'folder',\s*\n\s*label: 'Save in folder'/.test(panel)
   && /key: 'reveal'/.test(panel)
   && /key: 'dismiss', label: 'Not relevant'/.test(panel))
-check('the dots are pinned to the corner rather than stacked on the score',
-  /\.result-menu\{position:absolute/.test(css),
-  'stacked, the score sat wherever the card height left it and stopped lining up row to row')
+check('the folder line is a control, not a statement',
+  !/label: saved \? `Saved in/.test(panel) && /onSelect: \(\) => onFile\?\.\(\)/.test(panel),
+  'it used to read "Saved in Backend hires" and do nothing when pressed — at '
+  + 'the one moment a recruiter is most likely to want a different folder')
+check('and pressing it opens the folder dialog',
+  /\{filing !== null && \(\s*\n\s*<FolderDialog/.test(panel)
+  && /onPick=\{\(folderId\) => saveToSearchFolder\(filing, folderId\)\}/.test(panel))
+/*
+ * The corner is now one stack: buttons, then the score under them.
+ *
+ * It was two — the dots pinned absolutely to the corner and the score on the
+ * card's centre line — because a score that flowed with the card height stopped
+ * lining up row to row. Pinning the whole stack instead keeps that property and
+ * gets the number out of the middle of the row.
+ */
+check('the corner is one pinned stack, not two positioned pieces',
+  /\.result-side\{position:absolute/.test(css)
+  && !/\.result-menu\{position:absolute/.test(css),
+  'two absolutes meant the score had to be offset to match the buttons by hand')
+check('and the score sits under the buttons, centred on them',
+  /\.result-side\{[^}]*flex-direction:column/.test(css)
+  && /\.result-side\{[^}]*align-items:center/.test(css))
 check('no relocation chip on the card', !/Will relocate/.test(card))
-const revealedChip = card.slice(card.indexOf('chip chip-revealed'), card.indexOf('chip-folder'))
+/*
+ * And no document chips either.
+ *
+ * "Cover letter" and "+2 documents" reported what was attached before a
+ * recruiter could open any of it — a fact about the profile rather than a
+ * reason to look at the person, and it crowded the two chips that are.
+ */
+check('no document chips on the card',
+  !/chip chip-neutral">Cover letter/.test(card)
+  && !/\+\{extras\} document/.test(card))
+/* The folder chip sits with the reveal it belongs beside, not under the
+   summary two lines away. */
+check('the folder chip is in the corner, before the reveal chip',
+  card.indexOf('chip chip-folder') > card.indexOf('className="result-menu"')
+  && card.indexOf('chip chip-folder') < card.indexOf('chip chip-revealed'))
+/* The folder chip now precedes it in the corner, so the slice runs the other
+   way: from the reveal chip to the end of the corner rather than to the folder
+   chip that used to sit two lines below the summary. */
+const revealedChip = card.slice(
+  card.indexOf('chip chip-revealed'),
+  card.indexOf('<PopMenu', card.indexOf('chip chip-revealed')),
+)
 check('the revealed chip is the eye and the colleague who spent it',
   revealedChip.includes('<EyeIcon size={13} />')
   && revealedChip.includes('result.revealedBy.name'))
@@ -704,12 +745,19 @@ section('The card reads left to right, and the number sits in the middle')
  * tag says who spent it — "me" when that was the reader — and the name it sits
  * under is the first name alone until somebody pays for the rest.
  */
-check('the score is between two equal tracks, which is the centre',
-  /grid-template-columns:minmax\(0,1fr\) auto minmax\(0,1fr\)/.test(css),
-  'the photograph is inside the left track, or its width pushes the score past centre')
-check('the balancing track comes after the score, not before it',
-  card.indexOf('className="result-side"') < card.indexOf('className="result-spacer"'),
-  'before it, the score lands against the right edge again')
+/*
+ * The row is one track now, and the score has left it.
+ *
+ * Three tracks existed to hold the number on the card's centre line, with an
+ * empty balancing column on the right to do it. The number lives in the corner
+ * under the buttons instead, so the person gets the full width and there is
+ * nothing left to balance.
+ */
+check('the row is a single track',
+  /\.result-main\{[^}]*grid-template-columns:minmax\(0,1fr\)[;}]/.test(css))
+check('and the balancing column is gone with the reason for it',
+  !card.includes('className="result-spacer"'),
+  'an empty track that balanced nothing would still take a third of the row')
 check('and the name truncates rather than pushing the dot onto its own line',
   /className="result-name"/.test(card)
   && /\.result-name\{[^}]*text-overflow:ellipsis/.test(css))
@@ -1082,8 +1130,11 @@ const tagSource = read('../client/src/components/CandidateTags.jsx')
 
 check('the + stands beside the comments, on the row and in the profile',
   /<TagEditor/.test(card) && /<TagEditor/.test(dialog))
-check('the strip sits between the score and the buttons',
-  /<span className="result-spacer">[\s\S]{0,120}<TagStrip/.test(card)
+/* The strip moved down with the balancing column that used to hold it: it is
+   among the chips under the summary, which is where the other things this team
+   said about this candidate already are. */
+check('the tag strip is among the chips under the summary',
+  /<div className="result-tags">[\s\S]{0,400}<TagStrip/.test(card)
   && /className="modal-menu"[\s\S]{0,260}<TagStrip/.test(dialog))
 check('and disappears entirely when there is nothing to say',
   /if \(!tags \|\| tags\.length === 0\) return null/.test(tagSource),
@@ -1178,7 +1229,20 @@ check('a tag written on a row reaches the list it is in',
   && /function tagsChanged\(candidateId, next\)/.test(panel),
   'otherwise the filter cannot offer a tag until the next search')
 check('the folder row draws the strip too',
-  /<span className="drive-item-tags">[\s\S]{0,220}<TagStrip tags=\{item\.tags\}/.test(panel))
+  /<span className="drive-item-tags">[\s\S]{0,700}<TagStrip tags=\{item\.tags\}/.test(panel))
+check('and wears no badge its twin in the search does not',
+  !/includes\('cover_letter'\)[\s\S]{0,120}Cover letter/.test(panel),
+  'a chip reporting what is attached is a detail of the profile, not a reason '
+  + 'to open somebody')
+check('the two rows lead with the same two facts',
+  /\[item\.location, item\.availability\]\.filter\(Boolean\)/.test(panel)
+  && !/\[item\.location, item\.availability, item\.capacity\]/.test(panel),
+  'capacity appeared in the folder and nowhere else, which made one person '
+  + 'look like two records')
+check('and neither prints the summary',
+  !panel.includes('drive-item-summary') && !panel.includes('<SummaryPreview'),
+  'twenty rows of self-description is a page of prose with the names as the '
+  + 'small text')
 check('and the folder query carries them, one read for the whole folder',
   /tags: tags\.get\(item\.candidate_id\) \?\? \[\]/.test(read('../server/src/workspace.js')))
 
@@ -1273,14 +1337,107 @@ check('nothing opens Billing without saying which product',
   && /openBilling = useCallback\([\s\S]{0,120}setDialog\('billing'\)/.test(panel),
   'that was how a Triage warning landed a recruiter on Reveals')
 
+/* triageTab is already read at the top of the Triage section above. */
+const triageRail = read('../client/src/components/TriageRail.jsx')
+const railModule = read('../client/src/rail.js')
+
+section('The card shows the person, not their prose')
+
+/*
+ * The summary left the result card and stayed on the profile.
+ *
+ * Two sentences of self-description read well on one card and badly on twenty:
+ * every row grew to the height of its longest one, so a list being scanned for
+ * a name became a page of prose with the names as the small text. The check
+ * that matters is not that it was removed but that it was not LOST — take it
+ * off the card without confirming both profile states still draw it and the
+ * summary is gone from the product.
+ */
+check('the result card does not print the summary',
+  !/<SummaryPreview summary=\{candidate\.summary\} \/>/.test(panel),
+  'SummaryPreview on the card was one line; the profile keeps ProfessionalSummary')
+check('but the unrevealed profile still does',
+  (panel.match(/<ProfessionalSummary summary=\{candidate\.summary\} \/>/g) ?? []).length === 2,
+  'once before the reveal and once after — removing the card copy must not touch these')
+
+check('the score ends flush right, under the ⋮',
+  /\.result-side \{[^}]*align-items: flex-end/.test(css.replace(/\s+/g, ' '))
+  || /\.result-side\{[^}]*align-items:flex-end/.test(css),
+  'centred, it hung under the middle of a strip whose width changes per row')
+
+check('and the folder chip no longer opts out of the strip alignment',
+  !/\.chip-folder \{[^}]*align-self/.test(css) && !/\.chip-folder\{[^}]*align-self/.test(css),
+  'align-self: flex-start dated from when it sat in a column; beside the '
+  + 'revealed chip it rode about two pixels high')
+
+section('One rail, two lists')
+
+/*
+ * Triage stopped being a destination and became the other half of a switch.
+ *
+ * It is not a place you visit — it is a thing you made and come back to,
+ * exactly like a search. Two nav entries with a list of searches underneath
+ * said the two were different kinds of object. They are not; what differs is
+ * whose they are, and that is what the switch has to say out loud.
+ */
+check('the rail has one nav destination now',
+  !/className=\{tab === 'triage' \? 'ws-nav-item/.test(panel),
+  'Triage moved to the switch over the history list')
+check('and the switch offers both lists',
+  /className="rail-toggle ws-rail-heading"/.test(panel)
+  && /aria-pressed=\{railList === 'searches'\}/.test(panel)
+  && /aria-pressed=\{railList === 'triage'\}/.test(panel))
+check('it keeps the heading class, so both words are set as the heading was',
+  /rail-toggle ws-rail-heading/.test(panel),
+  'the 2px optical nudge that aligns the S of SEARCHES with the Y of YESTERDAY')
+
+check('and it says whose list you are looking at',
+  panel.includes('Only you can see these.') && panel.includes('Shared with your whole team.'),
+  'a search is private to whoever ran it; a Triage belongs to the company — '
+  + 'hiding that would be a poor trick to play on somebody who just switched')
+
+check('the Triage rows are bucketed on when they were created',
+  triageRail.includes('(triage) => triage.createdAt'),
+  'updated_at is written three times per 25-CV tranche by the background '
+  + "worker, so a colleague's run would climb your rail while it processed")
+check('and railSlice can be told which timestamp to read',
+  /export function railSlice\(items, stampOf = \(item\) => item\.updated_at\)/.test(railModule),
+  'defaulting to updated_at keeps every existing caller correct')
+
+check('a rail row opens that Triage, not the dashboard',
+  /onOpen=\{\(id\) => \{ setTab\('triage'\); setTriageOpens\(\{ at: Date\.now\(\), id \}\) \}\}/.test(panel),
+  'the tab first, then the instruction — an id means nothing until the tab is showing')
+check('and the Triage tab acts on it',
+  /const \[open, setOpen\] = useState\(opens \? \{ id: opens\.id \} : null\)/.test(triageTab)
+  && /if \(opens\) setOpen\(\{ id: opens\.id \}\)/.test(triageTab))
+check('keyed on the timestamp, so pressing the same row twice works',
+  /\}, \[opens\?\.at\]\)/.test(triageTab),
+  'the same id twice is the same value, and an effect on it would not fire')
+
+check('a colleague\'s Triage says whose it is',
+  triageRail.includes('triage.recruiterId !== meId')
+  && triageRail.includes("triage.author ?? 'A colleague'"),
+  'silent for your own — a list where every row says "you" says nothing')
+
 section('Counts mean what they say')
 
-check('the rail counts Triage workspaces, not CV capacity',
-  /\{wallet\.triage\.workspaces \?\? 0\}/.test(panel)
-  && !/\{wallet\.triage\.balance\}/.test(panel),
-  'a recruiter with one Triage and 100 CVs of capacity read "Triage 100"')
-check('and its tooltip says workspaces too',
-  /Triage workspace\$\{wallet\.triage\.workspaces === 1 \? '' : 's'\}/.test(panel))
+/*
+ * The Triage number is gone from the rail.
+ *
+ * It was a pill on a nav destination, where a number says "this is how much is
+ * behind this door", and it carried the CV capacity balance before it carried
+ * the workspace count — a recruiter with one Triage and 100 CVs of capacity
+ * read "Triage 100". Triage is now one half of a switch, and the list it
+ * switches to is the count. What survives from those two checks is the half
+ * that still matters: whatever the rail says about Triage, it is never the
+ * balance.
+ */
+check('the rail shows no Triage count at all',
+  !/Triage<span className="ws-nav-count">/.test(panel)
+  && !/rail-toggle-on[\s\S]{0,400}ws-nav-count/.test(panel),
+  'a zero beside a switch reads as something being wrong, not as an empty list')
+check('and never the CV capacity balance',
+  !/\{wallet\.triage\.balance\}/.test(panel))
 check('while Folders still counts folders', panel.includes('{folders.length}'))
 
 section('The two lists are managed the same way')

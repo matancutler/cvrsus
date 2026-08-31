@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 
-import CandidateForm from '../components/CandidateForm.jsx'
+import SignUpFlow from '../components/SignUpFlow.jsx'
 import CompanySignUpForm from '../components/CompanySignUpForm.jsx'
 import StatsBanner from '../components/StatsBanner.jsx'
 import { CandidatePitch, RecruiterPitch } from './landingCopy.jsx'
@@ -58,6 +58,21 @@ export default function UploadPage() {
    * real field works for whichever panel is showing, and keeps working if
    * either form's opening question changes.
    */
+  /*
+   * The other side of the pitch, read from its beginning.
+   *
+   * These two links sit at the very bottom of a long page, and switching sides
+   * replaces everything above them — so without this the reader is left at the
+   * foot of a page they have not seen the top of, looking at whatever happens
+   * to be the same distance down the new one. The role switch at the top does
+   * not need this: it is already there.
+   */
+  function switchSide(next) {
+    setRole(next)
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    window.scrollTo({ top: 0, behavior: reduced ? 'auto' : 'smooth' })
+  }
+
   function focusApplication() {
     const card = cardRef.current
     if (!card) return
@@ -98,47 +113,16 @@ export default function UploadPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  /**
-   * Applying signs them in and takes them to their account. They have just
-   * typed their details and attached a CV; asking them to prove who they are on
-   * the next screen would be asking the same question twice.
+  /*
+   * Submitting moved into SignUpFlow with the form it belonged to.
+   *
+   * The refusal it used to handle is still handled the same way and for the
+   * same reason: a duplicate arrives as an error in the server's own words,
+   * naming whether it was the email address or the phone number that is taken,
+   * shown on the step that can fix it. It never swaps the card for a "you are
+   * back" panel — that reads a collision as a returning user when it is just as
+   * easily somebody who mistyped a digit into a stranger's number.
    */
-  async function submit(data) {
-    setStatus({ state: 'submitting' })
-    try {
-      const result = await sendForm('/api/candidates', data)
-
-      if (result.token) {
-        // Applying signed us in: the response carried an httpOnly cookie.
-        navigate('/account', {
-          replace: true,
-          state: {
-            justApplied: true,
-            reference: result.id,
-            documents: result.documents,
-            charactersRead: result.charactersRead,
-          },
-        })
-        return
-      }
-
-      setStatus({ state: 'done', result })
-    } catch (error) {
-      /*
-       * A duplicate arrives here like any other refusal — on the form, in the
-       * server's own words, which name whether it was the email address or the
-       * phone number that is already in use.
-       *
-       * This used to swap the whole card for a panel instead. That reads a
-       * collision as "you are back", when it is just as easily somebody who
-       * mistyped a digit into a number that belongs to someone else. The
-       * sentence on the form says the same thing without deciding who is at
-       * the keyboard, and leaves the field they need to change in front of
-       * them.
-       */
-      setStatus({ state: 'error', message: error.message })
-    }
-  }
 
   if (status.state === 'done') {
     const { result } = status
@@ -285,8 +269,8 @@ export default function UploadPage() {
           role switch above, reached from where somebody finished reading.
         */}
         {recruiter
-          ? <RecruiterPitch onCta={focusApplication} onSwitchSide={() => setRole('candidate')} />
-          : <CandidatePitch onCta={focusApplication} onSwitchSide={() => setRole('recruiter')} />}
+          ? <RecruiterPitch onCta={focusApplication} onSwitchSide={() => switchSide('candidate')} />
+          : <CandidatePitch onCta={focusApplication} onSwitchSide={() => switchSide('recruiter')} />}
 
         {/* Fills the space the copy leaves at the foot of the column. Renders
             nothing while the numbers are too small to be encouraging. */}
@@ -311,27 +295,41 @@ export default function UploadPage() {
             who is reading.
         */}
         {role === 'candidate' ? (
-          <CandidateForm
-            mode="create"
-            onSubmit={submit}
-            submitting={status.state === 'submitting'}
-            error={status.state === 'error' ? status.message : ''}
-            submitLabel="Create my profile"
-          >
+          <div className="panel">
             <header className="panel-head">
               {/* "your" in the heading and "my" on the button: the card is
                   addressing the reader, and the button is the reader speaking.
                   It matches the recruiter card's "Create your business
                   account" directly above the same fold. */}
               <h2>Create your profile</h2>
-              {/* The asterisk in the sentence carries the same red as the ones
-                  it is explaining, or the note points at a mark nobody has
-                  seen. */}
-              <p className="required-note">
-                Fields marked with <span className="req">*</span> are required.
+              <p className="muted">
+                Upload your CV and we build the profile from it. You check it at the end.
               </p>
             </header>
-          </CandidateForm>
+
+            {/*
+              The stepped flow, not the old single card.
+
+              The card asked for a CV and then asked for everything the CV
+              already says. This reads it first and asks only for what it could
+              not answer — see SignUpFlow, which reuses the same dropzone,
+              verified fields and consent box the card used.
+            */}
+            <SignUpFlow
+              onDone={(created) => {
+                navigate('/account', {
+                  replace: true,
+                  state: {
+                    justApplied: true,
+                    onboarding: true,
+                    reference: created.id,
+                    documents: created.documents,
+                    charactersRead: created.charactersRead,
+                  },
+                })
+              }}
+            />
+          </div>
         ) : (
           <>
             <header className="panel-head">

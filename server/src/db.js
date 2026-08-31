@@ -148,6 +148,20 @@ db.exec(`
   );
 
   CREATE INDEX IF NOT EXISTS idx_login_codes_candidate ON login_codes(candidate_id, created_at DESC);
+
+  /*
+   * Settings that the schema itself depends on.
+   *
+   * Not general configuration — ports and secrets stay in the environment,
+   * where they belong. This is for the handful of answers that get BAKED INTO
+   * the database, where a second process reading a different environment would
+   * not merely behave differently but would rewrite the schema to match itself.
+   */
+  CREATE TABLE IF NOT EXISTS app_settings (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
 `)
 
 /**
@@ -897,6 +911,66 @@ function aliasable(value) {
   return at > 0 && ALIASING_DOMAINS.has(String(value).slice(at + 1).trim().toLowerCase())
 }
 
+/*
+ * Contacts that may appear on more than one candidate.
+ *
+ * For the operator's own address and number, so that signing up can be walked
+ * through repeatedly without deleting the account each time — the codes go to a
+ * real inbox and a real handset, which is the whole point of testing with them.
+ *
+ * From the environment rather than from source: this repository is published,
+ * and a personal email address hard-coded into it would be published with it.
+ * Set DUPLICATE_EXEMPT_CONTACTS to a comma-separated list of addresses and
+ * numbers; leave it unset and nothing is exempt, which is the right default for
+ * anybody else running this.
+ *
+ * Note what an exemption costs, because it is not free: findCandidateByContact
+ * resolves an address to the NEWEST row, so signing in with an exempt address
+ * reaches the most recent of the duplicates and the earlier ones become
+ * unreachable from the sign-in page. That is fine for throwaway test accounts
+ * and would not be fine for anybody real, which is why this is a named list
+ * rather than a switch that turns the rule off.
+ */
+const EXEMPT_SETTING = 'duplicate_exempt_contacts'
+
+const parseContacts = (text) => String(text ?? '')
+  .split(',')
+  .map((entry) => entry.trim())
+  .filter(Boolean)
+
+/*
+ * Kept in the database, seeded from the environment.
+ *
+ * It used to be read from the environment alone, and that was wrong in a way
+ * that took a real signup failure to see. The list is baked into a partial
+ * UNIQUE index, so whichever process last imported this file decides what the
+ * index says — and the test suites import it too, from a working directory
+ * with no .env. Every test run therefore rebuilt the index with an empty list,
+ * silently un-exempting the operator's own address on the SERVER that was
+ * still running, until somebody restarted it. The server went on allowing the
+ * signup and the index went on refusing it.
+ *
+ * So the environment is a way to SET the list, not the list itself: when
+ * DUPLICATE_EXEMPT_CONTACTS is defined it is written down and becomes the
+ * answer, and when it is absent the stored answer stands. A process with no
+ * opinion now inherits one instead of imposing emptiness.
+ */
+let EXEMPT = (() => {
+  const stored = db.prepare(`SELECT value FROM app_settings WHERE key = ?`)
+    .get(EXEMPT_SETTING)?.value
+
+  const declared = process.env.DUPLICATE_EXEMPT_CONTACTS
+  if (declared === undefined) return parseContacts(stored)
+
+  if (declared !== stored) {
+    db.prepare(`
+      INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+    `).run(EXEMPT_SETTING, declared, new Date().toISOString())
+  }
+  return parseContacts(declared)
+})()
+
 export function emailKey(value) {
   const text = String(value ?? '').trim().toLowerCase()
   const at = text.lastIndexOf('@')
@@ -907,6 +981,54 @@ export function emailKey(value) {
   if (!ALIASING_DOMAINS.has(domain)) return text
 
   return `${local.split('+')[0].replace(/\./g, '')}@${domain}`
+}
+
+/* The exemptions, in the same shape as the columns they are compared against. */
+let exemptEmailKeys = []
+let exemptPhoneKeys = []
+
+const deriveExemptKeys = () => {
+  exemptEmailKeys = [...new Set(EXEMPT.filter((e) => e.includes('@')).map(emailKey))]
+  exemptPhoneKeys = [...new Set(EXEMPT.map(phoneKey).filter(Boolean))]
+}
+
+deriveExemptKeys()
+
+/** The contacts currently allowed to appear more than once, as written. */
+export function exemptContacts() {
+  return [...EXEMPT]
+}
+
+/**
+ * Change the list, persist it, and rebuild the indexes to match — one call, so
+ * the three can never drift apart.
+ *
+ * Exported for the test suite, which has to borrow the list and give it back;
+ * doing that through the environment is what broke it before, because the
+ * environment is read once at import and the index is rewritten every time.
+ */
+export function setExemptContacts(contacts) {
+  const list = Array.isArray(contacts) ? contacts.map((c) => String(c).trim()).filter(Boolean)
+    : parseContacts(contacts)
+
+  db.prepare(`
+    INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+  `).run(EXEMPT_SETTING, list.join(','), new Date().toISOString())
+
+  EXEMPT = list
+  deriveExemptKeys()
+  ensureContactIndexes()
+  return [...EXEMPT]
+}
+
+/** Whether this address or number is allowed to appear on more than one row. */
+export function contactIsExempt(value) {
+  const text = String(value ?? '').trim()
+  if (!text) return false
+  return text.includes('@')
+    ? exemptEmailKeys.includes(emailKey(text))
+    : exemptPhoneKeys.includes(phoneKey(text))
 }
 
 /*
@@ -953,12 +1075,51 @@ export function emailKey(value) {
 
   if (backfilled > 0) console.log(`  keyed ${backfilled} candidate contact detail(s)`)
 
-  for (const [what, column] of [['mailbox', 'email_key'], ['phone number', 'phone_key']]) {
+  /*
+   * The index carries the exemption, rather than the application checking for
+   * it separately.
+   *
+   * A partial index is the honest way to say "unique, except for these": the
+   * guarantee stays in the database, where nothing can route around it, and the
+   * exception is visible in the schema instead of living in whichever code path
+   * happened to remember. It is rebuilt when the list changes, because SQLite
+   * keeps the WHERE clause as written and an out-of-date one would silently go
+   * on enforcing yesterday's answer.
+   */
+  ensureContactIndexes()
+}
+
+/**
+ * Write the two unique indexes so they say what the exemption list says.
+ *
+ * Idempotent, and the only correct way to build these: an index recreated by
+ * hand anywhere else states whatever that caller happened to believe. The
+ * first version of the test suite did exactly that in its cleanup — rebuilt
+ * them as plain unique indexes, which is not "as I found them" but "with no
+ * exemptions at all".
+ */
+export function ensureContactIndexes() {
+  const quote = (value) => `'${String(value).replace(/'/g, "''")}'`
+
+  for (const [what, column, exempt] of [
+    ['mailbox', 'email_key', exemptEmailKeys],
+    ['phone number', 'phone_key', exemptPhoneKeys],
+  ]) {
+    const name = `idx_candidates_${column}`
+    const where = exempt.length
+      ? `${column} IS NOT NULL AND ${column} NOT IN (${exempt.map(quote).join(', ')})`
+      : `${column} IS NOT NULL`
+    const wanted = `CREATE UNIQUE INDEX ${name} ON candidates(${column}) WHERE ${where}`
+
+    const existing = db.prepare(
+      `SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?`,
+    ).get(name)?.sql
+
+    if (existing === wanted) continue
+    if (existing) db.exec(`DROP INDEX ${name}`)
+
     try {
-      db.exec(`
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_candidates_${column}
-          ON candidates(${column}) WHERE ${column} IS NOT NULL
-      `)
+      db.exec(wanted)
     } catch (error) {
       const clashes = db.prepare(`
         SELECT ${column} AS key, GROUP_CONCAT(id) AS ids

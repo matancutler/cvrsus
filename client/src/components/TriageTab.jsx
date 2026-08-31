@@ -36,14 +36,32 @@ const POLL_MS = 2500
    progress bar has something real to report. Matches TRIAGE_UPLOAD_CHUNK. */
 const CHUNK = 40
 
-export default function TriageTab({ balance, onBalanceChanged, onBuy, admin }) {
+export default function TriageTab({ balance, onBalanceChanged, onBuy, admin, opens }) {
   /*
    * null is the list. { id } is one Triage — and { id: null } is one that is
    * being started and has not been written down yet, which is why this is an
    * object rather than an id: "no Triage open" and "a new Triage open" are
    * different states and a bare null cannot hold both.
    */
-  const [open, setOpen] = useState(null)
+  const [open, setOpen] = useState(opens ? { id: opens.id } : null)
+
+  /*
+   * An instruction that arrived while this tab was already the one showing.
+   *
+   * `opens` is `{ at, id }` — `id: null` for a Triage being started, an id for
+   * one to reopen — or null for "nothing was asked for, show the list".
+   *
+   * The initialiser above runs only on mount, and leaving the Triage tab is
+   * what unmounts this, so it covers arriving from the rail but not a second
+   * press without going anywhere in between. Keyed on `at`, a timestamp, so
+   * pressing the same row twice is two instructions: the same id would be the
+   * same object value and the effect would not fire, which is exactly the case
+   * of somebody pressing a row, wandering into the builder and pressing it
+   * again to get back.
+   */
+  useEffect(() => {
+    if (opens) setOpen({ id: opens.id })
+  }, [opens?.at])
 
   return open
     ? (
@@ -1004,13 +1022,25 @@ async function filesFromDrop(dataTransfer) {
 
       <header className="triage-head">
         <div>
-          {/* pic 7 — the way back sits on the title's line, not above it. */}
+          {/*
+            No way back from the builder.
+
+            The chevron that was here went to the Triage dashboard, and it was
+            the wrong thing on this screen: a half-built Triage with a job
+            description typed into it and no back button is a screen you finish
+            or abandon on purpose, not one you wander out of. The results view
+            keeps its chevron — there the work is done and going back to the
+            list is the ordinary next move — and the rail lists every Triage,
+            so nothing here is a dead end.
+
+            The row wrapper stays: it is what the results view uses too, and a
+            bare h2 would take its own margins back.
+          */}
           <div className="triage-title-row">
-            <BackLink onClose={onClose} />
-            {/* Its name once it has one. This was a literal, so reopening a draft
-          saved last week presented it as "New Triage" — the same heading the
-          builder shows before anything exists. */}
-      <h2>{triage.title || 'New Triage'}</h2>
+            {/* Its name once it has one. This was a literal, so reopening a
+                draft saved last week presented it as "New Triage" — the same
+                heading the builder shows before anything exists. */}
+            <h2>{triage.title || 'New Triage'}</h2>
           </div>
           <p className="muted triage-lede">
             One job description and the CVs you received for it, up to {triage.fileCap} at a time.

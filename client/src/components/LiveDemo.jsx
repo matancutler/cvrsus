@@ -71,55 +71,152 @@ function EyeOff() {
  * The searches list shows the one search this visitor has run, which is the
  * truth: the history is a real feature and it is empty until you use it.
  */
-function DemoRail({ title, hasSearch }) {
+function DemoRail({ title, hasSearch, view, onView }) {
+  /*
+   * Two live controls in a rail that is otherwise scenery.
+   *
+   * Everything else here is a <div>: not focusable, not pressable, and not
+   * pretending to be. These two are real buttons because they are the two the
+   * workspace is actually shaped around — starting something, and choosing
+   * which of the two kinds of thing you are looking at — and a demo that draws
+   * them dead teaches that the product has no switch in it.
+   */
+  const [newOpen, setNewOpen] = useState(false)
+
+  /* Held by the demo, not here: pressing + Triage has to change the page
+     beside the rail as well as the list inside it. */
+  const railList = view
+
+  const start = (which) => {
+    setNewOpen(false)
+    /* Pressing + Triage and being left on the search screen would be the demo
+       contradicting itself in one gesture. */
+    onView(which)
+  }
+
   return (
-    <aside className="demo-rail" inert="" aria-hidden="true">
-      <div className="demo-rail-new"><span aria-hidden="true">+</span> New search</div>
+    <aside className="demo-rail" aria-label="Workspace">
+      <div className="ws-new-wrap">
+        <button
+          type="button"
+          className="ws-new"
+          aria-expanded={newOpen}
+          aria-haspopup="menu"
+          onClick={() => setNewOpen((was) => !was)}
+        >
+          <span aria-hidden="true">+</span> New
+          <svg
+            viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
+            strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"
+            aria-hidden="true" focusable="false"
+          >
+            <path d="m6 9 6 6 6-6" />
+          </svg>
+        </button>
+
+        {newOpen && (
+          <div className="ws-new-menu" role="menu">
+            <button
+              type="button" role="menuitem" className="ws-new-item"
+              onClick={() => start('searches')}
+            >
+              <strong><span aria-hidden="true">+</span> Search</strong>
+              <span className="muted">Describe a role and we find the people</span>
+            </button>
+            <button
+              type="button" role="menuitem" className="ws-new-item"
+              onClick={() => start('triage')}
+            >
+              <strong><span aria-hidden="true">+</span> Triage</strong>
+              <span className="muted">Sort CVs you already received</span>
+            </button>
+          </div>
+        )}
+      </div>
 
       {/*
-        Both places a recruiter goes between searches, in the panel's own
-        `.ws-nav` with the panel's own count pill — not a lookalike, so the two
-        cannot drift the way "Folders (3)" already had from the pill the rail
-        started using.
-
-        Triage belongs here because leaving it out described a product with one
-        destination. It is scenery like everything else in this aside, which is
-        inert as a whole: there is no button to press and none is implied.
+        One destination, in the panel's own .ws-nav with its own count pill —
+        not a lookalike, so the two cannot drift the way "Folders (3)" already
+        had. Triage is no longer here: it is the other half of the switch below,
+        because it is a thing you made and come back to rather than a place you
+        visit.
       */}
-      <nav className="ws-nav">
+      <nav className="ws-nav" aria-hidden="true">
         <div className="ws-nav-item">Folders<span className="ws-nav-count">3</span></div>
-        <div className="ws-nav-item">Triage<span className="ws-nav-count">2</span></div>
       </nav>
 
       <div className="demo-rail-history">
-        <p className="demo-rail-heading">Searches</p>
+        <div className="ws-rail-head">
+          <div className="rail-toggle ws-rail-heading" role="group" aria-label="What this list shows">
+            <button
+              type="button"
+              className={railList === 'searches' ? 'rail-toggle-on' : ''}
+              aria-pressed={railList === 'searches'}
+              onClick={() => onView('searches')}
+            >
+              Searches
+            </button>
+            <button
+              type="button"
+              className={railList === 'triage' ? 'rail-toggle-on' : ''}
+              aria-pressed={railList === 'triage'}
+              onClick={() => onView('triage')}
+            >
+              Triage
+            </button>
+          </div>
+        </div>
+
+        {/* The same line the workspace shows, because the difference is real:
+            your searches are yours, and a Triage belongs to the company. */}
+        <p className="rail-scope">
+          {railList === 'searches' ? 'Only you can see these.' : 'Shared with your whole team.'}
+        </p>
+
         {/*
-          The visitor's own search sits above a few earlier ones.
+          Scenery, and stated as such by being drawn as text.
 
           A rail that is empty until you type shows the feature at its least
           convincing — the history is the part that makes this a workspace
           rather than a search box, and it cannot fill itself for somebody who
-          has just arrived. These are scenery, like the rest of the rail, and
-          the whole panel is inert so none of them can be pressed.
+          has just arrived.
         */}
-        {hasSearch && (
-          <>
-            <p className="demo-rail-day">Today</p>
-            <div className="demo-rail-item demo-rail-item-on">{title || 'Your search'}</div>
-          </>
-        )}
+        <div aria-hidden="true">
+          {railList === 'searches' ? (
+            <>
+              {hasSearch && (
+                <>
+                  <p className="demo-rail-day">Today</p>
+                  <div className="demo-rail-item demo-rail-item-on">{title || 'Your search'}</div>
+                </>
+              )}
 
-        <p className="demo-rail-day">Previous 30 days</p>
-        {[
-          'Senior Backend Engineer, Tel Aviv',
-          'Product Designer (B2B SaaS)',
-          'Data Analyst, 3+ years',
-        ].map((name) => (
-          <div key={name} className="demo-rail-item">{name}</div>
-        ))}
+              <p className="demo-rail-day">Previous 30 days</p>
+              {[
+                'Senior Backend Engineer, Tel Aviv',
+                'Product Designer (B2B SaaS)',
+                'Data Analyst, 3+ years',
+              ].map((name) => (
+                <div key={name} className="demo-rail-item">{name}</div>
+              ))}
+            </>
+          ) : (
+            <>
+              <p className="demo-rail-day">Today</p>
+              <div className="demo-rail-item">Support team pile · 84 CVs</div>
+              <p className="demo-rail-day">Previous 30 days</p>
+              {[
+                'Graduate applications · 210 CVs',
+                'Backend hires Q3 · 46 CVs',
+              ].map((name) => (
+                <div key={name} className="demo-rail-item">{name}</div>
+              ))}
+            </>
+          )}
+        </div>
       </div>
 
-      <div className="demo-rail-account">
+      <div className="demo-rail-account" aria-hidden="true">
         <span className="demo-rail-avatar"><PersonIcon /></span>
         <span className="demo-rail-account-text">
           <strong>CVRSVS</strong>
@@ -127,6 +224,88 @@ function DemoRail({ title, hasSearch }) {
         </span>
       </div>
     </aside>
+  )
+}
+
+/**
+ * The Triage screen, as scenery.
+ *
+ * Built from the real builder's own classes — .triage-page, .triage-step,
+ * .field — so it cannot drift from the screen it is showing. What differs is
+ * that every field is a div: there is nothing to type into and nothing to
+ * press. A stranger has no CVs uploaded here and no Triage to launch, so the
+ * controls would have nothing to do, and a control that answers a click by
+ * doing nothing is worse than one that plainly does not invite it.
+ *
+ * aria-hidden on the body, for the same reason the rail's history rows are:
+ * it is an illustration, and a screen reader being walked through a form that
+ * does not exist is worse served than one that is told nothing.
+ */
+function DemoTriagePage() {
+  return (
+    <div className="triage-page">
+      <header className="triage-head">
+        <div>
+          <div className="triage-title-row">
+            <h2>New Triage</h2>
+          </div>
+          <p className="muted triage-lede">
+            One job description and the CVs you received for it, up to 500 at a time.
+            Nothing is charged until you confirm.
+          </p>
+        </div>
+      </header>
+
+      <div aria-hidden="true">
+        <section className="triage-step">
+          <h3>Step 1 · The role</h3>
+
+          <div className="field">
+            <span className="field-label">Name this Triage</span>
+            <div className="demo-field">Senior Backend Engineer</div>
+          </div>
+
+          <div className="field">
+            <span className="field-label">Job description</span>
+            <div className="demo-field demo-field-tall">
+              Paste the job description, or attach it as a PDF or Word file…
+            </div>
+          </div>
+        </section>
+
+        <section className="triage-step">
+          <h3>Step 2 · The CVs</h3>
+          <p className="muted">
+            Select every CV you received for this role: PDF or Word, up to 500 files.
+            Duplicates are detected and skipped, so you are never charged for reading the same
+            CV twice.
+          </p>
+          <div className="demo-dropzone">
+            <strong>Drop the CVs here, or click to browse</strong>
+            <span>PDF or DOCX</span>
+          </div>
+        </section>
+
+        <section className="triage-step">
+          <h3>Step 3 · Start</h3>
+          <dl className="triage-summary">
+            <div>
+              <dt>Role</dt>
+              <dd><span className="muted">Not named yet</span></dd>
+            </div>
+            <div>
+              <dt>CVs attached</dt>
+              <dd>0</dd>
+            </div>
+            <div>
+              <dt>Cost</dt>
+              <dd><span className="muted">Nothing until you confirm</span></dd>
+            </div>
+          </dl>
+          <span className="demo-step-action">Start the Triage</span>
+        </section>
+      </div>
+    </div>
   )
 }
 
@@ -201,13 +380,6 @@ function DemoCard({ card, onOpen, onReveal }) {
           </div>
         </span>
 
-        {/* The number alone, out of a hundred, on the capacity line. The
-            caption under it said "match", which is the axis and not the unit. */}
-        <div className="result-side">
-          <div className={`score score-${band}`}>
-            <span className="score-value">{Math.round(card.score)}%</span>
-          </div>
-        </div>
 
         {/* The third track. Empty here — the authenticated row carries the
             team's tags in it — but present, because it is what makes the score
@@ -232,24 +404,39 @@ function DemoCard({ card, onOpen, onReveal }) {
           itself a button: without it a press on Reveal opened the profile
           underneath as well, two dialogs in one commit.
         */}
-        <span
-          className="result-menu"
-          onClick={(e) => e.stopPropagation()}
-          onKeyDown={(e) => e.stopPropagation()}
-        >
-          <button
-            type="button"
-            className="icon-button result-reveal"
-            onClick={(event) => { event.stopPropagation(); onReveal() }}
-            title="Reveal this candidate — their name, contact details and CV"
-            aria-label="Reveal this candidate"
+        <div className="result-side">
+          <span
+            className="result-menu"
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => e.stopPropagation()}
           >
-            <EyeOff />
-          </button>
-          <span className="icon-button" inert="" aria-hidden="true">+</span>
-          <span className="icon-button" inert="" aria-hidden="true"><CommentIcon /></span>
-          <span className="icon-button" inert="" aria-hidden="true">⋮</span>
-        </span>
+            <button
+              type="button"
+              className="icon-button result-reveal"
+              onClick={(event) => { event.stopPropagation(); onReveal() }}
+              title="Reveal this candidate — their name, contact details and CV"
+              aria-label="Reveal this candidate"
+            >
+              <EyeOff />
+            </button>
+            <span className="icon-button" inert="" aria-hidden="true">+</span>
+            <span className="icon-button" inert="" aria-hidden="true"><CommentIcon /></span>
+            <span className="icon-button" inert="" aria-hidden="true">⋮</span>
+          </span>
+
+          {/*
+            The score, under the ⋮ and flush with it.
+
+            Inside .result-side rather than beside it, which is the correction
+            that matters: the panel's corner is one column holding the controls
+            and the number, and this file had them as two siblings. The comment
+            above the lead says it — sharing a stylesheet only prevents drift if
+            the markup underneath matches — and this is where it had drifted.
+          */}
+          <div className={`score score-${band}`}>
+            <span className="score-value">{Math.round(card.score)}%</span>
+          </div>
+        </div>
 
         {/* What the row is for, across its whole width. */}
         <div className="result-say">
@@ -375,6 +562,16 @@ export default function LiveDemo({ open, onClose }) {
      its ordinary placeholder until then rather than guessing. */
   const [limits, setLimits] = useState(null)
   const [state, setState] = useState('idle')   // idle | searching | done
+
+  /*
+   * Which of the two screens the demo is showing: 'searches' or 'triage'.
+   *
+   * The rail's switch and the + New menu both write it, and the main panel
+   * reads it — so pressing + Triage moves the visitor to the Triage screen
+   * rather than flipping a list beside a search box, which is what the product
+   * does and what a demo of it has to do too.
+   */
+  const [view, setView] = useState('searches')
   const [error, setError] = useState('')
   const [search, setSearch] = useState(null)
   /* Which card opened the gate. Held so the gate can name them and so the
@@ -531,6 +728,11 @@ export default function LiveDemo({ open, onClose }) {
       aria-label="Cursus recruiter workspace, live demo"
       onMouseDown={(event) => { if (event.target === event.currentTarget) close() }}
     >
+      {/* The tint and the blur, behind the panel rather than around it — see
+          .demo-veil. As an ancestor it made the whole demo a composited layer
+          and cost every word inside it subpixel antialiasing. */}
+      <div className="demo-veil" aria-hidden="true" />
+
       <div className="demo-panel" ref={panel}>
         {/*
           A working copy of the recruiter workspace rather than a form in a box.
@@ -568,9 +770,20 @@ export default function LiveDemo({ open, onClose }) {
               the honest way to say "this is scenery" — pointer-events alone
               would still let a keyboard land on a dead button.
             */}
-            <DemoRail title={search?.title} hasSearch={Boolean(search)} />
+            <DemoRail
+              title={search?.title}
+              hasSearch={Boolean(search)}
+              view={view}
+              onView={setView}
+            />
 
-            <main className={search ? 'demo-portal-main' : 'demo-portal-main demo-portal-main-empty'}>
+            <main className={search && view === 'searches'
+              ? 'demo-portal-main'
+              : view === 'triage'
+                ? 'demo-portal-main'
+                : 'demo-portal-main demo-portal-main-empty'}>
+              {view === 'triage' ? <DemoTriagePage /> : (
+              <>
               {/*
                 The product's own composer, not a copy of it. Same component the
                 recruiter workspace renders, so the demo cannot drift from the
@@ -704,6 +917,8 @@ export default function LiveDemo({ open, onClose }) {
                     </>
                   )}
                 </section>
+              )}
+              </>
               )}
             </main>
           </div>

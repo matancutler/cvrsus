@@ -536,6 +536,36 @@ section('Signing up (later round)')
 
 // "I am: Candidate / Recruiter", above the card, changing only the card.
 check('the landing card asks who is filling it in', pageSource.includes('role-switch'))
+
+/*
+ * Crossing sides from the foot of the page returns you to the top of it.
+ *
+ * The two "See how CURSUS works for..." links sit at the very bottom of a long
+ * pitch, and pressing one replaces everything above them. Without the scroll
+ * the reader is left at the foot of a page they have never seen the top of,
+ * looking at whatever happens to sit the same distance down the new one — the
+ * headline, the whole argument and the form are all behind them.
+ *
+ * The role switch at the top is deliberately not given this: it is already
+ * there, and scrolling to where you are is a jolt for nothing.
+ */
+check('crossing sides from the foot scrolls back to the top',
+  /function switchSide\(next\) \{[\s\S]{0,200}window\.scrollTo\(\{ top: 0/.test(pageSource),
+  'the links are the last thing on the page and replace everything above them')
+check('and it honours prefers-reduced-motion',
+  /switchSide[\s\S]{0,300}prefers-reduced-motion[\s\S]{0,120}reduced \? 'auto' : 'smooth'/.test(pageSource),
+  'the same rule focusApplication follows a few lines below it')
+check('both cross-links go through it',
+  (pageSource.match(/onSwitchSide=\{\(\) => switchSide\('(candidate|recruiter)'\)\}/g) ?? []).length === 2,
+  'one of the two switching without scrolling is the bug, seen half the time')
+
+/* The chosen segment is filled, not outlined and not merely lettered. */
+check('the chosen side of a switch is filled with the accent',
+  /\.role-option-on,[\s\S]{0,200}background:var\(--accent\)/.test(css)
+  || /\.role-option-on,\.role-option-on:hover\{background:var\(--accent\)/.test(css))
+check('and its label is white, which is the only legible pairing on it',
+  /\.role-option-on[\s\S]{0,200}color:var\(--surface\)/.test(css),
+  'grey lettering is what an outlined pill wanted and cannot survive a coloured ground')
 /* Candidate unless the URL says otherwise: the About page's "Create an
    account" arrives as ?join=recruiter so a recruiter lands on the account form
    rather than on the candidate card with a toggle to find. */
@@ -561,10 +591,26 @@ check('editing a verified address drops its proof', verified.includes("onProof('
 check('the form refuses to submit without both proofs',
   formSource.includes('Please verify your'))
 
-// City: free text and required. Availability is the one field the CV must not fill.
-check('city is free text now', !formSource.includes('ISRAELI_CITIES'))
-check('and required', /label="City" required/.test(formSource))
-check('the city list is gone from the bundle', !bundle.includes('Rishon LeZion'))
+/*
+ * City: suggestions, and required.
+ *
+ * The list is in the bundle again, on purpose — this check used to assert the
+ * opposite. What must not come back is the CLOSED list: it was a dropdown of
+ * Israeli cities with an "Other" escape, which asked everybody who lives
+ * anywhere else to describe themselves as an exception. Offering the names
+ * while still accepting anything typed is the version of this that costs
+ * nobody their own city.
+ */
+const cityField = read('../client/src/components/CityField.jsx')
+check('city is required', /label="City" required/.test(formSource))
+check('and it is a text input, not a dropdown',
+  cityField.includes('<input') && !cityField.includes('<select') && !formSource.includes('ISRAELI_CITIES'),
+  'a closed list is what this field was replaced for')
+check('the cities ship as suggestions', bundle.includes('Rishon LeZion'),
+  'clicking the field has to be able to show them without asking the server')
+check('and a city nobody listed is still accepted',
+  cityField.includes('we will use what you typed'),
+  'no dead end, no Other')
 check('the CV pre-fills the form', formSource.includes('/api/candidate/parse-cv'))
 /* A CV does not know when someone could start, so availability is left out of
    the list of fields the pre-fill writes into. */

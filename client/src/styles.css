@@ -1333,6 +1333,106 @@ p { margin: 0; }
 
 .field { display: flex; flex-direction: column; gap: 0.4rem; min-width: 0; }
 
+/* ------------------------------------------------------------- city ---
+ *
+ * A text input that offers the cities under it. The wrapper is the
+ * positioning context and nothing else — the input inside keeps every rule
+ * the stylesheet already gives inputs, so this field cannot drift from the
+ * others sitting beside it in the same row.
+ */
+.city-field { position: relative; display: flex; flex-direction: column; }
+
+/* Room for the arrow, so a long city name does not run under it. */
+.city-field input { padding-right: 2.25rem; }
+
+.city-toggle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--ink-3);
+  cursor: pointer;
+}
+
+/* Not a tab stop: the field it belongs to is one already, and the list opens
+   from the keyboard with Down. A second stop here would put a control between
+   City and the next field that keyboard users have to pass through twice. */
+.city-toggle:hover { color: var(--ink-2); }
+.city-toggle:disabled { cursor: default; opacity: 0.5; }
+.city-toggle svg { transition: transform 120ms ease; }
+.city-toggle[aria-expanded='true'] svg { transform: rotate(180deg); }
+
+@media (prefers-reduced-motion: reduce) {
+  .city-toggle svg { transition: none; }
+}
+
+.city-options {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  left: 0;
+  right: 0;
+  /* Above the fields below it, and above the rows of a form it sits inside.
+     Below a modal backdrop, which is where it belongs — this field appears
+     inside dialogs. */
+  z-index: 30;
+  /*
+   * Fifteen cities, then scroll.
+   *
+   * Enough to be worth reading and short enough to stay on the screen — the
+   * whole list is 125 and a panel that long is a page, not a menu. The rows
+   * are a fixed height so this is exactly fifteen of them rather than
+   * approximately however many the font happens to allow.
+   *
+   * Capped against the viewport as well, because this field sits low on a
+   * signup card and on a short screen fifteen rows would run off the bottom
+   * with the scrollbar out of reach.
+   */
+  --city-row: 2rem;
+  max-height: min(calc(15 * var(--city-row) + 0.5rem), 60vh);
+  overflow-y: auto;
+  margin: 0;
+  padding: 0.25rem;
+  /* No global ul reset in this stylesheet, so the bullets are removed here. */
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+}
+
+.city-option {
+  display: flex;
+  align-items: center;
+  height: var(--city-row);
+  padding: 0 0.55rem;
+  border-radius: var(--radius-xs);
+  font-size: 0.875rem;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+/* One highlight, driven by the keyboard and by the pointer alike: hovering
+   sets the active row rather than painting a second one, so there is never a
+   pair of rows both claiming to be next. */
+.city-option.is-active { background: var(--surface-2); }
+
+/* Where you already are. Marked, not selected — the list is suggestions, and
+   the field may hold something that is not on it at all. */
+.city-option.is-chosen { color: var(--accent); font-weight: var(--w-medium); }
+
+.city-option-none {
+  color: var(--ink-2);
+  font-size: 0.8125rem;
+  cursor: default;
+}
+
 .field-label {
   font-size: 0.8125rem;
   font-weight: var(--w-medium);
@@ -1568,7 +1668,6 @@ input:focus, select:focus, textarea:focus, .chip-input:focus-within {
  * anything. The red now appears once, on the control that actually destroys
  * something.
  */
-
 
 .danger-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
 
@@ -2359,9 +2458,15 @@ input:focus, select:focus, textarea:focus, .chip-input:focus-within {
    * enter. The score then sat against the right-hand edge, as far from the name
    * as the card is wide; it is now between two equal flexible tracks, which is
    * the card's centre line. The photograph is inside the left track rather than
-   * in one of its own, or its width would push the score past that line.
+  /*
+   * One column now, because the score has left the middle of it.
+   *
+   * The three tracks existed to put the number on the card's centre line. It
+   * sits in the top-right corner under the buttons instead, where the things
+   * you can do to a candidate already are — so the person gets the whole width
+   * and the summary below stops being a column about 200px wide.
    */
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   column-gap: 1rem;
   /* Tight, because the second row is a continuation of the first — the summary
      reads as the same person still talking, not as a separate block. */
@@ -2548,6 +2653,26 @@ input:focus, select:focus, textarea:focus, .chip-input:focus-within {
   font-size: 0.85rem;
 }
 .facts dt { color: var(--text-muted); }
+
+/*
+ * A rule between each field, for a profile read top to bottom.
+ *
+ * Only where the list is the whole panel. The same markup sits inside cards
+ * elsewhere, where rules would draw more lines than there is content to part.
+ *
+ * Both cells of a row carry the border, because a grid has no row element to
+ * hang one on — and the first row is spared, so the list does not open on a
+ * line separating it from nothing.
+ */
+.facts-ruled { gap: 0; }
+.facts-ruled dt,
+.facts-ruled dd {
+  border-top: 1px solid var(--border);
+  padding: 0.55rem 0;
+}
+.facts-ruled dd { padding-left: 0.9rem; }
+.facts-ruled dt:first-of-type,
+.facts-ruled dd:first-of-type { border-top: 0; }
 .facts dd { margin: 0; overflow-wrap: anywhere; }
 /* A stated absence, set apart from the values so the two do not read alike. */
 .facts dd.fact-empty { color: var(--text-muted); font-style: italic; }
@@ -2556,7 +2681,16 @@ input:focus, select:focus, textarea:focus, .chip-input:focus-within {
 
 .folder-picker { width: auto; min-width: 170px; }
 
-.chip-folder { background: var(--accent-soft); color: var(--accent); align-self: flex-start; }
+/*
+ * No align-self: it is the only chip that had one.
+ *
+ * flex-start dates from when this chip sat in a column under the summary. In
+ * the corner strip it sits beside the reveal chip, which centres itself like
+ * everything else in that row — so the folder chip alone rode high, by about
+ * two pixels, which is exactly enough to look like a mistake and not enough to
+ * see why.
+ */
+.chip-folder { background: var(--accent-soft); color: var(--accent); }
 
 .badge {
   display: inline-grid;
@@ -3133,6 +3267,13 @@ input:focus, select:focus, textarea:focus, .chip-input:focus-within {
  * is no form to submit and nothing to confirm, and a checkbox promises a Save
  * button that does not exist.
  */
+/*
+ * Pushed right once, by the slot beside it — not by an auto margin of its own.
+ *
+ * Two auto margins in one row share the free space between them, so the switch
+ * slid left whenever the pencil appeared. The pencil's slot is always there
+ * now, so this needs no margin at all and never moves.
+ */
 .split-switch {
   display: inline-flex;
   align-items: center;
@@ -3142,11 +3283,23 @@ input:focus, select:focus, textarea:focus, .chip-input:focus-within {
 }
 .split-switch-label { font-size: 0.8rem; color: var(--text-muted); }
 
+/*
+ * A switch has to answer "is this on" from across the room.
+ *
+ * It used to say on with a pale tint and a coloured border, which at a glance
+ * read as the off state wearing a ring — the two differed mostly in where the
+ * knob sat, and a 14px dot is not enough signal on its own. On is a filled
+ * track now and off is an empty one, so the states differ in the largest thing
+ * about them and the knob merely confirms it.
+ *
+ * Slightly larger, too: 34x20 with a 14px knob left the travel shorter than the
+ * knob itself, which is what made the movement hard to read.
+ */
 .switch {
   position: relative;
   flex: none;
-  width: 34px;
-  height: 20px;
+  width: 40px;
+  height: 22px;
   padding: 0;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-pill);
@@ -3156,19 +3309,22 @@ input:focus, select:focus, textarea:focus, .chip-input:focus-within {
 }
 .switch:focus-visible { outline: none; box-shadow: var(--ring); }
 .switch:disabled { opacity: 0.5; cursor: default; }
+.switch:not(:disabled):hover { border-color: var(--border-hover); }
 .switch-knob {
   position: absolute;
-  top: 2px;
-  left: 2px;
+  top: 3px;
+  left: 3px;
   width: 14px;
   height: 14px;
   border-radius: 50%;
   background: var(--ink-3);
   transition: transform var(--dur-1) var(--ease), background-color var(--dur-1) var(--ease);
 }
-/* On is the accent, because it is the state that is doing something. */
-.switch-on { background: var(--accent-soft); border-color: var(--accent); }
-.switch-on .switch-knob { transform: translateX(14px); background: var(--accent); }
+/* Filled, and the knob turns white against it — the same shape every switch
+   people have used elsewhere makes. */
+.switch-on { background: var(--accent); border-color: var(--accent); }
+.switch-on:not(:disabled):hover { border-color: var(--accent); }
+.switch-on .switch-knob { transform: translateX(18px); background: #fff; }
 
 .btn-self-start { align-self: flex-start; }
 
@@ -3207,7 +3363,8 @@ input:focus, select:focus, textarea:focus, .chip-input:focus-within {
  * reads as the heading of a part of the page rather than as a stray button —
  * which is what it becomes when it is opened.
  */
-.password-toggle {
+.password-toggle,
+.disclosure-toggle {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -3223,12 +3380,15 @@ input:focus, select:focus, textarea:focus, .chip-input:focus-within {
   text-align: left;
   cursor: pointer;
 }
-.password-toggle:hover { color: var(--accent); }
-.password-toggle:focus-visible { outline: none; box-shadow: var(--ring); border-radius: var(--radius-xs); }
+.password-toggle:hover,
+.disclosure-toggle:hover { color: var(--accent); }
+.password-toggle:focus-visible,
+.disclosure-toggle:focus-visible { outline: none; box-shadow: var(--ring); border-radius: var(--radius-xs); }
 
 /* Open: the form below carries the rule, so the button stops drawing one and
    the two do not stack into a double line. */
-.password-toggle-open { border-top-color: transparent; padding-bottom: 0.2rem; }
+.password-toggle-open,
+.disclosure-toggle-open { border-top-color: transparent; padding-bottom: 0.2rem; }
 
 .password-toggle-caret { transition: transform 140ms ease; flex: none; }
 .password-toggle-open .password-toggle-caret { transform: rotate(180deg); }
@@ -3312,7 +3472,43 @@ input:focus, select:focus, textarea:focus, .chip-input:focus-within {
 .seat-plan-state .muted { font-size: 0.83rem; }
 /* The scheduled reduction. Oxblood rather than red: it is a thing the
    administrator asked for, not a fault. */
-.seat-plan-pending { font-size: 0.83rem; color: var(--accent); }
+.seat-plan-pending { font-size: 0.83rem; color: var(--accent); margin: 0; }
+
+/* The subtitle that came off the old Capacity screen, beside its heading. */
+.allocation-note { font-size: 0.8rem; }
+
+/*
+ * The total, spanning the table it sums.
+ *
+ * Left-aligned against the names above it rather than under the per-person
+ * column, so it cannot be misread as one more row.
+ */
+.allocation-total {
+  text-align: left;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--border-strong);
+  font-size: 0.88rem;
+  color: var(--text-muted);
+}
+.allocation-total strong {
+  font-size: 1.05rem;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+/* The unallocated remainder, quieter than the total it follows. */
+.allocation-remainder { color: var(--text-muted); }
+
+/*
+ * The list's actions, ranged right beneath it — the eye finishes the last row
+ * and lands on them.
+ */
+.team-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  align-items: center;
+}
 
 /* Cancelling sits under the tiers rather than among them. Underlined when it
    is the choice in force, so the button above it is not the only thing saying
@@ -3442,14 +3638,32 @@ input:focus, select:focus, textarea:focus, .chip-input:focus-within {
  * If either type size changes, re-measure — a zero-height inline box with
  * `vertical-align: baseline` reports a baseline, which no bounding box does.
  */
+/*
+ * The corner: what you can do to this person, and how well they scored.
+ *
+ * One absolutely-positioned stack rather than two, so the number is centred on
+ * the row of buttons by construction — no offset to keep in step with their
+ * width. The menu inside it goes back into flow; it was positioned separately
+ * when the score lived on the card's centre line, and nothing needs that now.
+ */
+/*
+ * The corner: the controls, and the score under them.
+ *
+ * Ends flush right rather than centred. Centring hung the score under the
+ * middle of the control strip, which is under nothing in particular — the
+ * strip's width changes with whether there is a folder chip, a reveal chip or
+ * neither, so the number moved sideways from row to row and lined up with the
+ * card above it only by accident. Flush right puts it under the ⋮, which is
+ * the one control every card has.
+ */
 .result-side {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.55rem;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 0.4rem;
-  flex: none;
-  align-self: start;
-  margin-top: 20px;
+  align-items: flex-end;
+  gap: 0.35rem;
 }
 
 /*
@@ -3479,9 +3693,6 @@ input:focus, select:focus, textarea:focus, .chip-input:focus-within {
   min-width: 0;
 }
 .result-menu {
-  position: absolute;
-  top: 0.5rem;
-  right: 0.55rem;
   display: flex;
   align-items: center;
   gap: 0.1rem;
@@ -4268,7 +4479,15 @@ select:required:invalid option { color: var(--text); }
 .role-option {
   min-height: 34px;
   padding: 0 1.35rem;
-  border: none;
+  /*
+   * Transparent, not absent.
+   *
+   * The chosen segment is marked by an oxblood outline, and a border that
+   * appears only on the chosen one would widen it by two pixels at the moment
+   * it is picked — the pill would flinch sideways under the cursor. Every
+   * segment carries the border; only its colour changes.
+   */
+  border: 1px solid transparent;
   border-radius: var(--radius-pill);
   background: none;
   color: var(--ink-2);
@@ -4284,17 +4503,24 @@ select:required:invalid option { color: var(--text); }
 .role-option:focus-visible { outline: none; box-shadow: var(--ring); }
 
 /*
- * The selected segment lifts out of the track; it is not painted in.
+ * The selected segment is filled with the accent.
  *
- * A saturated oxblood pill made the control the loudest object on the page —
- * louder than the headline it sat under, and louder than the button it was
- * meant to lead to. A white segment on a sunken track is how a real segmented
- * control reads: the selection is raised, not coloured.
+ * White on oxblood, which is 9.3:1 — the only legible pairing once the pill is
+ * solid. Grey lettering is what an outlined pill wanted and it cannot survive
+ * a coloured ground; the label has to change with the fill, not against it.
+ *
+ * The weight still moves — semi against medium — so the choice survives for
+ * anyone who cannot separate the two colours at all.
+ *
+ * Same treatment as the rail switch, which is the other place on the site
+ * where a choice decides what everything under it is about. The two are kept
+ * identical on purpose: one segmented control, used twice.
  */
 .role-option-on,
 .role-option-on:hover {
-  background: var(--surface);
-  color: var(--ink);
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--surface);
   font-weight: var(--w-semi);
   box-shadow: var(--shadow-xs);
 }
@@ -4472,8 +4698,19 @@ select:required:invalid option { color: var(--text); }
 
 .pack-card {
   position: relative;
-  display: grid;
-  align-content: start;
+  /*
+   * A column, so the badge can be pushed to the foot of the card.
+   *
+   * The cards stretch to the tallest of the row, but their contents did not:
+   * every card stacked from the top, so a badge landed wherever the lines above
+   * it happened to end. The Enterprise card carries a two-line description
+   * where the others carry a price and a unit, and its "Contact sales" chip sat
+   * a clear line higher than every "Save 20%" beside it — the row of tags read
+   * as a mistake rather than as a set.
+   */
+  display: flex;
+  flex-direction: column;
+  align-items: start;
   gap: 0.3rem;
   padding: 1.5rem 1.25rem;
   border: 1px solid var(--border);
@@ -4556,9 +4793,56 @@ select:required:invalid option { color: var(--text); }
 
 .pack-unit { font-size: 0.8125rem; color: var(--ink-3); margin-top: 0.1rem; }
 
+/*
+ * The plan you are on, across the head of its card.
+ *
+ * Full width rather than a corner chip: seats are a subscription, so one of
+ * these cards is a description of today and the rest are offers, and that is
+ * too large a difference for a badge tucked in a corner.
+ */
+.pack-card-current { overflow: hidden; }
+/*
+ * Out of the flow, so the card it marks keeps its neighbours' alignment.
+ *
+ * In flow it pushed "2 seats" and its price a banner's height below the "3
+ * seats" beside it, and a row of prices that does not share a baseline is
+ * read by hunting. Pinned instead, with the room for it reserved on every
+ * card in the row — including the ones with no banner, or they would be the
+ * ones out of step.
+ */
+.pack-grid:has(.pack-card-current) .pack-card { padding-top: 2.35rem; }
+.pack-current-tag {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  padding: 0.3rem 1.25rem;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 0.72rem;
+  font-weight: var(--w-semi);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  text-align: center;
+}
+
+/* Onward, and never larger than the word it follows. */
+.btn-arrow { flex: none; margin-left: 0.15rem; vertical-align: -2px; }
+
 .pack-badge {
-  justify-self: start;
-  margin-top: 0.45rem;
+  align-self: flex-start;
+  /*
+   * Pressed to the foot of the card, so every tag in the row sits on one line.
+   *
+   * The cards stretch to the tallest of the row but their contents did not, so
+   * a tag landed wherever the lines above it happened to end — and the
+   * Enterprise card, which carries a description where the others carry a price
+   * and a unit, put "Contact sales" a clear line above every "Save 20%" beside
+   * it. `auto` takes the free space instead, which aligns them without pinning
+   * a height that a longer description would break.
+   */
+  margin-top: auto;
+  padding-top: 0.45rem;
   padding: 0.15rem 0.55rem;
   border-radius: var(--radius-pill);
   background: var(--hit-soft);
@@ -4758,6 +5042,17 @@ select:required:invalid option { color: var(--text); }
   padding-top: 1.25rem;
   border-top: 1px solid var(--line);
 }
+/*
+ * Inside Usage the parent already spaces its children, so the section's own
+ * top margin was doubling it.
+ */
+.usage-page > .allocation { margin-top: 0; }
+/* The rule parts one section from the next, so the first has nothing above it
+   to be parted from. It used to sit under a tab strip, which is gone. */
+.usage-page > .allocation:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
 .allocation .modal-subhead { display: flex; align-items: center; gap: 0.4rem; }
 .allocation .modal-subhead > svg { color: var(--accent); flex: none; }
 
@@ -4795,7 +5090,18 @@ select:required:invalid option { color: var(--text); }
 /* The Reveals/Seats switch inside the billing panel — same control as the
    pricing page, but left-aligned, because everything else on this screen is. */
 .billing-switch { grid-column: auto; justify-self: start; align-self: start; }
-.billing-cta { display: flex; justify-content: flex-start; }
+/*
+ * Ranged right, ending level with the last card.
+ *
+ * Centred it sat under the middle of the row and belonged to no card in
+ * particular; against the right edge it reads as the end of the row of choices
+ * — the place you arrive at having read them all, which is what it is for.
+ */
+.billing-cta { display: flex; justify-content: flex-end; }
+
+/* Left, under the heading it narrows, and small — it is a way of reading the
+   table rather than a decision about the account. */
+.history-filter { margin: 0 0 0.75rem; justify-self: start; align-self: start; max-width: 100%; }
 
 /* ================================================= CV auto-fill notice ==
    What the uploaded CV filled in, said as a panel rather than a grey footnote.
@@ -5774,6 +6080,50 @@ select:required:invalid option { color: var(--text); }
 .ws-new:hover { border-color: var(--border-hover); box-shadow: var(--shadow-sm); }
 .ws-new:focus-visible { outline: none; box-shadow: var(--ring); }
 
+/*
+ * The wrapper the menu hangs from.
+ *
+ * The button was a direct flex child of the rail with no positioned ancestor,
+ * so a panel anchored to it had nothing to be anchored to.
+ */
+.ws-new-wrap { position: relative; display: flex; }
+.ws-new-wrap .ws-new { flex: 1; justify-content: flex-start; }
+/* The caret goes to the far end, so the label stays where it was. */
+.ws-new-wrap .ws-new svg { margin-left: auto; }
+
+.ws-new-menu {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  left: 0;
+  right: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  padding: 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-md, 0 8px 24px -12px rgba(0, 0, 0, 0.25));
+}
+
+.ws-new-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.5rem 0.6rem;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: none;
+  font: inherit;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+.ws-new-item:hover { background: var(--surface-2); }
+.ws-new-item:focus-visible { outline: none; box-shadow: var(--ring); }
+.ws-new-item strong { font-weight: var(--w-medium); font-size: 0.8125rem; }
+.ws-new-item .muted { font-size: 0.75rem; line-height: 1.35; }
+
 .ws-nav { display: flex; flex-direction: column; gap: 1px; }
 
 .ws-nav-item {
@@ -6017,7 +6367,6 @@ select:required:invalid option { color: var(--text); }
 }
 .usage-percent { grid-row: 1; }
 .usage-count { grid-row: 2; }
-
 
 /* ================================================ candidate portal, v3 ==
    The page stopped being a card, the masthead went, and the photo moved into
@@ -6670,6 +7019,22 @@ html:has(.workspace-shell) { scrollbar-gutter: auto; }
  * something opened on top of what you were reading rather than somewhere you
  * were sent.
  */
+/*
+ * The frame that centres the demo, and nothing else.
+ *
+ * It used to carry the tint and the blur itself, which made the demo panel a
+ * descendant of a backdrop-filtered element — and that is what made the whole
+ * demo look soft and washed out. An element with backdrop-filter is promoted
+ * to its own compositing layer, and every descendant is composited with it:
+ * the browser then drops subpixel text antialiasing for the entire subtree and
+ * renders it greyscale, so the type inside came out thinner and paler than the
+ * identical type on the page behind. Nothing was actually blurred; it was
+ * being drawn by a different code path.
+ *
+ * So the effect moved to a sibling that sits BEHIND the panel — see
+ * .demo-veil. The panel is no longer inside a filtered subtree and gets the
+ * same rendering as the rest of the site.
+ */
 .demo-backdrop {
   position: fixed;
   inset: 0;
@@ -6678,19 +7043,29 @@ html:has(.workspace-shell) { scrollbar-gutter: auto; }
   align-items: center;
   justify-content: center;
   padding: 1.5rem;
+}
+
+/*
+ * The page behind goes soft as well as dark.
+ *
+ * A tint alone left the landing copy legible enough to keep reading, so the
+ * demo sat in front of a page competing with it — headings, body text and a
+ * half-filled application form all still saying "read me". Blurring settles
+ * which of the two is the thing on screen, without hiding that the site is
+ * still there behind it.
+ *
+ * -webkit- as well: Safari has only ever shipped this prefixed, and without it
+ * the effect is simply absent there rather than broken.
+ *
+ * pointer-events: none, because the backdrop underneath is what closes the
+ * demo when you click outside the panel — a veil that swallowed the click
+ * would take that away.
+ */
+.demo-veil {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
   background: rgb(28 25 23 / 42%);
-  /*
-   * The page behind goes soft as well as dark.
-   *
-   * A tint alone left the landing copy legible enough to keep reading, so the
-   * demo sat in front of a page competing with it — headings, body text and a
-   * half-filled application form all still saying "read me". Blurring settles
-   * which of the two is the thing on screen, without hiding that the site is
-   * still there behind it.
-   *
-   * -webkit- as well: Safari has only ever shipped this prefixed, and without
-   * it the effect is simply absent there rather than broken.
-   */
   -webkit-backdrop-filter: blur(6px);
   backdrop-filter: blur(6px);
 }
@@ -6698,13 +7073,16 @@ html:has(.workspace-shell) { scrollbar-gutter: auto; }
 /* Where the filter is not supported the tint carries the whole job, so it
    deepens to keep the separation it was only half providing before. */
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .demo-backdrop { background: rgb(28 25 23 / 62%); }
+  .demo-veil { background: rgb(28 25 23 / 62%); }
 }
 
 .demo-panel {
   /* The containing block for the messaging dock, which is positioned against
-     the panel rather than the window so it sits in the demo's own corner. */
+     the panel rather than the window so it sits in the demo's own corner.
+     Also what lifts it clear of .demo-veil, which is absolutely positioned in
+     the same stacking context. */
   position: relative;
+  z-index: 1;
   display: flex;
   flex-direction: column;
   /* Application-sized: 88% of the viewport, with a ceiling so it does not
@@ -6769,25 +7147,8 @@ html:has(.workspace-shell) { scrollbar-gutter: auto; }
   overflow: hidden;
   opacity: 0.72;
 }
-.demo-rail-new {
-  padding: 0.55rem 0.7rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-  font-weight: var(--w-semi);
-  font-size: 0.92rem;
-}
 .demo-rail-nav { padding: 0.45rem 0.7rem; font-size: 0.92rem; }
 .demo-rail-history { flex: 1; min-height: 0; border-top: 1px solid var(--line); padding-top: 0.7rem; }
-.demo-rail-heading {
-  margin: 0 0 0.2rem;
-  padding-left: calc(0.55rem - 2px);
-  color: var(--text-muted);
-  font-size: 0.72rem;
-  font-weight: var(--w-semi);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
 .demo-rail-day {
   margin: 0 0 0.25rem 0.55rem;
   font-size: 0.72rem;
@@ -8874,6 +9235,111 @@ html:has(.workspace-shell) { scrollbar-gutter: auto; }
 /* The rail heading and the way to the rest of the list, on one line. */
 .ws-rail-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
 .ws-rail-head .ws-rail-heading { margin: 0; }
+
+/*
+ * The switch that decides what the rail lists.
+ *
+ * It wears .ws-rail-heading, so both words are set in the same small caps the
+ * one heading was and the 2px optical nudge still lands. That rule sets a
+ * colour and a size; everything here is about the two buttons inside it.
+ *
+ * Not a segmented control with a sliding pill. At 0.72rem in a 250px rail a
+ * pill is four pixels of chrome around a word — the distinction is carried by
+ * ink, which is what the rest of this rail uses to say the same thing.
+ */
+/*
+ * The same segmented control as the role switch on the landing page, at rail
+ * size.
+ *
+ * It was two bare words with the live one coloured, which is not a control —
+ * it is a heading that changes colour, and nothing about it says the other
+ * word can be pressed. Borrowing the shape the site already uses for "one of
+ * these two" makes it obvious without a word of explanation, and means there
+ * is one segmented control on the site rather than two ideas about what one
+ * looks like.
+ *
+ * It keeps .ws-rail-heading for the small caps and the letter-spacing; the
+ * padding and margin from that rule are replaced here, because a track has its
+ * own inside and the 2px optical nudge moves to the margin so the track's left
+ * edge still lines up with the rows underneath.
+ */
+.rail-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  width: fit-content;
+  margin: 0 0 0.3rem calc(0.55rem - 2px);
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
+  box-shadow: inset 0 1px 2px rgb(28 25 23 / 3%);
+}
+
+.rail-toggle button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-height: 22px;
+  padding: 0 0.6rem;
+  /* Transparent for the same reason the role switch's is — see there. */
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  background: none;
+  /* Inherited, so the two labels cannot drift from the heading they replaced. */
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: var(--ink-3);
+  cursor: pointer;
+  transition: background-color var(--dur-1) var(--ease), border-color var(--dur-1) var(--ease);
+}
+
+.rail-toggle button:hover { color: var(--ink-2); }
+.rail-toggle button:focus-visible { outline: none; box-shadow: var(--ring); }
+
+/* The one that is showing: raised and filled, white on oxblood — see the note
+   on .role-option-on, which this matches exactly. */
+.rail-toggle .rail-toggle-on,
+.rail-toggle .rail-toggle-on:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--surface);
+  box-shadow: var(--shadow-xs);
+}
+
+/*
+ * Whose list this is.
+ *
+ * Sentence case and not uppercase: it is a sentence, and setting it in the
+ * heading's small caps would make it a third label in the switch rather than a
+ * note about it.
+ */
+.rail-scope {
+  margin: 0 0 0.35rem;
+  padding: 0 0.55rem;
+  padding-left: calc(0.55rem - 2px);
+  color: var(--ink-3);
+  font-size: 0.7rem;
+  line-height: 1.3;
+}
+
+/* The Triage rail's own empty and loading lines, in the place a list would be. */
+.ws-rail-empty {
+  margin: 0;
+  padding: 0.2rem 0.55rem 0.6rem;
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+/* Whose Triage it is, under its title. Only drawn for a colleague's — see
+   TriageRail — so it never repeats "you" down the whole list. */
+.chat-item-author {
+  display: block;
+  color: var(--ink-3);
+  font-size: 0.7rem;
+  line-height: 1.3;
+}
 .rail-heading-button { width: 24px; height: 24px; color: var(--ink-3); font-size: 0.9rem; line-height: 1; }
 .rail-heading-button:hover { color: var(--ink); }
 
@@ -8993,7 +9459,14 @@ html:has(.workspace-shell) { scrollbar-gutter: auto; }
   margin-bottom: 0.35rem;
 }
 .allocation-head .modal-subhead { margin: 0; }
-.allocation-head .icon-button { margin-left: auto; }
+/* Always the same width, filled or not, so nothing beside it shifts when the
+   pencil comes and goes. */
+.allocation-edit-slot {
+  flex: none;
+  width: 1.9rem;
+  display: flex;
+  justify-content: flex-end;
+}
 
 /* The three arrangements, as one segmented control — the same one the landing
    page and Billing use, because it is the same kind of choice. */
@@ -9049,3 +9522,151 @@ html:has(.workspace-shell) { scrollbar-gutter: auto; }
   color: var(--ink-2);
 }
 .attach-button:hover { color: var(--accent); background: var(--accent-soft); }
+
+/* ===================================================== signing up ==
+   Four short steps in place of one long card. The controls inside are the
+   form's own; only the frame and the progress row are new. */
+
+.signup-flow { display: flex; flex-direction: column; gap: 1.1rem; }
+
+/* Only what the CV could not answer, so usually nothing at all. */
+.signup-gap { display: flex; flex-direction: column; gap: 0.7rem; }
+
+/*
+ * The wait while the CV is read.
+ *
+ * Centred and alone on the card: it is the one moment the product is doing the
+ * thing it promised, and putting it beside anything else would invite reading
+ * the something else instead.
+ */
+.signup-building {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 0.7rem;
+  padding: 2.5rem 1rem;
+}
+.signup-building h2 { margin: 0; font-size: 1.15rem; }
+.signup-building p { margin: 0; max-width: 42ch; }
+.autofill-spinner-lg { width: 26px; height: 26px; border-width: 3px; }
+
+/* The onboarding dialog: a reading width, and a foot that stays put. */
+.onboarding-modal { width: min(560px, 94vw); max-height: 88vh; display: flex; flex-direction: column; }
+.onboarding-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1.15rem;
+  overflow-y: auto;
+  min-height: 0;
+}
+.onboarding-foot { display: flex; justify-content: flex-end; }
+
+/* ------------------------------------------------------- folder dialog ---
+ *
+ * Where to file a candidate, asked from the result card's menu. A list rather
+ * than a select: the folders are the choice, and a control that has to be
+ * opened to show what is in it hides the one thing the recruiter came to read.
+ */
+.folder-dialog { max-width: 26rem; }
+
+.folder-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.folder-choice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  width: 100%;
+  min-height: 40px;
+  padding: 0 0.7rem;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  font: inherit;
+  font-size: 0.875rem;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.folder-choice:hover:not(:disabled) { background: var(--surface-2); }
+.folder-choice:focus-visible { outline: none; box-shadow: var(--ring); }
+.folder-choice:disabled { cursor: default; opacity: 0.6; }
+
+/* Where they already are. Not pressable, and coloured rather than ticked —
+   the row says "Filed here" in place of its count, so the state is a word. */
+.folder-choice-on,
+.folder-choice-on:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+  cursor: default;
+}
+
+.folder-choice-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.folder-choice-count {
+  flex: none;
+  color: var(--ink-3);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+.folder-choice-on .folder-choice-count { color: var(--accent); }
+
+/* New folder on the left, Close on the right — the same shape as every other
+   dialog foot on the site, where the way out is the right-hand end. */
+.folder-dialog-foot { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; }
+
+/* ------------------------------------------------- the demo's Triage page ---
+ *
+ * Scenery built from the real builder's own classes — .triage-page,
+ * .triage-step, .field — so it cannot drift from the screen it is showing.
+ * What differs is that every field is a div: there is nothing to type into and
+ * nothing to press, and a control that answers a click by doing nothing is
+ * worse than one that plainly does not invite it.
+ */
+.demo-field {
+  display: flex;
+  align-items: center;
+  min-height: 40px;
+  padding: 0.5rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink-3);
+  font-size: 0.9375rem;
+}
+
+.demo-field-tall { min-height: 7rem; align-items: flex-start; }
+
+.demo-dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 1.6rem 1rem;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--ink-3);
+  text-align: center;
+}
+
+/* The step's own primary action, drawn and not offered. */
+.demo-step-action {
+  display: inline-flex;
+  align-items: center;
+  min-height: 38px;
+  padding: 0 1.1rem;
+  border-radius: var(--radius-sm);
+  background: var(--surface-3);
+  color: var(--ink-3);
+  font-size: 0.875rem;
+  font-weight: var(--w-semi);
+}

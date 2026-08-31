@@ -247,10 +247,19 @@ const upload = fs.readFileSync(new URL('../client/src/pages/UploadPage.jsx', imp
 check('nothing stands in front of the form',
   !upload.includes('You already have a profile') && !upload.includes('signedIn'),
   'a shared computer has more than one person at it')
+/* The form moved into SignUpFlow when signup became four steps; the property
+   did not move with it, so this follows it there. A collision still comes back
+   as a sentence on the step that can fix it, never as a card in place of the
+   form. */
+const signup = fs.readFileSync(new URL('../client/src/components/SignUpFlow.jsx', import.meta.url), 'utf8')
 check('and a duplicate is an error on the form, not a card instead of it',
   !upload.includes("state: 'exists'")
-  && upload.includes("error={status.state === 'error' ? status.message : ''}"),
+  && !signup.includes("state: 'exists'")
+  && /alert alert-error/.test(signup),
   'the server names the detail that is taken, and the field stays there to fix')
+check('and it returns to the step that can change the detail',
+  /setStep\('phone'\)/.test(signup),
+  'an error on a screen with nothing to edit is a dead end')
 
 const portal = fs.readFileSync(new URL('../client/src/pages/CandidatePortal.jsx', import.meta.url), 'utf8')
 check('only a refusal ends the session',

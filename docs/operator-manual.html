@@ -1,0 +1,1301 @@
+<title>Cursus Operator Manual</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Public+Sans:ital,wght@0,400;0,500;1,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<style>
+  /* ---------------------------------------------------------------- tokens --
+     Light is the base. The neutrals are pulled slightly toward the oxblood the
+     app already uses, so the greys read as chosen rather than inherited. */
+  :root {
+    --ground:      #f7f3f1;
+    --surface:     #ffffff;
+    --surface-2:   #f1eae7;
+    --ink:         #1d1512;
+    --ink-soft:    #5f524d;
+    --ink-faint:   #8b7d77;
+    --rule:        #e2d7d2;
+    --rule-strong: #cbbbb4;
+
+    --accent:      #7a2e2a;
+    --accent-soft: #f0e2df;
+
+    /* Semantic, and deliberately not the accent: what a command does to your
+       data is a different axis from the brand. */
+    --read:        #2f6b4f;
+    --read-bg:     #e4efe9;
+    --write:       #8a5a12;
+    --write-bg:    #f6ecd9;
+    --wreck:       #a3352b;
+    --wreck-bg:    #f8e3e0;
+
+    --shadow: 0 1px 2px rgba(29, 21, 18, .05), 0 8px 24px -12px rgba(29, 21, 18, .12);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:      #15100e;
+      --surface:     #1e1715;
+      --surface-2:   #271e1b;
+      --ink:         #f3ebe7;
+      --ink-soft:    #b6a7a1;
+      --ink-faint:   #8b7b74;
+      --rule:        #362b27;
+      --rule-strong: #4a3b36;
+
+      --accent:      #d98079;
+      --accent-soft: #3a201e;
+
+      --read:        #7cc4a0;
+      --read-bg:     #16281f;
+      --write:       #e0b061;
+      --write-bg:    #2e2313;
+      --wreck:       #e88a80;
+      --wreck-bg:    #331916;
+
+      --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px -12px rgba(0, 0, 0, .6);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground:      #15100e;
+    --surface:     #1e1715;
+    --surface-2:   #271e1b;
+    --ink:         #f3ebe7;
+    --ink-soft:    #b6a7a1;
+    --ink-faint:   #8b7b74;
+    --rule:        #362b27;
+    --rule-strong: #4a3b36;
+
+    --accent:      #d98079;
+    --accent-soft: #3a201e;
+
+    --read:        #7cc4a0;
+    --read-bg:     #16281f;
+    --write:       #e0b061;
+    --write-bg:    #2e2313;
+    --wreck:       #e88a80;
+    --wreck-bg:    #331916;
+
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px -12px rgba(0, 0, 0, .6);
+  }
+
+  /* ------------------------------------------------------------------ base -- */
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: "Public Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1, h2, h3, .eyebrow, .chip, .risk {
+    font-family: Archivo, ui-sans-serif, system-ui, sans-serif;
+  }
+
+  code, pre, .cmd, kbd {
+    font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+    font-variant-ligatures: none;
+  }
+
+  a { color: var(--accent); text-underline-offset: 3px; }
+  a:focus-visible,
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; }
+
+  /* --------------------------------------------------------------- shell --- */
+  .wrap {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 0 clamp(1rem, 4vw, 3rem) 6rem;
+    display: grid;
+    grid-template-columns: 210px minmax(0, 1fr);
+    gap: clamp(1.5rem, 4vw, 3.5rem);
+    align-items: start;
+  }
+
+  /* ---------------------------------------------------------------- head --- */
+  .masthead {
+    grid-column: 1 / -1;
+    padding: clamp(2.5rem, 7vw, 5rem) 0 2rem;
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: 2.5rem;
+  }
+
+  .eyebrow {
+    font-size: .72rem;
+    font-weight: 600;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 .9rem;
+  }
+
+  h1 {
+    font-size: clamp(2.1rem, 5.5vw, 3.4rem);
+    font-weight: 700;
+    letter-spacing: -.028em;
+    line-height: 1.02;
+    margin: 0 0 1rem;
+    text-wrap: balance;
+  }
+
+  .standfirst {
+    font-size: clamp(1rem, 1.6vw, 1.14rem);
+    color: var(--ink-soft);
+    max-width: 60ch;
+    margin: 0;
+  }
+
+  .standfirst strong { color: var(--ink); font-weight: 500; }
+
+  /* ---------------------------------------------------------------- rail --- */
+  .rail { position: sticky; top: 1.5rem; }
+
+  .rail-title {
+    font-family: Archivo, sans-serif;
+    font-size: .68rem;
+    font-weight: 600;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin: 0 0 .85rem;
+  }
+
+  .rail ol {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: .1rem;
+    counter-reset: nav;
+  }
+
+  .rail a {
+    display: block;
+    padding: .34rem 0 .34rem .75rem;
+    border-left: 2px solid var(--rule);
+    color: var(--ink-soft);
+    text-decoration: none;
+    font-size: .875rem;
+    transition: color .12s, border-color .12s;
+  }
+
+  .rail a:hover { color: var(--accent); border-left-color: var(--accent); }
+
+  .legend {
+    margin-top: 1.75rem;
+    padding-top: 1.25rem;
+    border-top: 1px solid var(--rule);
+    display: flex;
+    flex-direction: column;
+    gap: .55rem;
+  }
+
+  .legend p {
+    margin: 0 0 .2rem;
+    font-size: .8rem;
+    color: var(--ink-faint);
+    line-height: 1.45;
+  }
+
+  /* ---------------------------------------------------------------- body --- */
+  .main { min-width: 0; display: flex; flex-direction: column; gap: 3.25rem; }
+
+  section { scroll-margin-top: 1.5rem; }
+
+  h2 {
+    font-size: 1.42rem;
+    font-weight: 600;
+    letter-spacing: -.018em;
+    margin: 0 0 .35rem;
+    text-wrap: balance;
+  }
+
+  .section-note {
+    margin: 0 0 1.4rem;
+    color: var(--ink-soft);
+    max-width: 68ch;
+    font-size: .95rem;
+  }
+
+  /* --------------------------------------------------------------- cards --- */
+  .stack { display: flex; flex-direction: column; gap: .7rem; }
+
+  .cmd-card {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 7px;
+    padding: .95rem 1.1rem;
+    box-shadow: var(--shadow);
+    display: grid;
+    gap: .5rem;
+  }
+
+  .cmd-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+
+  .cmd {
+    font-size: .9rem;
+    font-weight: 500;
+    color: var(--ink);
+    line-height: 1.55;
+    word-break: break-word;
+    min-width: 0;
+  }
+
+  .cmd .flag { color: var(--ink-faint); font-weight: 400; }
+  .cmd .arg  { color: var(--accent); }
+
+  .risk {
+    flex: none;
+    font-size: .63rem;
+    font-weight: 600;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+    padding: .18rem .48rem;
+    border-radius: 3px;
+    white-space: nowrap;
+  }
+
+  .risk-read  { color: var(--read);  background: var(--read-bg); }
+  .risk-write { color: var(--write); background: var(--write-bg); }
+  .risk-wreck { color: var(--wreck); background: var(--wreck-bg); }
+
+  .what { margin: 0; font-size: .93rem; color: var(--ink); }
+  .when { margin: 0; font-size: .875rem; color: var(--ink-soft); }
+  .when::before {
+    content: "When";
+    font-family: Archivo, sans-serif;
+    font-size: .63rem;
+    font-weight: 600;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin-right: .5rem;
+  }
+
+  /* --------------------------------------------------------------- table --- */
+  .compare-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--rule);
+    border-radius: 7px;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+    margin-bottom: 1.4rem;
+  }
+
+  table.compare {
+    border-collapse: collapse;
+    width: 100%;
+    min-width: 640px;
+    font-size: .88rem;
+  }
+
+  table.compare th,
+  table.compare td {
+    text-align: left;
+    vertical-align: top;
+    padding: .72rem .95rem;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  table.compare thead th {
+    font-family: Archivo, sans-serif;
+    font-size: .68rem;
+    font-weight: 600;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    background: var(--surface-2);
+    white-space: nowrap;
+  }
+
+  table.compare tbody th {
+    font-family: Archivo, sans-serif;
+    font-weight: 600;
+    font-size: .82rem;
+    color: var(--ink);
+    white-space: nowrap;
+    width: 1%;
+  }
+
+  table.compare tr:last-child th,
+  table.compare tr:last-child td { border-bottom: 0; }
+
+  table.compare td { color: var(--ink-soft); }
+  table.compare td strong { color: var(--ink); font-weight: 500; }
+  table.compare code { font-size: .82rem; color: var(--ink); }
+
+  /* ---------------------------------------------------------------- note --- */
+  .callout {
+    border-left: 3px solid var(--accent);
+    background: var(--accent-soft);
+    border-radius: 0 6px 6px 0;
+    padding: .95rem 1.15rem;
+    margin: 0 0 1.4rem;
+  }
+
+  .callout p { margin: 0; font-size: .92rem; color: var(--ink); }
+  .callout p + p { margin-top: .55rem; }
+
+  .callout.warn { border-left-color: var(--wreck); background: var(--wreck-bg); }
+
+  .callout strong { font-weight: 600; }
+
+  /* ---------------------------------------------------------------- grid --- */
+  .suites {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(215px, 1fr));
+    gap: .3rem .9rem;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 7px;
+    padding: 1rem 1.15rem;
+    box-shadow: var(--shadow);
+  }
+
+  .suites span {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: .8rem;
+    color: var(--ink-soft);
+    padding: .12rem 0;
+  }
+
+  /* --------------------------------------------------------------- block --- */
+  pre {
+    margin: 0;
+    background: var(--surface-2);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: .85rem 1rem;
+    overflow-x: auto;
+    font-size: .85rem;
+    line-height: 1.65;
+    color: var(--ink);
+  }
+
+  pre .c { color: var(--ink-faint); }
+
+  .runbook {
+    counter-reset: step;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: .85rem;
+  }
+
+  /* Numbered because these genuinely are ordered: step 3 must happen before
+     step 4 or somebody loses their profile. */
+  .runbook li {
+    counter-increment: step;
+    display: grid;
+    grid-template-columns: 1.85rem minmax(0, 1fr);
+    gap: .85rem;
+    align-items: start;
+  }
+
+  .runbook li::before {
+    content: counter(step);
+    font-family: Archivo, sans-serif;
+    font-size: .78rem;
+    font-weight: 700;
+    color: var(--accent);
+    background: var(--accent-soft);
+    border-radius: 4px;
+    height: 1.6rem;
+    display: grid;
+    place-items: center;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .runbook h3 { margin: 0 0 .25rem; font-size: .98rem; font-weight: 600; }
+  .runbook p  { margin: 0 0 .45rem; font-size: .9rem; color: var(--ink-soft); }
+  .runbook p:last-child { margin-bottom: 0; }
+
+  footer {
+    grid-column: 1 / -1;
+    margin-top: 3.5rem;
+    padding-top: 1.4rem;
+    border-top: 1px solid var(--rule);
+    font-size: .84rem;
+    color: var(--ink-faint);
+  }
+
+  @media (max-width: 820px) {
+    .wrap { grid-template-columns: minmax(0, 1fr); }
+    .rail { position: static; padding-bottom: 1.25rem; border-bottom: 1px solid var(--rule); }
+    .rail ol { flex-direction: row; flex-wrap: wrap; gap: .35rem .9rem; }
+    .rail a { border-left: 0; padding: .15rem 0; }
+    .legend { margin-top: 1.1rem; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
+  }
+</style>
+
+<div class="wrap">
+
+  <header class="masthead">
+    <p class="eyebrow">Cursus · operations</p>
+    <h1>Cursus Operator Manual</h1>
+    <p class="standfirst">
+      Every terminal command this project answers to, grouped by the job you are
+      trying to do. Run all of them from the project root —
+      <strong>C:\Users\Mat\OneDrive\Desktop\cvrsus</strong> — unless a command says otherwise.
+    </p>
+  </header>
+
+  <nav class="rail" aria-label="Sections">
+    <p class="rail-title">Contents</p>
+    <ol>
+      <li><a href="#run">Running the site</a></li>
+      <li><a href="#db">Reading the database</a></li>
+      <li><a href="#companies">Companies &amp; approval</a></li>
+      <li><a href="#recruiters">Recruiters</a></li>
+      <li><a href="#candidates">Candidates</a></li>
+      <li><a href="#removing">Deleting &amp; editing</a></li>
+      <li><a href="#recovery">Account recovery</a></li>
+      <li><a href="#inbox">Contact inbox</a></li>
+      <li><a href="#sweeps">Maintenance</a></li>
+      <li><a href="#tests">Tests</a></li>
+      <li><a href="#git">Git &amp; GitHub</a></li>
+    </ol>
+
+    <div class="legend">
+      <p class="rail-title" style="margin:0 0 .3rem">What it touches</p>
+      <p><span class="risk risk-read">Read</span> Changes nothing. Safe any time.</p>
+      <p><span class="risk risk-write">Writes</span> Changes live data.</p>
+      <p><span class="risk risk-wreck">Destroys</span> Not reversible. Read twice.</p>
+    </div>
+  </nav>
+
+  <main class="main">
+
+    <!-- ------------------------------------------------------------- run -- -->
+    <section id="run">
+      <h2>Running the site</h2>
+      <p class="section-note">
+        The API is Express on port 5175; the Vite client serves on 5174 and proxies to it.
+        <code>npm run dev</code> starts both together and is what you want almost always.
+      </p>
+
+      <div class="stack">
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">npm run dev</span>
+            <span class="risk risk-write">Writes</span>
+          </div>
+          <p class="what">Starts the API and the client together, both watching for changes.</p>
+          <p class="when">Normal day-to-day. Leave it running while you work.</p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">npm run dev:server<span class="flag">  ·  </span>npm run dev:client</span>
+            <span class="risk risk-write">Writes</span>
+          </div>
+          <p class="what">Runs one half on its own.</p>
+          <p class="when">One side is misbehaving and you want its output uncluttered.</p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">npm run build</span>
+            <span class="risk risk-read">Read</span>
+          </div>
+          <p class="what">Compiles the client into <code>client/dist</code>.</p>
+          <p class="when">
+            After any front-end change you want the API to serve, and before running the
+            test suite — several suites read the built bundle rather than the source.
+          </p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">npm run start</span>
+            <span class="risk risk-write">Writes</span>
+          </div>
+          <p class="what">Runs the API alone, no watcher, serving the built client.</p>
+          <p class="when">Production, or checking a build behaves the way it will when deployed.</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- -------------------------------------------------------------- db -- -->
+    <section id="db">
+      <h2>Reading the database</h2>
+      <p class="section-note">
+        All read-only, and password hashes and sign-in codes come back redacted — there is no
+        plaintext credential in here to leak.
+      </p>
+
+      <div class="stack">
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">npm run db</span>
+            <span class="risk risk-read">Read</span>
+          </div>
+          <p class="what">A row count for every table.</p>
+          <p class="when">First thing when something looks wrong and you do not yet know where.</p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">npm run db <span class="arg">accounts</span></span>
+            <span class="risk risk-read">Read</span>
+          </div>
+          <p class="what">Companies and their recruiters in detail.</p>
+          <p class="when">Checking who exists, who is an admin, which companies are still pending.</p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">npm run db <span class="arg">billing</span></span>
+            <span class="risk risk-read">Read</span>
+          </div>
+          <p class="what">Seat limits and seat purchases.</p>
+          <p class="when">A company disputes what they were charged, or seats do not add up.</p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">npm run db <span class="arg">candidates</span><span class="flag"> | </span><span class="arg">messages</span><span class="flag"> | </span><span class="arg">views</span><span class="flag"> | </span><span class="arg">folders</span></span>
+            <span class="risk risk-read">Read</span>
+          </div>
+          <p class="what">The same detail view for each of those areas.</p>
+          <p class="when">Tracing one specific thing rather than surveying everything.</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- ------------------------------------------------------- companies -- -->
+    <section id="companies">
+      <h2>Companies &amp; approval</h2>
+      <p class="section-note">
+        A new company registers itself and lands as <em>pending</em>: it can sign in and finish
+        setting up, but reaches no candidate profile until somebody approves it. Approving is how
+        a recruiter account actually goes live.
+      </p>
+
+      <div class="callout">
+        <p>
+          <strong>The one you will use most.</strong> Approval sends the company its key by email
+          and lets every recruiter on the account start searching. Until then they see the
+          in-review screen.
+        </p>
+      </div>
+
+      <div class="stack">
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">node server/scripts/companies.mjs <span class="arg">pending</span></span>
+            <span class="risk risk-read">Read</span>
+          </div>
+          <p class="what">Every company waiting for a decision.</p>
+          <p class="when">Start here. This is your approval queue.</p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">node server/scripts/companies.mjs <span class="arg">approve</span> <span class="flag">&lt;id|name&gt;</span></span>
+            <span class="risk risk-write">Writes</span>
+          </div>
+          <p class="what">Activates the company. Its recruiters can now search and reveal.</p>
+          <p class="when">You have checked the company is real and the person asking works there.</p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">node server/scripts/companies.mjs <span class="arg">decline</span> <span class="flag">&lt;id|name&gt; [--reason "…"]</span></span>
+            <span class="risk risk-write">Writes</span>
+          </div>
+          <p class="what">
+            Refuses the account. Its recruiters can still sign in and see their own screens, but
+            reach no candidate profile. The reason is stored for your records and is deliberately
+            not sent to them.
+          </p>
+          <p class="when">
+            You could not verify the company, or it is not a real employer. Reversible —
+            <code>approve</code> undoes it, and the candidate is none the wiser either way.
+          </p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">node server/scripts/companies.mjs <span class="arg">list</span></span>
+            <span class="risk risk-read">Read</span>
+          </div>
+          <p class="what">Every company, approved or not.</p>
+          <p class="when">Finding an id, or checking a name is not already taken.</p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">node server/scripts/companies.mjs <span class="arg">show</span> <span class="flag">&lt;id|name&gt;</span></span>
+            <span class="risk risk-read">Read</span>
+          </div>
+          <p class="what">One company in full — key, recruiters, status, balances.</p>
+          <p class="when">Answering a support question about a specific account.</p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">node server/scripts/companies.mjs <span class="arg">add</span> <span class="flag">"Acme Hiring" --admin "Maya Cohen" [--password "…"]</span></span>
+            <span class="risk risk-write">Writes</span>
+          </div>
+          <p class="what">
+            Creates a company and its first admin, through the app's own functions — same key
+            generation, same password hashing as the sign-up form.
+          </p>
+          <p class="when">Setting up an account on somebody's behalf, or seeding a demo.</p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">node server/scripts/companies.mjs <span class="arg">rename</span> <span class="flag">&lt;id&gt; "New Name"</span></span>
+            <span class="risk risk-write">Writes</span>
+          </div>
+          <p class="what">Changes the company name.</p>
+          <p class="when">They rebranded, or the name was typed wrong at sign-up.</p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">node server/scripts/companies.mjs <span class="arg">delete</span> <span class="flag">&lt;id&gt;</span></span>
+            <span class="risk risk-read">Read</span>
+          </div>
+          <p class="what">Dry run. Shows everything that would be removed and deletes nothing.</p>
+          <p class="when">Always, before the real thing.</p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">node server/scripts/companies.mjs <span class="arg">delete</span> <span class="flag">&lt;id&gt; --yes</span></span>
+            <span class="risk risk-wreck">Destroys</span>
+          </div>
+          <p class="what">
+            Actually deletes, cascading through the nineteen tables that reference a company or
+            its recruiters.
+          </p>
+          <p class="when">
+            Never on company 1. Use this rather than SQL — none of those tables declare a foreign
+            key, so a hand-written <code>DELETE</code> leaves orphans nothing will notice for months.
+          </p>
+        </article>
+      </div>
+    </section>
+
+    <!-- ------------------------------------------------------ recruiters -- -->
+    <section id="recruiters">
+      <h2>Recruiters</h2>
+      <p class="section-note">
+        Individual seats inside a company. A recruiter cannot search until the company they belong
+        to is approved.
+      </p>
+
+      <div class="callout">
+        <p>
+          <strong>Passwords can be set, never read.</strong> They are stored as salted scrypt
+          hashes. There is no command that returns somebody's password, and adding one would mean
+          storing them reversibly — so anyone with a copy of the database, or an old backup, would
+          have all of them.
+        </p>
+      </div>
+
+      <div class="stack">
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">node server/scripts/recruiters.mjs <span class="arg">list</span> <span class="flag">[company]</span></span>
+            <span class="risk risk-read">Read</span>
+          </div>
+          <p class="what">Every recruiter, or just one company's.</p>
+          <p class="when">Finding a username or an id.</p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">node server/scripts/recruiters.mjs <span class="arg">show</span> <span class="flag">&lt;id|username&gt;</span></span>
+            <span class="risk risk-read">Read</span>
+          </div>
+          <p class="what">One recruiter in full.</p>
+          <p class="when">Checking whether somebody is an admin, or still active.</p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">node server/scripts/recruiters.mjs <span class="arg">add</span> <span class="flag">&lt;company&gt; "First Last" [--password "…"] [--admin]</span></span>
+            <span class="risk risk-write">Writes</span>
+          </div>
+          <p class="what">Adds a seat. <code>--admin</code> makes them an organisation administrator.</p>
+          <p class="when">A company asks you to add a colleague for them.</p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">node server/scripts/recruiters.mjs <span class="arg">set</span> <span class="flag">&lt;id|username&gt; [--first X] [--last Y] [--admin true|false]</span></span>
+            <span class="risk risk-write">Writes</span>
+          </div>
+          <p class="what">Corrects a name, or grants and revokes admin.</p>
+          <p class="when">Somebody was promoted, or left and should lose admin first.</p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">node server/scripts/recruiters.mjs <span class="arg">password</span> <span class="flag">&lt;id|username&gt; [--password "…"]</span></span>
+            <span class="risk risk-write">Writes</span>
+          </div>
+          <p class="what">Sets a new password. Omit the flag and one is generated for you.</p>
+          <p class="when">
+            They are locked out and the self-service reset email is not reaching them.
+          </p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">node server/scripts/recruiters.mjs <span class="arg">delete</span> <span class="flag">&lt;id|username&gt; [--yes]</span></span>
+            <span class="risk risk-wreck">Destroys</span>
+          </div>
+          <p class="what">
+            Removes the seat. Their folders and saved work pass to a remaining colleague; the
+            organisation keeps the candidates it paid to reveal.
+          </p>
+          <p class="when">Somebody has left. Never on recruiter 1 or 72.</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- ------------------------------------------------------ candidates -- -->
+    <section id="candidates">
+      <h2>Candidates</h2>
+      <p class="section-note">
+        Job seekers. There is deliberately no <code>add</code> command — an account is created by
+        uploading a CV, and the CV is the whole basis of the profile.
+      </p>
+
+      <div class="callout">
+        <p>
+          <strong>Edit here, not in SQL.</strong> These commands bump the profile version, which
+          invalidates the cached match analyses built on the old values. Raw SQL does not, and
+          leaves recruiters reading conclusions drawn from data that no longer exists.
+        </p>
+      </div>
+
+      <div class="stack">
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">node server/scripts/candidates.mjs <span class="arg">list</span> <span class="flag">[--search text] [--limit 50]</span></span>
+            <span class="risk risk-read">Read</span>
+          </div>
+          <p class="what">Candidates, newest first, optionally filtered.</p>
+          <p class="when">Looking for somebody when you only have part of a name.</p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">node server/scripts/candidates.mjs <span class="arg">show</span> <span class="flag">&lt;id|email|phone&gt;</span></span>
+            <span class="risk risk-read">Read</span>
+          </div>
+          <p class="what">
+            One candidate in full — contact details, city, when they applied, freshness state,
+            documents, and what a deletion would remove.
+          </p>
+          <p class="when">
+            Any support question. A phone number works as the lookup, using its last nine digits,
+            so formatting does not matter.
+          </p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">node server/scripts/candidates.mjs <span class="arg">set</span> <span class="flag">&lt;id|email&gt; [--email …] [--phone …] [--first X] [--last Y] [--location …] [--summary "…"]</span></span>
+            <span class="risk risk-write">Writes</span>
+          </div>
+          <p class="what">
+            Corrects any profile field. Refuses an email or phone another account already holds,
+            and names the account that has it.
+          </p>
+          <p class="when">Account recovery, or fixing something they cannot fix themselves.</p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">node server/scripts/candidates.mjs <span class="arg">activate</span> <span class="flag">&lt;id|email&gt;</span></span>
+            <span class="risk risk-write">Writes</span>
+          </div>
+          <p class="what">Puts a hidden profile back into recruiter search and resets the activity clock.</p>
+          <p class="when">
+            They were auto-hidden after 60 days of silence, or deactivated themselves and want
+            back in.
+          </p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">node server/scripts/candidates.mjs <span class="arg">deactivate</span> <span class="flag">&lt;id|email&gt;</span></span>
+            <span class="risk risk-write">Writes</span>
+          </div>
+          <p class="what">Takes them out of search immediately. The account and its data stay.</p>
+          <p class="when">They asked to stop being approached but do not want to delete anything.</p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">node server/scripts/candidates.mjs <span class="arg">delete</span> <span class="flag">&lt;id|email&gt; [--yes]</span></span>
+            <span class="risk risk-wreck">Destroys</span>
+          </div>
+          <p class="what">
+            Erases the profile, the files, everything derived from them, the messages, and the
+            notes recruiters wrote. Without <code>--yes</code> it shows you what would go.
+          </p>
+          <p class="when">
+            A verified erasure request. Never on candidate 6912 — that is your own profile.
+          </p>
+        </article>
+      </div>
+    </section>
+
+    <!-- ------------------------------------------------------- removing -- -->
+    <section id="removing">
+      <h2>Deleting &amp; editing accounts</h2>
+      <p class="section-note">
+        The commands live with each kind of account above. What they actually destroy differs a
+        great deal, so this is the same three commands compared side by side.
+      </p>
+
+      <div class="callout">
+        <p>
+          <strong>All three are a dry run without <code>--yes</code>.</strong> Run it once bare,
+          read what it says it would remove, then run it again with the flag. There is no
+          confirmation prompt to catch you — the missing flag is the prompt.
+        </p>
+      </div>
+
+      <div class="compare-wrap">
+        <table class="compare">
+          <thead>
+            <tr>
+              <th scope="col">&nbsp;</th>
+              <th scope="col">Candidate</th>
+              <th scope="col">Recruiter</th>
+              <th scope="col">Company</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th scope="row">Command</th>
+              <td><code>candidates.mjs delete &lt;id|email&gt; --yes</code></td>
+              <td><code>recruiters.mjs delete &lt;id|username&gt; --yes</code></td>
+              <td><code>companies.mjs delete &lt;id&gt; --yes</code></td>
+            </tr>
+            <tr>
+              <th scope="row">Destroys</th>
+              <td>
+                The profile, the CV and every uploaded file, everything read out of them, the
+                message history, and the notes, tags and shortlist entries recruiters wrote about
+                them.
+              </td>
+              <td>
+                Their messages and conversations, saved searches, search history, outreach drafts
+                and any outstanding password-reset link.
+              </td>
+              <td>
+                Everything belonging to the company and to every recruiter on it, across nineteen
+                tables.
+              </td>
+            </tr>
+            <tr>
+              <th scope="row">Survives</th>
+              <td>
+                A <strong>billing ledger line</strong> carrying only the internal account number,
+                so the organisation's accounts still reconcile, and an anonymised note that a
+                deletion happened.
+              </td>
+              <td>
+                <strong>Their folders pass to a colleague</strong> — an org admin first, otherwise
+                the longest-standing seat. The organisation keeps the candidates it paid to
+                reveal; only the departed recruiter's name comes off them.
+              </td>
+              <td>Nothing but the billing ledger.</td>
+            </tr>
+            <tr>
+              <th scope="row">Watch for</th>
+              <td>
+                Never candidate <strong>6912</strong> — that is your own profile. Recruiters lose
+                the reveal they paid for and get no refund.
+              </td>
+              <td>
+                Never recruiter <strong>1</strong> or <strong>72</strong>. If they were the last
+                seat there is no heir, and their folders go too. Deleting also erases the
+                candidate's side of every conversation they had.
+              </td>
+              <td>Never company <strong>1</strong>.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 style="font-size:1.1rem;margin-top:2.25rem">Changing details instead</h2>
+      <p class="section-note">
+        Most support requests are a correction, not a deletion. Prefer these — they are reversible
+        and they keep the account's history.
+      </p>
+
+      <div class="stack">
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">node server/scripts/candidates.mjs <span class="arg">set</span> <span class="flag">&lt;id|email&gt; --email … --phone … --location …</span></span>
+            <span class="risk risk-write">Writes</span>
+          </div>
+          <p class="what">
+            Corrects a candidate's details. An email or phone another account already holds is
+            refused, and the refusal names the account holding it.
+          </p>
+          <p class="when">
+            A typo, a new address, a changed number. Also the recovery route when somebody has
+            lost their mailbox.
+          </p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">node server/scripts/recruiters.mjs <span class="arg">set</span> <span class="flag">&lt;id|username&gt; --first … --last … --admin true|false</span></span>
+            <span class="risk risk-write">Writes</span>
+          </div>
+          <p class="what">Corrects a recruiter's name, or grants and revokes admin.</p>
+          <p class="when">
+            Somebody was promoted, or is leaving and should lose admin before anything else
+            happens.
+          </p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">node server/scripts/candidates.mjs <span class="arg">deactivate</span> <span class="flag">&lt;id|email&gt;</span></span>
+            <span class="risk risk-write">Writes</span>
+          </div>
+          <p class="what">
+            Takes a candidate out of search without destroying anything. <code>activate</code>
+            puts them back.
+          </p>
+          <p class="when">
+            They asked to stop being approached. Reach for this before <code>delete</code> — it is
+            what most people actually want, and it is reversible.
+          </p>
+        </article>
+      </div>
+
+      <div class="callout warn">
+        <p>
+          <strong>Do not edit the database directly.</strong> Two things go wrong quietly.
+        </p>
+        <p>
+          A hand-written <code>UPDATE</code> skips the profile version bump, so recruiters keep
+          reading cached match analyses drawn from values that no longer exist. A hand-written
+          <code>DELETE</code> leaves orphans: almost none of these tables declare a foreign key, so
+          the rows that referenced the deleted one simply point at an id that is gone, and nothing
+          notices until something reads them months later.
+        </p>
+      </div>
+    </section>
+
+    <!-- -------------------------------------------------------- recovery -- -->
+    <section id="recovery">
+      <h2>Account recovery</h2>
+      <p class="section-note">
+        A candidate who cannot reach the mailbox they signed up with has no way in on their own —
+        sign-in is the email address. They contact you, and you move them.
+      </p>
+
+      <div class="callout warn">
+        <p>
+          <strong>Step 3 is the whole job.</strong> Move an account to whatever address asks for it
+          and anyone who knows a candidate's email can take their profile — CV, phone number and
+          recruiter conversations included. A completed move frees the old address, so the real
+          person cannot get back in either.
+        </p>
+      </div>
+
+      <ol class="runbook">
+        <li>
+          <div>
+            <h3>Read the message</h3>
+            <p>There is no admin screen; this CLI is the inbox.</p>
+            <pre>node server/scripts/contact.mjs list
+node server/scripts/contact.mjs show <span class="c">&lt;id&gt;</span></pre>
+          </div>
+        </li>
+        <li>
+          <div>
+            <h3>Find the account</h3>
+            <p>By their old address, or by the phone number on the profile.</p>
+            <pre>node server/scripts/candidates.mjs show <span class="c">052-123-4567</span></pre>
+          </div>
+        </li>
+        <li>
+          <div>
+            <h3>Prove it is them — ring the number on file</h3>
+            <p>
+              It was verified by SMS at sign-up and only the real candidate answers it. If they
+              cannot take a call, cross-check the city, the roles in their CV and roughly when
+              they applied. Knowing the old email address proves nothing: that is the one thing
+              an impostor is certain to have.
+            </p>
+          </div>
+        </li>
+        <li>
+          <div>
+            <h3>Move the address</h3>
+            <pre>node server/scripts/candidates.mjs set <span class="c">&lt;id&gt;</span> --email <span class="c">new@address.com</span></pre>
+            <p>
+              If it refuses, they already made a second profile — decide which row survives before
+              going further.
+            </p>
+          </div>
+        </li>
+        <li>
+          <div>
+            <h3>Tell them</h3>
+            <p>
+              By hand, from your own mailbox; nothing automates this yet. They then sign in
+              normally, with profile, CV, messages and reveal history intact.
+            </p>
+          </div>
+        </li>
+      </ol>
+    </section>
+
+    <!-- ----------------------------------------------------------- inbox -- -->
+    <section id="inbox">
+      <h2>Contact inbox</h2>
+      <p class="section-note">
+        The contact form stores every message and prints one line to the server console. Nothing
+        else reads them back, and a console line scrolls away — so a real enquiry can sit unread
+        for months. Check this on a schedule.
+      </p>
+
+      <div class="stack">
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">npm run contact</span>
+            <span class="risk risk-read">Read</span>
+          </div>
+          <p class="what">The twenty most recent enquiries.</p>
+          <p class="when">Daily, or whenever you sit down to support.</p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">node server/scripts/contact.mjs <span class="arg">list</span> <span class="flag">--limit 50</span></span>
+            <span class="risk risk-read">Read</span>
+          </div>
+          <p class="what">More of them. Add <code>--all</code> to include the test suite's own noise.</p>
+          <p class="when">Catching up after a gap.</p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">node server/scripts/contact.mjs <span class="arg">show</span> <span class="flag">&lt;id&gt;</span></span>
+            <span class="risk risk-read">Read</span>
+          </div>
+          <p class="what">One message in full.</p>
+          <p class="when">The list truncates; this does not.</p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">node server/scripts/contact.mjs <span class="arg">purge-tests</span> <span class="flag">--yes</span></span>
+            <span class="risk risk-wreck">Destroys</span>
+          </div>
+          <p class="what">Deletes rows the test suite created, and only those.</p>
+          <p class="when">The inbox is drowning in fixtures after a heavy test run.</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- ---------------------------------------------------------- sweeps -- -->
+    <section id="sweeps">
+      <h2>Maintenance</h2>
+      <p class="section-note">
+        The freshness sweep — reminders at 30, 37, 44, 51 and 58 days, hidden at 60 — runs by
+        itself on every server boot and daily thereafter. Revalidation does not, on purpose.
+      </p>
+
+      <div class="stack">
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">node server/scripts/revalidate.mjs</span>
+            <span class="risk risk-read">Read</span>
+          </div>
+          <p class="what">Dry run. Shows which profiles would be rebuilt and does nothing.</p>
+          <p class="when">Always first. This is the default for a reason.</p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">node server/scripts/revalidate.mjs <span class="flag">--run [--limit 100]</span></span>
+            <span class="risk risk-write">Writes</span>
+          </div>
+          <p class="what">Rebuilds stale profile analyses.</p>
+          <p class="when">
+            Deliberately manual: rebuilding spends money on candidates' behalf, so it should be a
+            decision somebody makes rather than a default they inherit. Use <code>--limit</code> to
+            cap the spend.
+          </p>
+        </article>
+      </div>
+    </section>
+
+    <!-- ----------------------------------------------------------- tests -- -->
+    <section id="tests">
+      <h2>Tests</h2>
+
+      <div class="callout">
+        <p>
+          <strong>The API has to be running first</strong>, and the client built — several suites
+          read the built bundle. Point them at a spare port rather than your working server:
+          <code>CKING_URL=http://localhost:5199</code>.
+        </p>
+        <p>
+          Node 24 crashes on exit even after a clean pass, so the verdict is the
+          <strong>“All checks passed.”</strong> line, not the exit code.
+        </p>
+      </div>
+
+      <div class="stack" style="margin-bottom:1rem">
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">npm run test:<span class="arg">&lt;name&gt;</span></span>
+            <span class="risk risk-write">Writes</span>
+          </div>
+          <p class="what">
+            Runs one suite. They create their own fixtures and delete them again on the way out.
+          </p>
+          <p class="when">
+            After changing anything the suite covers. Pick the closest one by name.
+          </p>
+        </article>
+      </div>
+
+      <div class="suites">
+        <span>test:api</span><span>test:phase1</span><span>test:matching</span>
+        <span>test:signin</span><span>test:persistence</span><span>test:identity</span>
+        <span>test:freshness</span><span>test:comms</span><span>test:legal</span>
+        <span>test:portal</span><span>test:landing</span><span>test:pricing</span>
+        <span>test:usage</span><span>test:export</span><span>test:folders</span>
+        <span>test:workspace</span><span>test:shared-folders</span><span>test:reveal</span>
+        <span>test:triage</span><span>test:triage-funnel</span><span>test:triage-capacity</span>
+        <span>test:security</span><span>test:cookies</span><span>test:single-session</span>
+        <span>test:recruiter-profile</span><span>test:recruiter-usage</span><span>test:stats</span>
+        <span>test:summary</span><span>test:summary-ai</span><span>test:summary-companies</span>
+        <span>test:wiring</span><span>test:demo</span><span>test:manual</span><span>test:exempt</span><span>test:city</span><span>npm test <em style="font-style:normal;color:var(--ink-faint)">(skills)</em></span>
+      </div>
+    </section>
+
+    <!-- ------------------------------------------------------------- git -- -->
+    <section id="git">
+      <h2>Git &amp; GitHub</h2>
+      <p class="section-note">
+        Committing is a local save point; pushing copies it to GitHub. Commit whenever you finish
+        something coherent, push at the end of a session.
+      </p>
+
+      <div class="callout warn">
+        <p>
+          <strong>Outstanding right now.</strong> Your first push was rejected because the commit
+          carries a private email address. Fix it once, then it never happens again:
+        </p>
+        <pre>git config --global user.email "<span class="c">12345678+matancutler@users.noreply.github.com</span>"
+git commit --amend --reset-author --no-edit
+git push -u origin main</pre>
+        <p>
+          The number is yours specifically — copy the address from
+          <strong>github.com/settings/emails</strong>.
+        </p>
+      </div>
+
+      <div class="stack">
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">git status</span>
+            <span class="risk risk-read">Read</span>
+          </div>
+          <p class="what">What has changed since the last commit.</p>
+          <p class="when">
+            Before every commit. <code>server/.env</code> must never appear here — if it does,
+            stop.
+          </p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">git add -A<span class="flag">  ·  </span>git commit -m "<span class="arg">what changed</span>"</span>
+            <span class="risk risk-write">Writes</span>
+          </div>
+          <p class="what">Saves a snapshot locally.</p>
+          <p class="when">Whenever a piece of work is finished, several times a day.</p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">git push</span>
+            <span class="risk risk-write">Writes</span>
+          </div>
+          <p class="what">Sends your commits to GitHub.</p>
+          <p class="when">
+            End of a session, and after anything you would hate to redo. An unpushed commit lives
+            on one disk.
+          </p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">git log --oneline -10</span>
+            <span class="risk risk-read">Read</span>
+          </div>
+          <p class="what">The last ten commits, one line each.</p>
+          <p class="when">Remembering where you got to.</p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">git diff<span class="flag">  ·  </span>git diff --staged</span>
+            <span class="risk risk-read">Read</span>
+          </div>
+          <p class="what">Exactly which lines changed, unstaged then staged.</p>
+          <p class="when">Reviewing your own work before committing it.</p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">git restore <span class="flag">&lt;file&gt;</span></span>
+            <span class="risk risk-wreck">Destroys</span>
+          </div>
+          <p class="what">Throws away uncommitted changes to that file.</p>
+          <p class="when">
+            An experiment went wrong. There is no undo — the changes were never saved anywhere.
+          </p>
+        </article>
+      </div>
+    </section>
+
+  </main>
+
+  <footer>
+    Cursus operations reference · commands verified against the repository on 27 August 2026.
+    Company 1, recruiters 1 and 72, and candidate 6912 are live accounts — leave them alone.
+  </footer>
+
+</div>

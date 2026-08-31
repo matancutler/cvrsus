@@ -57,11 +57,18 @@ const CAPS = { today: 10, week: 5, month: 3, older: 3 }
  * is its own. The guarantee the floors were written for is what the structure
  * already does.
  */
-export function railSlice(chats) {
+/**
+ * @param stampOf which timestamp to bucket on. Defaults to updated_at, which is
+ * what a search is filed under — for a search that is "when you last ran it",
+ * a fact about the recruiter. It is the wrong field for a Triage: there
+ * updated_at is written by the background worker three times per tranche of
+ * 25 CVs, so a processing Triage would climb the rail on its own.
+ */
+export function railSlice(items, stampOf = (item) => item.updated_at) {
   const taken = { today: 0, week: 0, month: 0, older: 0 }
 
-  return chats.filter((chat) => {
-    const family = FAMILY[bucketOf(chat.updated_at)]
+  return items.filter((item) => {
+    const family = FAMILY[bucketOf(stampOf(item))]
     if (taken[family] >= CAPS[family]) return false
     taken[family] += 1
     return true

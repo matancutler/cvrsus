@@ -4,6 +4,8 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 
 import ChatPanel from '../components/ChatPanel.jsx'
 import ChatSidebar, { AllSearches, AllSearchesButton } from '../components/ChatSidebar.jsx'
+import FolderDialog from '../components/FolderDialog.jsx'
+import TriageRail from '../components/TriageRail.jsx'
 import Avatar from '../components/Avatar.jsx'
 import CompanySignUpForm from '../components/CompanySignUpForm.jsx'
 import EyeIcon from '../components/EyeIcon.jsx'
@@ -18,7 +20,7 @@ import useDialogFocus from '../useDialogFocus.js'
 import { RowTick, SelectButton, SelectionBar, useSelection } from '../components/ListSelect.jsx'
 import PersonIcon from '../components/PersonIcon.jsx'
 import PortalBar from '../components/PortalBar.jsx'
-import ProfessionalSummary, { SummaryPreview } from '../components/ProfessionalSummary.jsx'
+import ProfessionalSummary from '../components/ProfessionalSummary.jsx'
 import { usePortalChrome } from '../chrome.jsx'
 import Req from '../components/Req.jsx'
 import VerifiedField from '../components/VerifiedField.jsx'
@@ -438,6 +440,42 @@ function Workspace({ me, onReload, onSignOut }) {
      ChatSidebar because the ⋯ that opens it sits beside the rail's heading,
      which the workspace draws and the sidebar does not. */
   const [browsingSearches, setBrowsingSearches] = useState(false)
+
+  /*
+   * "Start a Triage" has to survive a mount.
+   *
+   * TriageTab is unmounted whenever the recruiter is anywhere else, so its own
+   * state cannot carry the instruction — by the time it exists, the press that
+   * meant it is over. A timestamp rather than a boolean: pressing + Triage
+   * twice in a row is two instructions, and a flag that is already true says
+   * nothing the second time.
+   */
+  const [triageOpens, setTriageOpens] = useState(null)
+
+  /*
+   * Which of the two lists the rail is showing, and the Triages it needs to
+   * show one of them.
+   *
+   * The searches arrive already loaded — SearchTab publishes them upward — but
+   * nothing else in the workspace holds the company's Triages, so they are
+   * fetched here the first time the toggle asks for them and refreshed
+   * whenever it is pressed. Not on mount: a recruiter who never opens this
+   * side should not pay for a list they did not ask for.
+   */
+  const [railList, setRailList] = useState('searches')
+  const [triageRows, setTriageRows] = useState(null)
+
+  const loadTriages = useCallback(async () => {
+    try {
+      const data = await get('/api/hr/triages', 'recruiter')
+      setTriageRows(data.triages ?? [])
+    } catch {
+      /* A rail that cannot load its list shows an empty one rather than an
+         error: it is a way back to work, not the work itself, and the Triage
+         screen it leads to reports its own failures properly. */
+      setTriageRows([])
+    }
+  }, [])
   /* The status vocabulary, as the server defines it. Held rather than retyped
      here so the picker cannot offer a stage the server would reject. */
   const [statuses, setStatuses] = useState([])
@@ -586,27 +624,39 @@ function Workspace({ me, onReload, onSignOut }) {
       */}
       <div className="ws-body">
         <aside className="ws-rail" aria-label="Workspace">
-          <button
-            type="button"
-            className="ws-new"
-            onClick={() => { setTab('search'); search?.newSearch() }}
-          >
-            <span aria-hidden="true">+</span> New search
-          </button>
+          {/*
+            One button for both kinds of work.
+
+            A search and a Triage are the two things a recruiter starts, and
+            only one of them had a control in the rail — the other was a bare
+            `+` on a dashboard you had to navigate to first. Naming the pair
+            here puts them at the same distance from a standing start, which is
+            what they are.
+          */}
+          <NewMenu
+            onSearch={() => { setTab('search'); search?.newSearch() }}
+            onTriage={() => { setTab('triage'); setTriageOpens({ at: Date.now(), id: null }) }}
+          />
 
           {/*
-            Two destinations beside the search, not five.
+            One destination beside the search.
 
             The administrative screens live in the account menu at the foot of
             the rail — they are things you visit occasionally and they belong
-            with the identity they are about. What is left here is the two
-            places a recruiter goes between searches.
+            with the identity they are about.
 
-            Triage is deliberately NOT inside Folders. The addendum is explicit
-            that it is a separately monetized product area with its own
-            workspaces: filing it under Search's folders would put a paid
-            product inside a free one and make "which of these cost a credit"
-            unanswerable at a glance.
+            Triage used to be a second entry here. It has moved to the toggle
+            over the history list below, which is the more honest place for it:
+            a Triage is not a destination you visit, it is a thing you made and
+            come back to, exactly like a search. Two nav entries and a list of
+            searches underneath said the two were different kinds of object.
+            They are not — one is yours and one is the company's, and that is
+            what the toggle now says.
+
+            It is still NOT filed under Folders. The addendum is explicit that
+            it is a separately monetized product area with its own workspaces,
+            and putting a paid product inside a free one makes "which of these
+            costs a credit" unanswerable at a glance.
           */}
           <nav className="ws-nav" aria-label="Sections">
             <button
@@ -620,65 +670,101 @@ function Workspace({ me, onReload, onSignOut }) {
                   parentheses. One way of showing a count across the rail. */}
               <span className="ws-nav-count">{folders.length}</span>
             </button>
-
-            <button
-              type="button"
-              className={tab === 'triage' ? 'ws-nav-item ws-nav-item-on' : 'ws-nav-item'}
-              aria-current={tab === 'triage' ? 'page' : undefined}
-              onClick={() => setTab('triage')}
-            >
-              Triage
-              {/*
-                How many Triage workspaces there are, which is what the pill
-                beside Folders means and what a number beside a destination
-                means everywhere else.
-
-                It used to be the CV capacity balance. Two pills, the same
-                shape, the same class, one saying "you have four of these" and
-                the other "you have bought a hundred of those" — a recruiter
-                with 100 CVs of capacity and one Triage read "Triage 100" and
-                had no way to know which of the two it meant. Drafts count:
-                a workspace you made and have not launched is still one of the
-                things this list holds.
-
-                Absent rather than zero while the wallet is still loading, so
-                the rail never flashes a "0" at somebody who has ten.
-              */}
-              {wallet?.triage && (
-                <span
-                  className="ws-nav-count"
-                  title={`${wallet.triage.workspaces} Triage workspace${wallet.triage.workspaces === 1 ? '' : 's'}`}
-                >
-                  {wallet.triage.workspaces ?? 0}
-                </span>
-              )}
-            </button>
           </nav>
 
-          {/* The searches you have run, the way a chat product lists its
-              conversations. Reopening one re-runs it rather than restoring a
-              frozen list — candidates come and go. */}
+          {/*
+            What you have already made, on one rail with a switch over it.
+
+            Reopening a search re-runs it rather than restoring a frozen list —
+            candidates come and go. Reopening a Triage opens the pile it was
+            built from, which does not.
+          */}
           <div className="ws-history">
             <div className="ws-rail-head">
-              <p className="ws-rail-heading">Searches</p>
+              {/*
+                The heading became a switch.
+
+                It keeps .ws-rail-heading so both labels are set in the same
+                small caps the single heading was, and so the optical nudge
+                that aligns the S of SEARCHES with the Y of YESTERDAY still
+                applies to whichever word is showing.
+              */}
+              <div className="rail-toggle ws-rail-heading" role="group" aria-label="What this list shows">
+                <button
+                  type="button"
+                  className={railList === 'searches' ? 'rail-toggle-on' : ''}
+                  aria-pressed={railList === 'searches'}
+                  onClick={() => setRailList('searches')}
+                >
+                  Searches
+                </button>
+                <button
+                  type="button"
+                  className={railList === 'triage' ? 'rail-toggle-on' : ''}
+                  aria-pressed={railList === 'triage'}
+                  onClick={() => { setRailList('triage'); loadTriages() }}
+                >
+                  {/*
+                    No count.
+
+                    It carried one while it was a destination in the nav, where
+                    a number says "this is how much is behind this door". Here
+                    it is one half of a switch, and the list it switches to is
+                    the count — visible, and correct, in a way a pill saying 0
+                    beside the word is not. A zero on a switch reads as
+                    something being wrong rather than as an empty list.
+                  */}
+                  Triage
+                </button>
+              </div>
+
               {/* The rail holds the recent ones; everything else is behind
-                  this. Only shown once there is a list worth browsing. */}
-              {(search?.chats?.length ?? 0) > 0 && (
+                  this. Only on the searches side, and only once there is a
+                  list worth browsing. */}
+              {railList === 'searches' && (search?.chats?.length ?? 0) > 0 && (
                 <AllSearchesButton
                   count={search.chats.length}
                   onClick={() => setBrowsingSearches(true)}
                 />
               )}
             </div>
-            <ChatSidebar
-              chats={search?.chats ?? []}
-              activeId={search?.chatId ?? null}
-              onNew={() => { setTab('search'); search?.newSearch() }}
-              onOpen={(id) => { setTab('search'); search?.openChat(id) }}
-              onRename={(id, title) => search?.renameChat(id, title)}
-              onDelete={(id) => search?.deleteChat(id)}
-              bare
-            />
+
+            {/*
+              Whose these are, said once rather than on every row.
+
+              The two lists are scoped differently and it would be a poor trick
+              to hide it: a search is private to the recruiter who ran it, a
+              Triage belongs to the company and any colleague can open, change
+              or delete it. Somebody who has just switched sides is looking at
+              a list that answers a different question, and one line here is
+              cheaper than finding that out by surprise.
+            */}
+            <p className="rail-scope">
+              {railList === 'searches' ? 'Only you can see these.' : 'Shared with your whole team.'}
+            </p>
+
+            {railList === 'searches' ? (
+              <ChatSidebar
+                chats={search?.chats ?? []}
+                activeId={search?.chatId ?? null}
+                onNew={() => { setTab('search'); search?.newSearch() }}
+                onOpen={(id) => { setTab('search'); search?.openChat(id) }}
+                onRename={(id, title) => search?.renameChat(id, title)}
+                onDelete={(id) => search?.deleteChat(id)}
+                bare
+              />
+            ) : (
+              <TriageRail
+                triages={triageRows}
+                meId={me?.recruiter?.id ?? null}
+                activeId={tab === 'triage' ? triageOpens?.id ?? null : null}
+                /* Both, in this order: the tab has to be the Triage one before
+                   an instruction to open a row can mean anything, and the
+                   timestamp makes pressing the same row twice two instructions
+                   rather than one repeated value. */
+                onOpen={(id) => { setTab('triage'); setTriageOpens({ at: Date.now(), id }) }}
+              />
+            )}
 
             {browsingSearches && (
               <AllSearches
@@ -738,6 +824,7 @@ function Workspace({ me, onReload, onSignOut }) {
           )}
           {tab === 'triage' && (
             <TriageTab
+              opens={triageOpens}
               balance={wallet?.triage?.balance ?? 0}
               admin={admin}
               onBalanceChanged={onReload}
@@ -1579,58 +1666,29 @@ function TeamTab({ me, onSaved, onManageSeats, admin = true }) {
       </p>
 
       {/*
-        The seat subscription, said plainly on the page where people are added.
+        A reduction that has been asked for and not yet happened.
 
-        Adding a colleague is what costs money here, and the Team page is where
-        somebody decides to do it — so this is where the arrangement belongs
-        rather than only on a billing screen they may never open. Reveals are
-        not mentioned: they are a separate balance bought separately, and the
-        one thing this model must not do is imply the two are connected.
+        The monthly price and the seat count that used to sit here have gone to
+        the billing screen, which is where a bill belongs. This one stays,
+        because it is not a price: it is a warning that accounts are scheduled
+        for deletion, and somebody reading the seat count above needs to know
+        one of them is leaving. The month is not refunded, so the seats stay
+        usable until the day named.
       */}
-      <div className="seat-plan">
-        <div className="seat-plan-state">
-          <strong>
-            {seats.purchased === 0
-              ? 'No seat subscription'
-              : `${seats.purchased} additional seat${seats.purchased === 1 ? '' : 's'}`}
-          </strong>
-          <span className="muted">
-            {seats.purchased === 0
-              ? 'Your administrator account is included. Additional team members need seats.'
-              : `${seats.formattedMonthly} a month · your administrator account is included`}
-          </span>
-
-          {/*
-            A reduction that has been asked for and not yet happened.
-
-            Said here rather than only in a receipt, because between now and
-            then the page shows capacity the organization has stopped paying
-            for, and somebody reading "3 seats" needs to know two of them are
-            leaving. The month is not refunded, so the seats stay usable until
-            the day named.
-          */}
-          {seats.pending !== null && seats.pending !== undefined && (
-            <span className="seat-plan-pending">
-              {seats.pending === 0
-                ? 'Cancelled: your seats stay until '
-                : `Reducing to ${seats.pending} additional seat${seats.pending === 1 ? '' : 's'} on `}
-              <strong>{formatSeatDate(seats.pendingFrom)}</strong>
-              {seats.atRisk?.length > 0
-                ? `, when ${seats.atRisk.length === 1
-                  ? `${seats.atRisk[0].name}'s account will be deleted`
-                  : `these accounts will be deleted: ${seats.atRisk.map((p) => p.name).join(', ')}`}`
-                  + ' unless you remove someone first.'
-                : seats.pending === 0 ? ', then only your own account remains.' : '.'}
-            </span>
-          )}
-        </div>
-
-        {admin && (
-          <button type="button" className="btn btn-secondary btn-small" onClick={onManageSeats}>
-            {seats.purchased === 0 ? 'Add seats' : 'Change seat plan'}
-          </button>
-        )}
-      </div>
+      {seats.pending !== null && seats.pending !== undefined && (
+        <p className="seat-plan-pending">
+          {seats.pending === 0
+            ? 'Cancelled: your seats stay until '
+            : `Reducing to ${seats.pending} additional seat${seats.pending === 1 ? '' : 's'} on `}
+          <strong>{formatSeatDate(seats.pendingFrom)}</strong>
+          {seats.atRisk?.length > 0
+            ? `, when ${seats.atRisk.length === 1
+              ? `${seats.atRisk[0].name}'s account will be deleted`
+              : `these accounts will be deleted: ${seats.atRisk.map((p) => p.name).join(', ')}`}`
+              + ' unless you remove someone first.'
+            : seats.pending === 0 ? ', then only your own account remains.' : '.'}
+        </p>
+      )}
 
       <ul className="team-list">
         {me.colleagues.map((person) => (
@@ -1684,17 +1742,26 @@ function TeamTab({ me, onSaved, onManageSeats, admin = true }) {
       </ul>
 
 
-      {/* Under the list, not over it: adding a recruiter is what you do after
-          reading who is already here, and a button above a list reads as
-          something to press before you have looked. */}
-      <button
-        type="button"
-        className="btn btn-primary btn-self-start"
-        disabled={full}
-        onClick={() => setAdding(true)}
-      >
-        Add a recruiter
-      </button>
+      {/* Under the list and ranged right, where a list's actions belong: both
+          are things you do after reading who is already here, and a button
+          above a list reads as something to press before you have looked.
+          Changing the plan sits left of adding somebody, being the rarer of
+          the two errands. */}
+      <div className="team-footer">
+        {admin && (
+          <button type="button" className="btn btn-secondary" onClick={onManageSeats}>
+            {seats.purchased === 0 ? 'Add seats' : 'Change plan'}
+          </button>
+        )}
+        <button
+          type="button"
+          className="btn btn-primary"
+          disabled={full}
+          onClick={() => setAdding(true)}
+        >
+          Add recruiter
+        </button>
+      </div>
 
       {full && (
         <p className="alert alert-warn">
@@ -2601,7 +2668,7 @@ function MyProfileTab({ me, onSaved }) {
           )}
         </div>
       ) : (
-        <dl className="facts">
+        <dl className="facts facts-ruled">
           <Fact label="First name" value={person.firstName} />
           <Fact label="Last name" value={person.lastName} />
           <Fact label="Username" value={person.username} />
@@ -3057,80 +3124,45 @@ function OrganizationUsageTab({ me, wallet, onSaved }) {
   /*
    * Two questions, and they were being answered in one column.
    *
-   * "How much do we have" and "who may spend it" are different facts about
-   * different things — one is organizational, one is per person — and a screen
-   * that runs them together invites the reading that an allowance is capacity.
-   * It is not: allowances are permission to draw on a balance that exists
-   * independently of them, and the sum of what everyone may spend can never
-   * conjure a credit the organization has not bought.
+   * How much the organization holds and who may spend it were two screens
+   * behind a switch. They are one screen now.
    *
-   * Capacity first, because it is the answer to the question that brings an
-   * admin here — and because the other one has no meaning until you know the
-   * size of the thing being shared.
+   * The split asked an admin to know which of two words their question lived
+   * under before they could ask it, and the answer was usually both: the size
+   * of the pool and the shares drawn from it are the same arithmetic, and
+   * reading them apart meant holding a number from one tab in your head while
+   * looking at the other. The total now sits under the shares it is the sum
+   * of, which is the sentence the two screens were circling.
    */
-  const [view, setView] = useState('capacity')
 
   if (!wallet) {
     return <p className="muted">Usage is not available at the moment.</p>
   }
 
-  const VIEWS = [['capacity', 'Capacity'], ['allowance', 'Allowance']]
-
   return (
     <div className="panel panel-narrow usage-page">
-      <div className="role-switch usage-views" role="group" aria-label="What to look at">
-        {VIEWS.map(([key, label]) => (
-          <button
-            key={key}
-            type="button"
-            className={`role-option${view === key ? ' role-option-on' : ''}`}
-            aria-pressed={view === key}
-            onClick={() => setView(key)}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {view === 'capacity'
-        ? <CapacityView wallet={wallet} />
-        : <AllowanceView wallet={wallet} onSaved={onSaved} />}
-    </div>
-  )
-}
-
-/**
- * What the organization holds, and how far through it is.
- *
- * Three sections, in the order an admin asks about them: the two things that
- * are consumed, then the thing that is subscribed to.
- */
-function CapacityView({ wallet }) {
-  const reveal = wallet.capacity?.reveal ?? null
-  const triage = wallet.capacity?.triage ?? null
-
-  return (
-    <>
-      <div className="usage-group-head">
-        <h2>Reveals</h2>
-        <span className="muted">Shared by everyone in your organization · never expire</span>
-      </div>
-      <CapacityMeter
-        label="Reveal credits"
-        capacity={reveal}
-        fallbackLeft={wallet.balance ?? 0}
-        unit="left"
+      <SharingSection
+        title="Reveals"
+        icon={<EyeIcon size={15} />}
+        unit="reveal"
+        unitPlural="reveals"
+        product="reveal"
+        note="Shared by everyone in your organization · never expire"
+        splitEqually={wallet.splitEqually?.reveal ?? true}
+        endpoint="/api/company/reveal-allocations"
+        onChanged={onSaved}
       />
 
-      <div className="usage-group-head">
-        <h2>Triage</h2>
-        <span className="muted">CV uploads · bought in packs · never expire</span>
-      </div>
-      <CapacityMeter
-        label="Triage capacity"
-        capacity={triage}
-        fallbackLeft={wallet.triage?.balance ?? 0}
-        unit="CVs left"
+      <SharingSection
+        title="Triage"
+        icon={<StackIcon />}
+        unit="CV"
+        unitPlural="CVs"
+        product="triage"
+        note="CV uploads · bought in packs · never expire"
+        splitEqually={wallet.splitEqually?.triage ?? true}
+        endpoint="/api/company/triage-allocations"
+        onChanged={onSaved}
       />
 
       <div className="usage-group-head">
@@ -3138,53 +3170,6 @@ function CapacityView({ wallet }) {
         <span className="muted">A monthly subscription · change it whenever your team does</span>
       </div>
       <SeatsTable seats={wallet.seatList ?? []} />
-    </>
-  )
-}
-
-/**
- * How much of the capacity you hold has been spent.
- *
- * Not `UsageMeter`, which divides lifetime usage by lifetime purchases. That is
- * the right question for an allowance, which is granted once and drawn down;
- * it is the wrong one for a balance that is topped up, because the bar would
- * creep towards full for ever and tell an organization on its tenth pack that
- * it was nearly out of something it had plenty of.
- *
- * This one resets its denominator at each purchase — see capacitySince on the
- * server, which derives both numbers from the ledger. Buying does not spend or
- * expire anything: it adds to the balance and starts the measurement again.
- */
-function CapacityMeter({ label, capacity, fallbackLeft, unit }) {
-  const left = capacity?.left ?? fallbackLeft
-  const share = capacity?.share ?? 0
-  const baseline = capacity?.baseline ?? 0
-
-  /* The same three tones the other meters use, so "nearly out" looks the same
-     wherever it is said. */
-  const tone = left === 0
-    ? ' usage-bar-out'
-    : (baseline > 0 && left / baseline <= 0.2 ? ' usage-bar-low' : '')
-
-  return (
-    <div className="usage-meter">
-      <span className="usage-meter-label">
-        <strong>{label}</strong>
-      </span>
-      <span className="usage-percent">
-        {baseline > 0 ? `${Math.round(share * 100)}% used` : 'none yet'}
-      </span>
-      <div
-        className={`usage-bar${tone}`}
-        role="progressbar"
-        aria-valuenow={Math.round(share * 100)}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-label={`${label}: ${Math.round(share * 100)}% of the current capacity used`}
-      >
-        <div className="usage-bar-fill" style={{ width: `${share * 100}%` }} />
-      </div>
-      <span className="usage-count">{left} {unit}</span>
     </div>
   )
 }
@@ -3241,34 +3226,6 @@ function SeatsTable({ seats }) {
  * No seats here. A seat is a thing you pay for, not a thing you spend, and it
  * has no allowance to give.
  */
-function AllowanceView({ wallet, onSaved }) {
-  return (
-    <>
-      <SharingSection
-        title="Reveal allowance"
-        icon={<EyeIcon size={15} />}
-        unit="reveal"
-        unitPlural="reveals"
-        product="reveal"
-        splitEqually={wallet.splitEqually?.reveal ?? true}
-        endpoint="/api/company/reveal-allocations"
-        onChanged={onSaved}
-      />
-
-      <SharingSection
-        title="Triage allowance"
-        icon={<StackIcon />}
-        unit="CV"
-        unitPlural="CVs"
-        product="triage"
-        splitEqually={wallet.splitEqually?.triage ?? true}
-        endpoint="/api/company/triage-allocations"
-        onChanged={onSaved}
-      />
-    </>
-  )
-}
-
 /** On or off, and nothing in between. Used for the two Split equally switches. */
 function SplitSwitch({ on, busy, label, onChange }) {
   return (
@@ -3335,7 +3292,7 @@ function StackIcon() {
 
 function SharingSection({
   title, icon, unit, unitPlural, product, splitEqually, endpoint,
-  seatsKey = 'seats', onChanged,
+  note, seatsKey = 'seats', onChanged,
 }) {
   const [state, setState] = useState(null)
   const [split, setSplit] = useState(splitEqually)
@@ -3436,23 +3393,35 @@ function SharingSection({
     <section className="allocation">
       <div className="allocation-head">
         <h4 className="modal-subhead">{icon}{icon ? ' ' : ''}{title}</h4>
+        {note && <span className="muted allocation-note">{note}</span>}
         <SplitSwitch
           on={split}
           busy={splitting}
           label="Split equally"
           onChange={toggleSplit}
         />
-        {!split && !editing && (
-          <button
-            type="button"
-            className="icon-button"
-            onClick={() => setEditing(true)}
-            aria-label={`Edit ${title.toLowerCase()}`}
-            title="Edit"
-          >
-            <PencilIcon />
-          </button>
-        )}
+        {/*
+          The pencil's place is kept even when there is no pencil.
+
+          Both it and the switch used to be pushed right by their own auto
+          margins, so the free space was shared between them — and turning the
+          switch off, which is what makes the pencil appear, slid the switch a
+          couple of hundred pixels left. The control moved as a result of being
+          used, which is the one thing a control must not do.
+        */}
+        <span className="allocation-edit-slot">
+          {!split && !editing && (
+            <button
+              type="button"
+              className="icon-button"
+              onClick={() => setEditing(true)}
+              aria-label={`Edit ${title.toLowerCase()}`}
+              title="Edit"
+            >
+              <PencilIcon />
+            </button>
+          )}
+        </span>
       </div>
 
       <table className="fee-table allocation-table">
@@ -3510,16 +3479,40 @@ function SharingSection({
           })}
         </tbody>
         <tfoot>
+          {/*
+            The organization's own total, under the shares it is the sum of.
+
+            This is the number the Capacity screen used to hold, and it is the
+            one an admin came for. Bottom left, where a total belongs and where
+            the eye lands after reading down the names — not in the right-hand
+            column, which is a per-person figure and would invite reading the
+            total as one more person's.
+
+            An absolute count, never a percentage. "10% used" answers a question
+            nobody asked: what an admin needs before spending is how many are
+            left, and a proportion of a pool that grows with every purchase says
+            less every time it is topped up.
+          */}
           <tr>
-            <td>{dividing ? 'Left to share out' : 'Balance'}</td>
-            <td className="fee-amount" />
-            <td className="fee-amount" />
-            {/* What is left, and only that. It read "10 of 10" — a fraction
-                whose denominator is the same number in the row above, so it
-                said one fact twice and made a full balance look like a limit
-                being approached. */}
-            <td className={`fee-amount${over ? ' allocation-over' : ''}`}>
-              {left}
+            <td colSpan={4} className={`allocation-total${over ? ' allocation-over' : ''}`}>
+              {/*
+                What the ORGANIZATION has left, which is the number the Capacity
+                screen used to hold and the one somebody opens this to find.
+
+                Not `left`, which is the unallocated remainder. With shares
+                divided evenly that is nearly always nought — so the headline
+                read "0 reveals" over a table whose own rows said ten, which is
+                the opposite of reassuring. The remainder still matters while an
+                admin is dividing by hand, so it follows in a quieter clause
+                rather than taking the position.
+              */}
+              <strong>{state.balance}</strong>{' '}
+              {Math.abs(state.balance) === 1 ? unit : unitPlural} left
+              {dividing && left !== 0 && (
+                <span className="allocation-remainder">
+                  {' · '}{left} {over ? 'over-allocated' : 'still to share out'}
+                </span>
+              )}
             </td>
           </tr>
         </tfoot>
@@ -3567,9 +3560,18 @@ function SharingSection({
  * looking at; two different presentations of one price list is two things to
  * learn for no gain.
  */
-function BillingPack({ pack, kind, selected, onSelect, name }) {
+function BillingPack({ pack, kind, selected, onSelect, name, current = false }) {
   return (
-    <label className={`pack-card${selected ? ' pack-card-on' : ''}`}>
+    <label className={`pack-card${selected ? ' pack-card-on' : ''}${current ? ' pack-card-current' : ''}`}>
+      {/*
+        What you are on today, said across the top of the card.
+
+        Seats are the one product where a pack is a state rather than a
+        purchase: the others add to a balance, this one replaces a subscription.
+        Without the banner the card you are already on is indistinguishable from
+        the three you are not, and "1 seat" reads as something to buy.
+      */}
+      {current && <span className="pack-current-tag">Current plan</span>}
       <input
         type="radio"
         name={name}
@@ -3885,6 +3887,9 @@ function BillingTab({ product: opened = 'reveals', onSeatsChanged }) {
   const [product, setProduct] = useState(opened)
   const [pick, setPick] = useState({ reveals: null, seats: null, triage: null })
   const [confirming, setConfirming] = useState(null)
+  /* Shut on arrival: the ledger is consulted after a question, not before one. */
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [historyKind, setHistoryKind] = useState('all')
 
   // Fetched rather than computed: §14.3's true-up is the server's arithmetic,
   // and a second implementation here could show a number the charge disagrees
@@ -4004,6 +4009,17 @@ function BillingTab({ product: opened = 'reveals', onSeatsChanged }) {
   /* No balance here any more: what the organization holds is on Usage, and
      this screen is about what things cost and what has been charged. */
   const { seats, catalogue, ledger, autoReplenish } = data
+
+  /*
+   * The ledger, narrowed to one product.
+   *
+   * Derived rather than stored: the ledger is the truth and this is a view of
+   * it, so a reload cannot leave the two disagreeing. `product` is already on
+   * every row, so nothing new is asked of the server.
+   */
+  const shownLedger = historyKind === 'all'
+    ? ledger
+    : ledger.filter((entry) => entry.product === historyKind)
   const reveals = product === 'reveals'
   const triage = product === 'triage'
   const chosen = pick[product]
@@ -4105,6 +4121,8 @@ function BillingTab({ product: opened = 'reveals', onSeatsChanged }) {
               kind={reveals ? 'reveal' : triage ? 'triage' : 'seat'}
               name={`billing-${product}`}
               selected={chosen?.key === pack.key}
+              /* Seats only: a reveal pack is never "the one you are on". */
+              current={!reveals && !triage && quote?.current === pack.quantity}
               onSelect={(next) => {
                 setPick((was) => ({ ...was, [product]: next }))
                 setNotice('')
@@ -4201,14 +4219,21 @@ function BillingTab({ product: opened = 'reveals', onSeatsChanged }) {
                 /* The amount is on the selected pack above and again in the
                    confirmation below. On the button it only made the label
                    jump about as the selection changed. */
-                ? 'Purchase'
+                ? <>Next <Arrow /></>
                 : quote?.seats === quote?.current
-                  ? 'Your current plan'
+                  /* No arrow: this is a state, not a step. Pointing onward from
+                     a button that cannot be pressed would promise a next
+                     screen that is not coming. */
+                  ? 'Current plan'
                   : quote?.reducing
                     ? (quote.seats === 0
-                      ? 'Cancel the subscription'
-                      : `Reduce to ${quote?.formatted?.monthly ?? ''} / month`)
-                    : `Subscribe: ${quote?.formatted?.monthly ?? ''} / month`}
+                      ? <>Cancel the subscription <Arrow /></>
+                      /* The price came off both seat labels for the reason it
+                         came off the pack button: it is stated on the card
+                         above and again in the confirmation, and on a button it
+                         only jumped about as the number of seats changed. */
+                      : <>Modify plan <Arrow /></>)
+                    : <>Upgrade subscription <Arrow /></>}
           </button>
         </div>
 
@@ -4323,9 +4348,66 @@ function BillingTab({ product: opened = 'reveals', onSeatsChanged }) {
 
       {/* -------------------------------------------------------- ledger --- */}
       <section className="billing-section">
-        <h4 className="modal-subhead">History</h4>
-        {ledger.length === 0 ? (
-          <p className="muted">Nothing yet.</p>
+        {/*
+          Folded away, because it is the longest thing on this screen and the
+          least often wanted.
+
+          Somebody opens Billing to buy something or to read a balance; the
+          ledger is what they consult afterwards, when a charge is queried. Left
+          open it pushed the packs — the reason for the visit — up off the
+          screen and made them read as a preamble to a table.
+
+          Shut by default, and the count is in the label, so folding it does not
+          hide the fact that there is something to look at.
+        */}
+        <button
+          type="button"
+          className={`disclosure-toggle${historyOpen ? ' disclosure-toggle-open' : ''}`}
+          aria-expanded={historyOpen}
+          aria-controls="billing-history"
+          onClick={() => setHistoryOpen((was) => !was)}
+        >
+          <span>
+            History
+            {ledger.length > 0 && (
+              <span className="muted">
+                {' · '}{ledger.length} {ledger.length === 1 ? 'entry' : 'entries'}
+              </span>
+            )}
+          </span>
+          <Caret />
+        </button>
+
+        <div id="billing-history" hidden={!historyOpen}>
+        {/*
+          Which of the three the entry is about.
+
+          The ledger runs them together because they share a balance sheet, not
+          because they are one thing — a seat charge and a reveal spend answer
+          different questions, and somebody checking "what happened to our
+          reveals" should not have to read past a month of seat renewals. The
+          product is on every row already; this only stops showing the others.
+        */}
+        {ledger.length > 0 && (
+          <div className="role-switch history-filter" role="group" aria-label="Show">
+            {[['all', 'All'], ['reveal', 'Reveals'], ['seat', 'Seats'], ['triage', 'Triage']]
+              .map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  className={`role-option${historyKind === key ? ' role-option-on' : ''}`}
+                  aria-pressed={historyKind === key}
+                  onClick={() => setHistoryKind(key)}
+                >
+                  {label}
+                </button>
+              ))}
+          </div>
+        )}
+        {shownLedger.length === 0 ? (
+          <p className="muted">
+            {ledger.length === 0 ? 'Nothing yet.' : 'Nothing under this heading yet.'}
+          </p>
         ) : (
           <table className="fee-table">
             <thead>
@@ -4340,7 +4422,7 @@ function BillingTab({ product: opened = 'reveals', onSeatsChanged }) {
                * ledger that lists only purchases cannot answer "where did the
                * other forty go", which is the question it is opened for.
                */}
-              {ledger.map((entry) => (
+              {shownLedger.map((entry) => (
                 <tr key={entry.id}>
                   <td>{new Date(entry.createdAt).toLocaleDateString()}</td>
                   <td>{entry.note}</td>
@@ -4356,6 +4438,7 @@ function BillingTab({ product: opened = 'reveals', onSeatsChanged }) {
             </tbody>
           </table>
         )}
+        </div>
       </section>
     </div>
   )
@@ -4434,6 +4517,15 @@ function SearchTab({ me, folders, setFolders, onControls }) {
 
   const [chats, setChats] = useState([])
   const [chatId, setChatId] = useState(null)
+
+  /*
+   * Which candidate is being filed, if any.
+   *
+   * Held by the list rather than by the card, so there is one dialog on the
+   * page however many rows are on it — twenty cards each holding their own
+   * would be twenty portals waiting to be told to open.
+   */
+  const [filing, setFiling] = useState(null)
   /*
    * Ruled out of THIS search. Server-held, so reopening the search — which
    * re-runs it — does not bring them all back.
@@ -4687,7 +4779,7 @@ function SearchTab({ me, folders, setFolders, onControls }) {
    * to folder is the route from a search result, and it is the one the product
    * describes.
    */
-  async function saveToSearchFolder(candidateId) {
+  async function saveToSearchFolder(candidateId, folderId = null) {
     if (!session?.id) {
       setError('Run a search before saving candidates.')
       return
@@ -4713,7 +4805,11 @@ function SearchTab({ me, folders, setFolders, onControls }) {
       } : null
 
       const data = await post(
-        `/api/hr/search/${session.id}/save`, { candidateId, snapshot }, 'recruiter',
+        `/api/hr/search/${session.id}/save`,
+        /* Absent rather than null when no folder was named: the route treats
+           the key being present as an instruction, and null is not one. */
+        folderId ? { candidateId, snapshot, folderId } : { candidateId, snapshot },
+        'recruiter',
       )
       setFolders(data.folders)
       setResponse((prev) => prev && {
@@ -4931,6 +5027,34 @@ function SearchTab({ me, folders, setFolders, onControls }) {
         <StatusNotice error={error} onDismiss={() => setError('')} />
       </div>
 
+      {/*
+        Where to file the candidate whose menu asked.
+
+        Both paths go through saveToSearchFolder, which is the only one that
+        carries the reading the recruiter is looking at — the displayed score
+        is normalised against the pool that was searched and is stored nowhere,
+        so filing through any other route would file them with no score at all.
+      */}
+      {filing !== null && (
+        <FolderDialog
+          folders={folders}
+          inFolderId={folders.find(
+            (folder) => folder.items?.some((item) => item.candidate_id === filing),
+          )?.id ?? null}
+          onPick={(folderId) => saveToSearchFolder(filing, folderId)}
+          onNewFolder={async () => {
+            const name = prompt('Name the new folder', 'Shortlist')
+            if (name === null || !name.trim()) return
+            /* Made first, then filed into — the create returns the id the save
+               needs, and a failure here means nothing was moved. */
+            const made = await post('/api/hr/folders', { name: name.trim() }, 'recruiter')
+            setFolders(made.folders)
+            await saveToSearchFolder(filing, made.id)
+          }}
+          onClose={() => setFiling(null)}
+        />
+      )}
+
       <div className="search-split-bottom">
         <ResultFilters
           filters={filters}
@@ -4992,6 +5116,7 @@ function SearchTab({ me, folders, setFolders, onControls }) {
                   result={result}
                   canSave
                   onSave={() => saveToSearchFolder(result.candidate.id)}
+                  onFile={() => setFiling(result.candidate.id)}
                   meId={me?.recruiter?.id ?? null}
                   onReveal={() => revealFromList(result.candidate.id, result.candidate.display_name)}
                   onDismiss={chatId ? () => dismissFromList(result.candidate.id) : null}
@@ -5075,7 +5200,8 @@ function tagsIn(rows) {
  * so the list stays scannable and the detail has room to breathe.
  */
 function ResultCard({
-  result, onOpen, onSave, onReveal, onDismiss, onTagsChanged, meId = null, canSave = false,
+  result, onOpen, onSave, onFile, onReveal, onDismiss, onTagsChanged,
+  meId = null, canSave = false,
 }) {
   const { candidate, documents = [] } = result
   const band = scoreBand(result.score)
@@ -5165,6 +5291,20 @@ function ResultCard({
               it, which is the part a recruiter cannot work out for themselves —
               except when it was the reader, which is "me".
             */}
+            {/*
+              Where the candidate is filed, beside who opened them.
+
+              Both are facts about what this team has already done with this
+              person, and they were two lines apart — one among the chips under
+              the summary, one in the corner. Together they read as a pair; the
+              folder first, because being filed usually comes before being paid
+              for.
+            */}
+            {result.folder && (
+              <span className="chip chip-folder" title={`Saved in your ${result.folder.name} folder`}>
+                Folder · {result.folder.name}
+              </span>
+            )}
             {result.revealed && (
               <span
                 className="chip chip-revealed"
@@ -5229,10 +5369,18 @@ function ResultCard({
               vertical
               label={`Actions for ${candidate.display_name ?? 'this candidate'}`}
               items={[
+                /*
+                 * One line, and it is always a control.
+                 *
+                 * It used to read "Saved in Backend hires" once the candidate
+                 * was filed — a statement, in a menu, doing nothing when
+                 * pressed. The chip in the corner already says where they are;
+                 * what a menu is for is changing it.
+                 */
                 canSave && {
                   key: 'folder',
-                  label: saved ? `Saved in ${result.folder.name}` : 'Add to folder',
-                  onSelect: () => { if (!saved) onSave?.() },
+                  label: 'Save in folder',
+                  onSelect: () => onFile?.(),
                 },
                 !result.revealed && { key: 'reveal', label: 'Reveal', onSelect: () => onReveal?.() },
                 onDismiss && { key: 'dismiss', label: 'Not relevant', danger: true, onSelect: () => onDismiss() },
@@ -5247,15 +5395,6 @@ function ResultCard({
             <span className="score-value">{result.score}%</span>
           </div>
         </div>
-
-        {/* The other half of the pair the score sits between: as wide as the
-            person's half, which is what puts the number on the centre line. It
-            carries the tags, which is where they belong — right of the number,
-            left of the buttons — and stays empty and silent when there are
-            none. */}
-        <span className="result-spacer">
-          <TagStrip tags={result.tags ?? []} />
-        </span>
 
         {/*
           What the person says about themselves, and how they scored, across the
@@ -5273,41 +5412,40 @@ function ResultCard({
         */}
         <div className="result-say">
           {/*
-            About two sentences of how they describe themselves, directly under
-            the name.
+            The summary is not here.
 
-            The first thing on the row that is about the person rather than
-            about the search: the chips below say what has been done to them —
-            revealed, filed, tagged — and the line under those says how they
-            score against this job description. Neither answers "who is this",
-            which is the question a recruiter is actually scanning for, and
-            which used to require opening every card to find out.
+            It was two sentences of how the candidate describes themselves,
+            under the name — which reads well on one card and badly on twenty:
+            every row grew to the height of its longest self-description, and a
+            list a recruiter is scanning for a name became a page of prose in
+            which the names are the small text. Length varied by candidate, so
+            the rows did not even line up.
 
-            Shown whether or not they have been revealed. It names no employer,
-            so there is nothing here the reveal was protecting.
+            It is on the profile, in both states — before the reveal at the top
+            of the panel, and after it above the tabs (ProfessionalSummary,
+            twice). Nothing is lost; it is one click away rather than repeated
+            twenty times down a list.
           */}
-          <SummaryPreview summary={candidate.summary} />
 
+          {/*
+            Two kinds of chip, and no more.
+
+            The document chips are gone. "Cover letter" and "+2 documents" told
+            a recruiter what was attached before they could open any of it, and
+            what is attached is not a reason to open somebody — it is a detail
+            of the profile, which is where it now lives alone. The folder chip
+            has moved to the corner to sit beside the reveal it belongs with.
+
+            What is left is what a recruiter has to read rather than glance at:
+            an explicit "not open to opportunities", which a coloured dot cannot
+            distinguish from having gone quiet, and the words this team put on
+            this person themselves.
+          */}
           <div className="result-tags">
-            {/* Freshness has moved to the dot beside the photo — it is a glance,
-                not a sentence, and it was crowding the chips that do need
-                reading. The one exception stays: somebody who has explicitly
-                said they are not open needs words, because a red dot cannot
-                distinguish "gone quiet" from "asked not to be approached". */}
             {result.activity?.state === 'deactivated' && (
               <ActivityChip activity={result.activity} />
             )}
-            {/* Labelled the way the reveal chip is, for the same reason: a bare
-                folder name is indistinguishable from a tag someone applied, and
-                "Shortlist" or "Maybe" reads as a judgement about the candidate
-                rather than as where they were filed. */}
-            {result.folder && (
-              <span className="chip chip-folder" title={`Saved in your ${result.folder.name} folder`}>
-                Folder · {result.folder.name}
-              </span>
-            )}
-            {documents.includes('cover_letter') && <span className="chip chip-neutral">Cover letter</span>}
-            {extras > 0 && <span className="chip chip-neutral">+{extras} document{extras === 1 ? '' : 's'}</span>}
+            <TagStrip tags={result.tags ?? []} />
           </div>
 
           {/* Claude's read of the profile replaces the keyword summary when it
@@ -5322,6 +5460,100 @@ function ResultCard({
         </div>
       </div>
     </li>
+  )
+}
+
+/**
+ * The rail's "+ New", and the two things it can start.
+ *
+ * Modelled on the sign-in menu rather than on PopMenu: PopMenu's trigger is a
+ * fixed "⋯" glyph with dock styling and cannot render a labelled button, and
+ * the behaviour worth copying — close on an outside press, close on Escape,
+ * hand focus back when it does — is small enough to hold here.
+ *
+ * Each item carries a line about what it is for. "Search" and "Triage" are the
+ * product's words for two things a newcomer has no way to tell apart, and a
+ * menu that offers only the words makes them guess.
+ */
+function NewMenu({ onSearch, onTriage }) {
+  const [open, setOpen] = useState(false)
+  const wrap = useRef(null)
+
+  useEffect(() => {
+    if (!open) return undefined
+
+    const onPointerDown = (event) => {
+      if (!wrap.current?.contains(event.target)) setOpen(false)
+    }
+    const onKeyDown = (event) => {
+      if (event.key !== 'Escape') return
+      setOpen(false)
+      /* Escape has to hand focus back, or it is left on a menu that is gone. */
+      wrap.current?.querySelector('.ws-new')?.focus()
+    }
+
+    document.addEventListener('pointerdown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [open])
+
+  function choose(run) {
+    setOpen(false)
+    run()
+  }
+
+  return (
+    <div className="ws-new-wrap" ref={wrap}>
+      <button
+        type="button"
+        className="ws-new"
+        aria-expanded={open}
+        aria-haspopup="menu"
+        onClick={() => setOpen((was) => !was)}
+      >
+        <span aria-hidden="true">+</span> New
+        <Caret />
+      </button>
+
+      {open && (
+        <div className="ws-new-menu" role="menu">
+          <button
+            type="button"
+            role="menuitem"
+            className="ws-new-item"
+            onClick={() => choose(onSearch)}
+          >
+            <strong><span aria-hidden="true">+</span> Search</strong>
+            <span className="muted">Describe a role and we find the people</span>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="ws-new-item"
+            onClick={() => choose(onTriage)}
+          >
+            <strong><span aria-hidden="true">+</span> Triage</strong>
+            <span className="muted">Sort CVs you already received</span>
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Onward, on the buttons that lead to a confirmation rather than act at once. */
+function Arrow() {
+  return (
+    <svg
+      className="btn-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none"
+      stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"
+      aria-hidden="true" focusable="false"
+    >
+      <path d="M5 12h13M13 6l6 6-6 6" />
+    </svg>
   )
 }
 
@@ -5891,16 +6123,18 @@ function FoldersTab({ me = null, folders, setFolders, statuses = [] }) {
 
               <span className="drive-item-name">
                 <strong>{item.display_name ?? item.name}</strong>
+                {/*
+                  The same two facts the search card leads with, in the same
+                  order — where they are and when they can start.
+
+                  Capacity was a third here and nowhere else. A row in a folder
+                  and a row in a search are the same person seen twice, and a
+                  field that appears in one view and not the other makes them
+                  look like different records.
+                */}
                 <span className="muted">
-                  {[item.location, item.availability, item.capacity].filter(Boolean).join(' · ')}
+                  {[item.location, item.availability].filter(Boolean).join(' · ')}
                 </span>
-                {/* One line here rather than the two a result card gives it:
-                    this is a dense list you scan down, and the row's job is to
-                    stay one row. Same field, same component, same rules. */}
-                <SummaryPreview
-                  summary={item.summary}
-                  className="drive-item-summary"
-                />
               </span>
 
               {/*
@@ -5943,10 +6177,16 @@ function FoldersTab({ me = null, folders, setFolders, statuses = [] }) {
               <span className="drive-item-tags">
                 {/* What your team calls them, ahead of what the CV says about
                     them: a colleague's word is the thing you came to read. */}
+                {/*
+                  What your team calls them, and nothing else.
+
+                  A "Cover letter" chip sat here reporting what was attached.
+                  What is attached is not a reason to open somebody — it is a
+                  detail of the profile, which is where it lives — and the
+                  search card carries no such chip, so this row wore one badge
+                  its twin did not.
+                */}
                 <TagStrip tags={item.tags} limit={2} />
-                {(item.documents ?? []).includes('cover_letter') && (
-                  <span className="chip chip-neutral">Cover letter</span>
-                )}
               </span>
 
               <button
@@ -6907,7 +7147,7 @@ function CandidateProfileView({ candidate, data, onError, onRead }) {
         is read once whoever is looking and whatever they have paid for.
       */}
 
-      <dl className="facts">
+      <dl className="facts facts-ruled">
         {/* No Name row: it is the heading of this dialog, six lines above. */}
         <Fact label="Email" value={candidate.email} />
         <Fact label="Phone" value={candidate.phone} />

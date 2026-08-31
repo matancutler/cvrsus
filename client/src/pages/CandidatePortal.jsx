@@ -3,7 +3,8 @@ import { createPortal } from 'react-dom'
 import { Link, useLocation, useSearchParams } from 'react-router-dom'
 
 import Avatar from '../components/Avatar.jsx'
-import CandidateForm from '../components/CandidateForm.jsx'
+import CandidateForm, { CAPACITY_OPTIONS } from '../components/CandidateForm.jsx'
+import OnboardingDialog from '../components/OnboardingDialog.jsx'
 import Notice, { StatusNotice, useStandingNotice } from '../components/Notice.jsx'
 import ChatPanel from '../components/ChatPanel.jsx'
 import InfoHint from '../components/InfoHint.jsx'
@@ -271,6 +272,18 @@ function SignInCard({ onSignedIn }) {
 function Portal({ account, reload, onSignOut }) {
   const [params, setParams] = useSearchParams()
 
+  /*
+   * The four questions a CV cannot answer, once, on arrival from signup.
+   *
+   * Keyed off the navigation state rather than a column, because it is a fact
+   * about this arrival and not about the account: a candidate who closes the
+   * browser mid-onboarding has a real profile with sensible defaults, and
+   * meeting the dialog again on their next sign-in would be asking them to
+   * confirm something they already left as it was.
+   */
+  const { state: arrival } = useLocation()
+  const [onboarding, setOnboarding] = useState(Boolean(arrival?.onboarding))
+
   /**
    * `?thread=<recruiterId>` comes from the "you have a message" email. Landing
    * on the profile tab and making someone hunt for the conversation they were
@@ -361,6 +374,25 @@ function Portal({ account, reload, onSignOut }) {
 
   return (
     <div className="portal">
+      {/*
+        Over the profile it is about, not before it.
+
+        The page behind is already filled in from the CV, so the dialog reads as
+        the last few questions about a profile that exists rather than as a form
+        standing between the candidate and one that does not.
+      */}
+      {onboarding && (
+        <OnboardingDialog
+          account={account}
+          capacityOptions={CAPACITY_OPTIONS}
+          tagCap={account?.preferences?.tagCap ?? 10}
+          onDone={async () => {
+            await reload()
+            setOnboarding(false)
+          }}
+        />
+      )}
+
       {/* In place of the site header, which is gone from here — see chrome.jsx.
           Sign out moves up into it, so the identity block below is identity
           rather than identity plus a control.
@@ -424,6 +456,19 @@ function Portal({ account, reload, onSignOut }) {
         </aside>
 
         <div className="account-main">
+          {/*
+            Read-only on arrival, the same as every other sign-in.
+
+            It used to open unlocked on the way out of signup, on the reasoning
+            that somebody who has just been shown a profile built from their CV
+            should not have to find a pencil to correct it. That trades a
+            smaller problem for a larger one: the first thing they meet is a
+            live profile with every field editable and a cursor that lands
+            wherever they click, and there is no moment where they were shown
+            what it says before they were able to change it. Reading comes
+            first. The pencil is one click away and it is the same click it
+            will be tomorrow.
+          */}
           <ProfileTab account={account} reload={reload} />
         </div>
       </div>
