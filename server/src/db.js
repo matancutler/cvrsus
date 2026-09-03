@@ -923,10 +923,10 @@ const ALIASING_DOMAINS = new Set(['gmail.com', 'googlemail.com'])
 /**
  * The one mailbox an address refers to.
  *
- * "Matanya.Cutler+jobs@gmail.com" and "matanyacutler@gmail.com" are the same
- * inbox, and somebody who signs up with one and later types the other means the
- * same account. Without this they were told no application existed and offered
- * the chance to create a second one.
+ * "Dana.Levi+jobs@gmail.com" and "danalevi@gmail.com" are the same inbox, and
+ * somebody who signs up with one and later types the other means the same
+ * account. Without this they were told no application existed and offered the
+ * chance to create a second one.
  *
  * Exported because the duplicate guard on sign-up has to agree with the lookup
  * here: if these two disagreed, an address could fail to sign in AND be allowed

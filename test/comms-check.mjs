@@ -231,9 +231,14 @@ for (const address of [
   check(`${address} is refused delivery`, isUnroutable(address))
 }
 
-/* The rule has to be narrow, or it silently swallows real candidates. */
+/* The rule has to be narrow, or it silently swallows real candidates.
+
+   An ordinary gmail address, not a real person's: this repository is public,
+   and a maintainer's own inbox in a fixture is a maintainer's own inbox on the
+   internet. What the check needs is an address at a live consumer provider,
+   which any of these are. */
 for (const address of [
-  'matanyacutler@gmail.com',
+  'dana.levi@gmail.com',
   'pat@cvrsvs.com',
   'someone@example-recruiting.com',
   'person@testing-labs.co.il',
