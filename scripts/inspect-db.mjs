@@ -12,12 +12,42 @@
  * Password hashes and sign-in codes are stored hashed and are shown redacted —
  * there is no plaintext credential in here to read.
  */
+import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import Database from 'better-sqlite3'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
-const file = path.join(here, '..', 'server', 'data', 'cking.db')
+
+/*
+ * Wherever the server keeps it, which is not always beside the code.
+ *
+ * This pointed at server/data unconditionally, so on any deployment that sets
+ * CKING_DATA_DIR — which is every real one, because the data belongs on a disk
+ * that outlives the container — it looked in a directory that does not exist
+ * and died inside better-sqlite3 with "Cannot open database because the
+ * directory does not exist". Every other operator script gets this right by
+ * importing server/src/db.js; this one is deliberately the exception, because
+ * that module opens the database read-write and runs migrations, and the whole
+ * promise of this script is that it only reads.
+ *
+ * So the rule is repeated rather than imported. It must stay identical to
+ * DATA_DIR in server/src/db.js — same variable, same fallback.
+ */
+const DATA_DIR = process.env.CKING_DATA_DIR ?? path.join(here, '..', 'server', 'data')
+const file = path.join(DATA_DIR, 'cking.db')
+
+if (!fs.existsSync(file)) {
+  /* Said in words rather than as a stack trace from inside the driver. The
+     answer is nearly always a CKING_DATA_DIR that does not match the server's. */
+  console.error('')
+  console.error(`  No database at ${file}`)
+  console.error('')
+  console.error(`  CKING_DATA_DIR is ${process.env.CKING_DATA_DIR ?? '(unset, so falling back to server/data)'}.`)
+  console.error('  It has to be the same value the server runs with.')
+  console.error('')
+  process.exit(1)
+}
 
 const db = new Database(file, { readonly: true, fileMustExist: true })
 

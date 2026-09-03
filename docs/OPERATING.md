@@ -197,6 +197,17 @@ If you ever need SQL directly, the file is at `/data/db/cking.db`. Prefer the
 scripts: they know about the rules the app depends on, and raw `UPDATE`
 statements do not.
 
+### Why the scripts find the database and you might not
+
+On the live server the data is on the mounted disk at `/data/db`, not in
+`server/data` beside the code — that is what `CKING_DATA_DIR` is for, and it is
+the whole reason the data survives a deploy. Every script reads that variable,
+so they all look in the right place without being told.
+
+If one ever reports **"No database at …"**, the path it prints is where it
+looked, and the answer is almost always that `CKING_DATA_DIR` is not what the
+server runs with. In the Render shell it is already set for you.
+
 ---
 
 ## Part 3 — Changing the site
