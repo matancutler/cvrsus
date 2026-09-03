@@ -129,6 +129,19 @@ services:
       - key: MAIL_REPLY_TO
         sync: false
 
+      # SMS. Without all three a sign-in code sent to a phone is printed to the
+      # log instead — which means a candidate cannot finish signing up, because
+      # registration requires a verified phone as well as a verified email.
+      # There is no reserved number range the way there is a reserved email
+      # domain, so notify.js only sends under NODE_ENV=production; a laptop with
+      # these set still prints.
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_FROM
+        sync: false
+
       # Without these two, CV reading and match scoring fall back to keyword
       # overlap. The app runs; it just stops being the product.
       - key: ANTHROPIC_API_KEY

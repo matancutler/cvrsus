@@ -30,9 +30,10 @@ email address can sign in as them.** Never turn it on in production.
 
 The three real options:
 
-1. **Wire an SMS provider** (Twilio or similar). `server/src/notify.js` has one
-   branch — `if (channel === 'phone')` — that prints instead of sending. That is
-   the only place that changes.
+1. **Wire an SMS provider.** The code is written — `server/src/notify.js` calls
+   Twilio when `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` and `TWILIO_FROM` are
+   set, and prints when they are not. All that is missing is an account. See
+   `docs/GOING-LIVE.md`.
 2. **Stop requiring phone verification**, and verify the email alone. A product
    decision, not a technical one.
 3. **Leave it as is** while the site is something you show people rather than
@@ -353,7 +354,7 @@ object storage.
 
 | | |
 |---|---|
-| **SMS** | No provider. Candidates cannot complete sign-up. The largest gap. |
+| **SMS** | Code wired; no Twilio account yet. Candidates cannot complete sign-up until there is one. See `docs/GOING-LIVE.md`. |
 | **Email key** | `RESEND_API_KEY` is unset on the live site, and the old key was exposed in a chat transcript — rotate it in Resend before using it. |
 | **AI keys** | `ANTHROPIC_API_KEY` and `VOYAGE_API_KEY` unset. Search runs on keyword matching until they are set. |
 | **DMARC** | Not published on the sending domain. Deliverability is worse without it. |

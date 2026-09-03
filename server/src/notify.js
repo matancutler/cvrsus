@@ -15,20 +15,19 @@ export const OTP_ECHO = process.env.OTP_ECHO === 'true'
 
 export async function sendLoginCode({ channel, destination, code, expiresInMinutes }) {
   /*
-   * No SMS provider yet, so a code going to a phone is printed. Kept as its own
-   * branch rather than folded into deliver(): the day Twilio is wired, this is
-   * the single line that changes, and nothing about the email path moves.
+   * A code going to a phone goes by SMS when a provider is configured, and to
+   * the console when one is not — the same rule email follows, so the two
+   * channels behave alike and neither can silently do nothing.
    */
   if (channel === 'phone') {
-    console.log('')
-    console.log('  ┌─ candidate sign-in code (SMS not wired) ─────────────')
-    console.log(`  │  to phone:  ${destination}`)
-    console.log(`  │  code:      ${code}`)
-    console.log(`  │  valid for: ${expiresInMinutes} minutes`)
-    console.log('  └──────────────────────────────────────────────────────')
-    console.log('')
-
-    return { delivered: 'console', channel: 'phone' }
+    return sendSms({
+      to: destination,
+      body: `${code} is your Cursus sign-in code. It is valid for `
+        + `${expiresInMinutes} minutes and can be used once.`,
+      label: 'candidate sign-in code',
+      expiresInMinutes,
+      code,
+    })
   }
 
   /*
@@ -424,6 +423,95 @@ async function deliver({ to, subject, lines }) {
   console.log(`  email sent to ${to} — ${subject}${id ? ` [${id}]` : ''}`)
 
   return { ...result, delivered: 'resend', id: id ?? null }
+}
+
+/* ------------------------------------------------------------------ SMS --- */
+
+const SMS_SID = process.env.TWILIO_ACCOUNT_SID ?? ''
+const SMS_TOKEN = process.env.TWILIO_AUTH_TOKEN ?? ''
+/* The number or alphanumeric sender ID messages come from. Twilio rejects a
+   send with no From, so all three have to be present before anything is live. */
+const SMS_FROM = process.env.TWILIO_FROM ?? ''
+
+/** True when a text would really be sent, so callers can log honestly. */
+export const SMS_LIVE = Boolean(SMS_SID && SMS_TOKEN && SMS_FROM)
+
+/*
+ * A test run must not be able to send a real text.
+ *
+ * Email protects itself: every fixture writes to a domain RFC 2606 reserves,
+ * and UNROUTABLE refuses those whatever key is set. Phone numbers have no
+ * equivalent — there is no reserved range a suite can safely use, and a fixture
+ * number like 0509123456 is somebody's actual handset.
+ *
+ * So the guard is the environment instead. Sending happens only under
+ * NODE_ENV=production, which no suite runs with (scratchpad/start5199.sh sets
+ * development, and so does `npm run dev`). Setting the credentials on a laptop
+ * therefore cannot cost money or wake a stranger; it prints, exactly as now.
+ *
+ * SMS_ALLOW_NON_PRODUCTION exists for the one hour somebody genuinely wants to
+ * test a real send from a laptop. It is deliberately long and ugly to type.
+ */
+const SMS_ALLOWED = process.env.NODE_ENV === 'production'
+  || process.env.SMS_ALLOW_NON_PRODUCTION === 'true'
+
+function printedSms(to, code, expiresInMinutes, note) {
+  console.log('')
+  console.log(`  ┌─ candidate sign-in code (${note}) ─────────────`)
+  console.log(`  │  to phone:  ${to}`)
+  console.log(`  │  code:      ${code}`)
+  console.log(`  │  valid for: ${expiresInMinutes} minutes`)
+  console.log('  └──────────────────────────────────────────────────────')
+  console.log('')
+}
+
+/**
+ * One text, through Twilio's REST API.
+ *
+ * No SDK: this is one POST with three form fields, and a dependency that ships
+ * a whole client for it would be more surface than the thing it replaces. The
+ * shape mirrors deliver() above deliberately — same fallback to the console,
+ * same habit of reporting the provider's own words on refusal, same rule that
+ * the credentials never appear in an error string.
+ */
+async function sendSms({ to, body, expiresInMinutes, code }) {
+  if (!SMS_LIVE) {
+    printedSms(to, code, expiresInMinutes, 'SMS not configured')
+    return { delivered: 'console', channel: 'phone' }
+  }
+
+  if (!SMS_ALLOWED) {
+    printedSms(to, code, expiresInMinutes, 'not production — not sent')
+    return { delivered: 'skipped', channel: 'phone' }
+  }
+
+  const response = await fetch(
+    `https://api.twilio.com/2010-04-01/Accounts/${SMS_SID}/Messages.json`,
+    {
+      method: 'POST',
+      headers: {
+        /* Basic auth is what Twilio's REST API takes. Buffer rather than btoa
+           so this does not depend on which globals the runtime happens to
+           expose. */
+        authorization: `Basic ${Buffer.from(`${SMS_SID}:${SMS_TOKEN}`).toString('base64')}`,
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({ To: to, From: SMS_FROM, Body: body }),
+    },
+  )
+
+  if (!response.ok) {
+    /* Twilio explains refusals precisely — an unverified number on a trial
+       account, a region the account cannot reach, a malformed From. Those are
+       the failures worth reading, and none of them contain the token. */
+    const detail = await response.text().catch(() => '')
+    throw new Error(`Twilio refused the message (${response.status}): ${detail.slice(0, 300)}`)
+  }
+
+  const { sid } = await response.json().catch(() => ({}))
+  console.log(`  sms sent to ${to}${sid ? ` [${sid}]` : ''}`)
+
+  return { delivered: 'twilio', channel: 'phone', id: sid ?? null }
 }
 
 /** 1 — the candidate's account exists and is already working for them. */
