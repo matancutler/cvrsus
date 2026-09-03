@@ -1,0 +1,123 @@
+# Cursus on Render — one web service, one disk.
+#
+# The shape of this file follows from one fact about the app: it keeps its state
+# on the filesystem. The database is a SQLite file and the CVs are files beside
+# it, so this is one instance with one disk attached and cannot be more than
+# one. Scaling past that means moving off SQLite first; until then, extra
+# instances would each get their own empty disk and serve a different database.
+#
+# Create it from Render's dashboard with "New → Blueprint", pointed at this
+# repository. The values marked `sync: false` are deliberately not here — see
+# the note on each.
+
+services:
+  - type: web
+    name: cursus
+    runtime: node
+    # Frankfurt is the closest region Render offers to Israel.
+    region: frankfurt
+    # Not `free`: free instances have no persistent disk, and this app is
+    # nothing without one. They also sleep, which would make a candidate's first
+    # click a thirty-second wait.
+    plan: starter
+    branch: main
+
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+
+    # Cheap, and it answers honestly: it 200s only once the server is listening,
+    # so a deploy that boots into a crash loop is caught rather than rolled out.
+    healthCheckPath: /api/health
+
+    disk:
+      name: cursus-data
+      mountPath: /data
+      # The database plus every CV ever uploaded. 5 GB is a long way off at a
+      # few hundred KB per candidate; Render can grow it later without a
+      # redeploy, but it can never shrink it.
+      sizeGB: 5
+
+    envVars:
+      # ---------------------------------------------------------------- state
+      #
+      # THE TWO THAT MATTER MOST.
+      #
+      # Without them the app still boots, still works, and writes the database
+      # and every uploaded CV to the container's temporary filesystem — which is
+      # thrown away on the next deploy. Nothing warns you; the logs look normal
+      # right up until the data is gone. Both directories are created on first
+      # boot, so the mount needs no preparation.
+      - key: CKING_DATA_DIR
+        value: /data/db
+      - key: CKING_UPLOAD_DIR
+        value: /data/uploads
+
+      # -------------------------------------------------------------- runtime
+      - key: NODE_ENV
+        value: production
+      # Pinned so a Node major bump is something you choose, not something that
+      # happens to a deploy. better-sqlite3 ships prebuilt binaries per major;
+      # an unpinned runtime is how a build starts compiling from source one day.
+      - key: NODE_VERSION
+        value: "22"
+
+      # PORT is deliberately absent. Render injects it, and the server reads
+      # process.env.PORT — setting it here would fight the platform.
+
+      # ------------------------------------------------------------- sessions
+      #
+      # Generated once by Render and then held. It signs session tokens and
+      # hashes sign-in codes, so changing it signs everyone out and invalidates
+      # every code in flight — and leaving it unset is worse: the server falls
+      # back to a random value per boot (server/src/index.js), which means every
+      # deploy and every restart logs out every user.
+      - key: SESSION_SECRET
+        generateValue: true
+
+      # ---------------------------------------------------------- behind a proxy
+      #
+      # Render terminates TLS and forwards over http, so without trust proxy the
+      # app sees an insecure connection and refuses to set a Secure cookie —
+      # nobody can stay signed in. COOKIE_SECURE then makes that explicit rather
+      # than leaving it to sniffing the forwarded header.
+      - key: TRUST_PROXY
+        value: "1"
+      - key: COOKIE_SECURE
+        value: "true"
+
+      # ---------------------------------------------------------------- safety
+      #
+      # MUST be false. With it on, sign-in codes are returned in the API
+      # response as well as emailed, so knowing somebody's address is enough to
+      # sign in as them.
+      - key: OTP_ECHO
+        value: "false"
+
+      # ------------------------------------------------- set in the dashboard
+      #
+      # sync: false means "this service needs it, ask me for the value" — Render
+      # prompts on first deploy and stores it, and it never appears in the repo.
+      # Secrets are the obvious reason; APP_URL is here because it changes when
+      # you move from the onrender.com address to the real domain.
+
+      # Where the links in emails point. Start it at the address Render gives
+      # you, change it when DNS moves.
+      - key: APP_URL
+        sync: false
+
+      # Email. Without a key, every message is printed to the log instead of
+      # sent — which is a fine way to see the first deploy work, and useless for
+      # a candidate waiting on a sign-in code.
+      - key: RESEND_API_KEY
+        sync: false
+      - key: MAIL_FROM
+        sync: false
+      - key: MAIL_REPLY_TO
+        sync: false
+
+      # Without these two, CV reading and match scoring fall back to keyword
+      # overlap. The app runs; it just stops being the product.
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: VOYAGE_API_KEY
+        sync: false
