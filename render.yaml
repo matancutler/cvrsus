@@ -22,7 +22,21 @@ services:
     plan: starter
     branch: main
 
-    buildCommand: npm ci && npm run build
+    # --include=dev is not optional here, and the reason is two settings in this
+    # same file fighting each other.
+    #
+    # NODE_ENV=production is set below because the server needs it at runtime.
+    # npm also reads NODE_ENV, and treats `production` as `omit=dev` — so a
+    # plain `npm ci` installs 30 packages instead of 47 and leaves out vite,
+    # which lives in client/devDependencies because it is a build tool. The
+    # build then dies on `vite: not found`, having installed everything the
+    # server needs and nothing that assembles the client.
+    #
+    # Overriding it here rather than dropping NODE_ENV: the runtime genuinely
+    # wants production (notify.js reads it to decide whether sign-in codes may
+    # be echoed), and the build genuinely wants the dev tools. They are
+    # different needs and this is the line where they are told apart.
+    buildCommand: npm ci --include=dev && npm run build
     startCommand: npm start
 
     # Cheap, and it answers honestly: it 200s only once the server is listening,
