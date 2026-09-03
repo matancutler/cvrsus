@@ -1,21 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import PopMenu from './PopMenu.jsx'
-import { RowTick, SelectButton, SelectionBar, useSelection } from './ListSelect.jsx'
 import { del, downloadFile, get, patch, post, sendForm } from '../api.js'
-import { DATE_LOCALE } from '../dates.js'
+import Avatar from './Avatar.jsx'
+import FolderDialog from './FolderDialog.jsx'
 import Notice, { StatusNotice, useStandingNotice } from './Notice.jsx'
+import PopMenu from './PopMenu.jsx'
 import scoreBand from '../scoreBand.js'
 
 /**
  * Cursus Triage — the recruiter's own applicant pile, sorted.
  *
- * Three screens behind one component, because they are three states of one
- * object rather than three places:
+ * Two screens behind one component, because they are two states of one object
+ * rather than two places:
  *
- *   dashboard   every Triage this organization has run
  *   builder     a draft: the JD, the pile, and what it will cost to start
  *   workspace   a launched Triage: progress, and the results as they arrive
+ *
+ * There was a third — a dashboard listing every Triage the organization had
+ * run. The rail lists them on every screen now, so the dashboard was a second
+ * and worse copy of it with its own sort, its own filter and its own row
+ * design for the same object.
  *
  * They share a component because moving between them must not lose what the
  * recruiter is holding — a half-uploaded pile of two hundred CVs is not
@@ -36,7 +40,9 @@ const POLL_MS = 2500
    progress bar has something real to report. Matches TRIAGE_UPLOAD_CHUNK. */
 const CHUNK = 40
 
-export default function TriageTab({ balance, onBalanceChanged, onBuy, admin, opens }) {
+export default function TriageTab({
+  balance, onBalanceChanged, onBuy, admin, opens, folders = [], setFolders = () => {},
+}) {
   /*
    * null is the list. { id } is one Triage — and { id: null } is one that is
    * being started and has not been written down yet, which is why this is an
@@ -63,466 +69,33 @@ export default function TriageTab({ balance, onBalanceChanged, onBuy, admin, ope
     if (opens) setOpen({ id: opens.id })
   }, [opens?.at])
 
-  return open
-    ? (
-      <TriageWorkspace
-        id={open.id}
-        /* The live figure from the wallet, so a purchase made in the Billing
-           dialog over this screen reaches it. Billing opens as an overlay and
-           this component is never unmounted, so without something changing
-           underneath it the builder would keep the readiness it fetched when
-           the Triage was opened. */
-        balance={balance}
-        onClose={() => setOpen(null)}
-        onBalanceChanged={onBalanceChanged}
-        onBuy={onBuy}
-        admin={admin}
-      />
-    )
-    : (
-      <TriageDashboard
-        balance={balance}
-        onOpen={(id = null) => setOpen({ id })}
-        onBalanceChanged={onBalanceChanged}
-        onBuy={onBuy}
-        admin={admin}
-      />
-    )
-}
-
-// ------------------------------------------------------------- dashboard ---
-
-/* The same five orderings Folders offers, so one list does not sort by rules
-   the other has never heard of. "Size" is the CV count here and the candidate
-   count there; both run in each direction. */
-const TRIAGE_SORTS = [
-  ['recent', 'Newest first'],
-  ['oldest', 'Oldest first'],
-  ['size', 'Most CVs'],
-  ['smallest', 'Fewest CVs'],
-  ['name', 'Name, A to Z'],
-]
-
-/*
- * The statuses a Triage actually has, in the order they happen.
- *
- * Read off the CHECK constraint on triages.status rather than invented for this
- * menu: a filter offering a state the column cannot hold is a filter that
- * always returns nothing. 'ready' and 'completed' are separate rows in the
- * database and separate words on the card, so they are separate here too.
- */
-const TRIAGE_STATUSES = [
-  ['all', 'Any status'],
-  ['draft', 'Draft'],
-  ['processing', 'Processing'],
-  /* The words the rows use, not the words the column uses. A menu offering
-     "Ready" and "Failed" beside a list of pills reading "Partially analysed"
-     and "Needs attention" asks the recruiter to work out that they are the same
-     thing; see TriageStatus, which is where these two came from. */
-  ['ready', 'Partially analysed'],
-  ['completed', 'Completed'],
-  ['failed', 'Needs attention'],
-]
-
-function TriageDashboard({ balance, onOpen, onBalanceChanged, onBuy, admin }) {
-  const [data, setData] = useState(null)
-  const [error, setError] = useState('')
-  const [busy, setBusy] = useState(false)
-  /* Search and order, exactly as Folders does them — same controls, same place,
-     same words. A recruiter who has learned one list has learned both. */
-  const [query, setQuery] = useState('')
-  const [sort, setSort] = useState('recent')
-  /* Status is a filter rather than an ordering, so it is its own control and
-     its own menu — folding it into the sort list would offer "Draft" and
-     "Newest first" as alternatives to each other, which they are not. */
-  const [status, setStatus] = useState('all')
   /*
-   * Which menu is open, or null — one piece of state rather than two flags.
+   * There is no list screen. The rail is the list.
    *
-   * Two booleans let both popovers be open at once, overlapping each other in
-   * the same corner of the toolbar. One value cannot: opening either closes the
-   * other by construction, which is what a reader expects of two buttons that
-   * sit side by side and drop the same kind of panel.
-   */
-  const [menu, setMenu] = useState(null)
-  const sortOpen = menu === 'sort'
-  const statusOpen = menu === 'status'
-  const toggleMenu = (which) => setMenu((was) => (was === which ? null : which))
-  /* Ticking several and deleting them in one go — the same module Folders
-     uses, so the two lists behave identically. */
-  const [bulkNote, setBulkNote] = useState('')
-
-  const load = useCallback(async () => {
-    try {
-      setData(await get('/api/hr/triages', 'recruiter'))
-      setError('')
-      /* The rail's count comes from the account payload and this list comes
-         from its own route, so a Triage a colleague deleted since sign-in left
-         the two disagreeing in the same viewport — four in the pill, three in
-         the list. Refreshing the account alongside the list is what keeps the
-         count a fact about the same moment as the rows. */
-      await onBalanceChanged?.()
-    } catch (err) {
-      setError(err.message)
-    }
-  }, [onBalanceChanged])
-
-  useEffect(() => { load() }, [load])
-
-  /*
-   * A Triage workspace costs nothing, and there is no limit on how many exist.
+   * A dashboard of Triages sat behind this tab, reachable only by a chevron on
+   * the workspace — a second, worse copy of something the rail already shows
+   * on every screen, with its own sort, its own filter and its own row design
+   * for the same object. With the chevron gone it had no way in either.
    *
-   * Capacity is spent on CVs at confirmed launch, never on creating a
-   * workspace, so this always works — even at zero balance. A recruiter with no
-   * capacity meets the purchase gate inside the builder, once they can see how
-   * many CVs they are buying for, rather than a disabled button that explains
-   * nothing.
+   * So arriving at this tab is arriving at a Triage: the one the rail named,
+   * or a new one when nothing was named. That is the only state left, which is
+   * why this returns a workspace unconditionally rather than branching.
    */
-  /*
-   * Opens the builder. Writes nothing.
-   *
-   * This used to POST a draft, so pressing + and changing your mind left an
-   * "Untitled Triage" in the list for the whole organization to wonder about.
-   * The row is created by the first thing typed into the builder — see
-   * ensureId there.
-   */
-  function create() {
-    setError('')
-    onOpen(null)
-  }
-
-  async function remove(id) {
-    try {
-      await del(`/api/hr/triage/${id}`, 'recruiter')
-      await load()
-      await onBalanceChanged?.()
-    } catch (err) {
-      setError(err.message)
-    }
-  }
-
-  /**
-   * Several at once.
-   *
-   * One request each, against the route a single delete uses, so a bulk delete
-   * cannot be permitted where a single one would not be. Capacity is refreshed
-   * afterwards because deleting a launched Triage can hand CVs back.
-   */
-  async function removeSelected(picked, done) {
-    setBusy(true)
-    setError('')
-    setBulkNote('')
-
-    const ids = [...picked]
-    const failed = []
-    for (const id of ids) {
-      try {
-        await del(`/api/hr/triage/${id}`, 'recruiter')
-      } catch (err) {
-        failed.push(err.message)
-      }
-    }
-
-    await load()
-    await onBalanceChanged?.()
-    setBusy(false)
-    done()
-
-    if (failed.length) setError(`${failed.length} of ${ids.length} could not be deleted. ${failed[0]}`)
-    else setBulkNote(`${ids.length} Triage${ids.length === 1 ? '' : 's'} deleted.`)
-  }
-
-  /*
-   * What the list shows, worked out before the early returns below.
-   *
-   * useSelection is a hook, and a hook after a conditional return is a hook
-   * that stops being called the moment the page is loading — so the rows it
-   * needs have to be in hand up here, whether or not there are any yet.
-   */
-  const loaded = data?.triages ?? []
-
-  /* Both at once, and in this order: narrowing by name and then by state is the
-     same list as narrowing by state and then by name, and doing it in one pass
-     means neither control can quietly override the other. */
-  const wanted = query.trim().toLowerCase()
-  const filtered = loaded.filter((t) => {
-    if (status !== 'all' && t.status !== status) return false
-    if (!wanted) return true
-    return (t.title || 'Untitled Triage').toLowerCase().includes(wanted)
-  })
-
-  /* On a copy: `data.triages` is what the server sent, and ordering it in place
-     would reorder it for anything else reading the same array. */
-  const shown = [...filtered].sort((a, b) => {
-    if (sort === 'name') return (a.title || '').localeCompare(b.title || '')
-    if (sort === 'size') return b.counts.total - a.counts.total
-    if (sort === 'smallest') return a.counts.total - b.counts.total
-    if (sort === 'oldest') return new Date(a.createdAt) - new Date(b.createdAt)
-    return new Date(b.createdAt) - new Date(a.createdAt)
-  })
-
-  /* Which controls are actually narrowing the list, so the empty state can
-     blame the right one. Asked separately, because "your search or filters" in
-     front of an empty search box names something the recruiter never typed. */
-  const searching = wanted !== ''
-  const narrowed = status !== 'all'
-
-  function clearFilters() {
-    setQuery('')
-    setStatus('all')
-  }
-
-  /* Over the rows actually on screen: "Select all" means all of what the search
-     has left, not all of what the server holds. */
-  const selection = useSelection(shown.map((triage) => triage.id))
-
-  if (error && !data) return <p className="alert alert-error">{error}</p>
-  if (!data) return <p className="muted">Loading your Triages…</p>
-
-  /*
-   * The wallet first, the list payload second.
-   *
-   * These were the other way round, and the list payload is fetched once when
-   * the dashboard mounts. Billing opens as an overlay rather than a page, so an
-   * admin who bought capacity from the banner came back to a screen still
-   * holding the zero it loaded with — banner and all — and the obvious next
-   * move was to buy again. The prop is refetched by the workspace whenever the
-   * wallet changes, so it is the one that can be right.
-   */
-  const remaining = balance ?? data.balance ?? 0
-
-  /* The dashboard is the Folders page with Triages in it: same container
-     rhythm, same bar, same rows. .triage-dashboard carries the only difference,
-     which is that the other Triage screens are laid out more loosely. */
   return (
-    <div className="triage-page triage-dashboard">
-      {/* Above the title and the full width of the content, which is where a
-          banner belongs. Shown at zero only — see TriageBalance. */}
-      <TriageBalance balance={remaining} admin={admin} onBuy={onBuy} />
-
-      {/*
-        The same bar Folders carries: what you are looking at on the left, and
-        one + on the right to make another. Identical gesture, identical place,
-        identical control — there is no reason for two ways to add a thing.
-      */}
-      <div className="drive-bar">
-        <nav className="drive-crumbs" aria-label="Triage">
-          <span className="drive-crumb drive-crumb-here">Triage</span>
-        </nav>
-
-        {/*
-          No capacity figure here.
-
-          It used to read "137 CVs of capacity left" on this bar and again in
-          the builder, which turns every visit into a glance at a meter going
-          down. Capacity is a thing you buy and then stop thinking about: what a
-          recruiter needs to know is what the launch in front of them costs,
-          which the builder's summary states, and whether they have run out,
-          which the banner above says once and then stops.
-
-          The figure is not hidden — Billing and Usage are the screens for
-          looking at what the organization holds.
-        */}
-
-        <button
-          type="button"
-          className="drive-add"
-          aria-label="New Triage"
-          title="New Triage"
-          onClick={create}
-        >
-          <svg
-            width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-            strokeWidth="2" strokeLinecap="round" aria-hidden="true" focusable="false"
-          >
-            <path d="M12 5v14M5 12h14" />
-          </svg>
-        </button>
-      </div>
-
-      <p className="muted triage-lede">
-        Sort through the CVs you have already received for a role. Upload the job description
-        and the applicant CVs, and Cursus prioritises the whole batch before progressively
-        analysing and scoring them, so you read the strongest matches first. Create as many
-        Triage workspaces as you need; you only use capacity for the CVs you submit.
-      </p>
-
-      {/* One line for both: a failure and a confirmation are never both the
-          latest thing that happened. */}
-      <StatusNotice
-        error={error}
-        notice={bulkNote}
-        onDismiss={() => { setError(''); setBulkNote('') }}
-      />
-
-      {/* Hidden while there is nothing to search — a control with no purpose is
-          just another thing on the page. Same rule as Folders. */}
-      {data.triages.length > 1 && (
-        <div className="list-tools">
-          <div className="folder-search">
-            <svg
-              className="folder-search-icon" width="15" height="15" viewBox="0 0 24 24"
-              fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"
-              aria-hidden="true" focusable="false"
-            >
-              <circle cx="11" cy="11" r="7" />
-              <path d="m20 20-3.5-3.5" />
-            </svg>
-            <input
-              type="search"
-              value={query}
-              placeholder="Search Triages"
-              aria-label="Search Triages"
-              onChange={(event) => setQuery(event.target.value)}
-            />
-          </div>
-
-          <div className="list-sort">
-            <button
-              type="button"
-              className="btn btn-secondary btn-small list-sort-toggle"
-              aria-expanded={sortOpen}
-              aria-haspopup="true"
-              onClick={() => toggleMenu('sort')}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                strokeWidth="2" strokeLinecap="round" aria-hidden="true" focusable="false">
-                <path d="M4 6h16M7 12h10M10 18h4" />
-              </svg>
-              {TRIAGE_SORTS.find(([key]) => key === sort)?.[1]}
-            </button>
-
-            {sortOpen && (
-              <div className="list-sort-menu">
-                {TRIAGE_SORTS.map(([key, label]) => (
-                  <button
-                    key={key}
-                    type="button"
-                    className={key === sort ? 'list-sort-item list-sort-item-on' : 'list-sort-item'}
-                    onClick={() => { setSort(key); setMenu(null) }}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/*
-            Status, beside the ordering and built the same way.
-
-            The same popover as the sort, because it answers the same kind of
-            question about the same list and a second style of menu on one bar
-            would be a second thing to learn. It names the current choice on the
-            button for the same reason the sort does: a list that has been
-            narrowed should say so, or it looks as though rows have gone
-            missing.
-          */}
-          <div className="list-sort">
-            <button
-              type="button"
-              className={status === 'all'
-                ? 'btn btn-secondary btn-small list-sort-toggle'
-                : 'btn btn-secondary btn-small list-sort-toggle list-sort-toggle-on'}
-              aria-expanded={statusOpen}
-              aria-haspopup="true"
-              onClick={() => toggleMenu('status')}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-                aria-hidden="true" focusable="false">
-                <path d="M3 5h18l-7 8v6l-4 2v-8Z" />
-              </svg>
-              {TRIAGE_STATUSES.find(([key]) => key === status)?.[1]}
-            </button>
-
-            {statusOpen && (
-              <div className="list-sort-menu">
-                {TRIAGE_STATUSES.map(([key, label]) => (
-                  <button
-                    key={key}
-                    type="button"
-                    className={key === status ? 'list-sort-item list-sort-item-on' : 'list-sort-item'}
-                    onClick={() => { setStatus(key); setMenu(null) }}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Ticking several, to delete them in one go. */}
-          <SelectButton
-            selecting={selection.selecting}
-            onOpen={() => { selection.open(); setBulkNote('') }}
-            onClose={selection.close}
-          />
-        </div>
-      )}
-
-      {selection.selecting && (
-        <SelectionBar
-          count={selection.count}
-          total={shown.length}
-          noun="Triage"
-          nounPlural="Triages"
-          onAll={selection.all}
-          onNone={selection.none}
-          onDelete={() => removeSelected(selection.picked, selection.close)}
-          busy={busy}
-        />
-      )}
-
-
-      {data.triages.length === 0 ? (
-        <div className="empty">
-          <h2>No Triages yet</h2>
-          <p className="muted">
-            Create as many as you need; you only use capacity for the CVs you submit for
-            processing.
-          </p>
-          <button type="button" className="btn btn-primary" onClick={create}>
-            New Triage
-          </button>
-        </div>
-      ) : (
-        <ul className="drive-items">
-          {/*
-            Nothing matched, and a way back.
-
-            The sentence names both controls when both are narrowing, because
-            "no Triage matches Sales" in front of a list filtered to Drafts
-            explains half of why the screen is empty. The button clears
-            everything at once: the alternative is a person deleting their own
-            search text one character at a time wondering where their work went.
-          */}
-          {shown.length === 0 && (
-            <li className="muted folder-search-empty">
-              {searching && narrowed && <>No Triage matches your search and filters. </>}
-              {searching && !narrowed && <>No Triage matches “{query}”. </>}
-              {!searching && narrowed && (
-                <>No Triage is {TRIAGE_STATUSES.find(([key]) => key === status)?.[1].toLowerCase()}. </>
-              )}
-              <button type="button" className="link-button" onClick={clearFilters}>
-                Clear
-              </button>
-            </li>
-          )}
-          {shown.map((triage) => (
-            <TriageRow
-              key={triage.id}
-              triage={triage}
-              selecting={selection.selecting}
-              ticked={selection.isPicked(triage.id)}
-              onTick={() => selection.toggle(triage.id)}
-              onOpen={() => onOpen(triage.id)}
-              onDelete={() => remove(triage.id)}
-            />
-          ))}
-        </ul>
-      )}
-    </div>
+    <TriageWorkspace
+      id={open?.id ?? null}
+      /* The live figure from the wallet, so a purchase made in the Billing
+         dialog over this screen reaches it. Billing opens as an overlay and
+         this component is never unmounted, so without something changing
+         underneath it the builder would keep the readiness it fetched when the
+         Triage was opened. */
+      balance={balance}
+      onBalanceChanged={onBalanceChanged}
+      folders={folders}
+      setFolders={setFolders}
+      onBuy={onBuy}
+      admin={admin}
+    />
   )
 }
 
@@ -571,88 +144,6 @@ function TriageBalance({ balance, admin, onBuy }) {
   )
 }
 
-/** A stack of paper — the Triage equivalent of the folder tab. */
-function TriageIcon() {
-  return (
-    <svg
-      className="drive-icon" viewBox="0 0 24 24" width="22" height="22"
-      fill="none" stroke="currentColor" strokeWidth="1.6"
-      strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false"
-    >
-      <path d="M8 3h6l4 4v9a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z" />
-      <path d="M14 3v4h4" />
-      <path d="M4 8v11a2 2 0 0 0 2 2h9" />
-    </svg>
-  )
-}
-
-/*
- * A Triage row IS a folder row.
- *
- * It was a card with its own open-button, its own delete-and-confirm pair and
- * its own spacing, sitting one screen away from a list of folders that is the
- * same idea — a named container of candidates you open. Two treatments for one
- * concept is the thing that makes a product feel assembled, so this now uses
- * the drive row wholesale: same icon column, same name-over-meta, same owner
- * column, same actions behind the same dots.
- */
-function TriageRow({ triage, onOpen, onDelete, selecting, ticked, onTick }) {
-  const { counts } = triage
-  const name = triage.title || 'Untitled Triage'
-  /* While selecting, the row ticks instead of opening — the same rule Folders
-     follows, from the same module. */
-  const act = selecting ? onTick : onOpen
-
-  return (
-    <li
-      className={[
-        'drive-item drive-item-triage',
-        selecting ? 'drive-item-selecting' : '',
-        ticked ? 'drive-item-ticked' : '',
-      ].filter(Boolean).join(' ')}
-      role={selecting ? 'checkbox' : 'button'}
-      aria-checked={selecting ? ticked : undefined}
-      tabIndex={0}
-      onClick={act}
-      onKeyDown={(event) => {
-        /* Only what lands on the row itself — the corner has its own menu. */
-        if (event.target !== event.currentTarget) return
-        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); act() }
-      }}
-    >
-      {selecting ? <RowTick checked={ticked} /> : <TriageIcon />}
-
-      <span className="drive-item-name">
-        <strong>{name}</strong>
-        <span className="muted">
-          {[
-            `${counts.total} CV${counts.total === 1 ? '' : 's'}`,
-            new Date(triage.createdAt).toLocaleDateString(DATE_LOCALE, { dateStyle: 'medium' }),
-          ].filter(Boolean).join(' · ')}
-        </span>
-      </span>
-
-      <TriageStatus triage={triage} />
-
-      <span className="drive-item-owner muted">{triage.author ?? 'A colleague'}</span>
-
-      <span
-        className="drive-item-menu"
-        onClick={(event) => event.stopPropagation()}
-        onKeyDown={(event) => event.stopPropagation()}
-      >
-        <PopMenu
-          label={`Actions for ${name}`}
-          items={[
-            { key: 'open', label: 'Open', onSelect: onOpen },
-            { key: 'delete', label: 'Delete', danger: true, onSelect: onDelete },
-          ]}
-        />
-      </span>
-    </li>
-  )
-}
-
 /**
  * The status, said honestly.
  *
@@ -694,7 +185,9 @@ function TriageStatus({ triage }) {
  * remounted at the moment of saving — remounting mid-edit would throw away the
  * text being typed and the caret with it.
  */
-function TriageWorkspace({ id: initialId, balance, onClose, onBalanceChanged, onBuy, admin }) {
+function TriageWorkspace({
+  id: initialId, balance, onBalanceChanged, onBuy, admin, folders = [], setFolders = () => {},
+}) {
   const [id, setId] = useState(initialId)
   const [state, setState] = useState(null)
   const [error, setError] = useState('')
@@ -722,9 +215,10 @@ function TriageWorkspace({ id: initialId, balance, onClose, onBalanceChanged, on
   useEffect(() => { load() }, [load, balance])
 
   if (error && !state) {
+    /* No way back drawn here: the rail is on screen beside this and lists every
+       Triage, so a failed load is one click from another one. */
     return (
       <div className="triage-page">
-        <BackLink onClose={onClose} />
         <p className="alert alert-error">{error}</p>
       </div>
     )
@@ -736,8 +230,9 @@ function TriageWorkspace({ id: initialId, balance, onClose, onBalanceChanged, on
       <TriageResults
         id={id}
         initial={state}
-        onClose={onClose}
         onBalanceChanged={onBalanceChanged}
+        folders={folders}
+        setFolders={setFolders}
       />
     )
     : (
@@ -746,26 +241,11 @@ function TriageWorkspace({ id: initialId, balance, onClose, onBalanceChanged, on
         onCreated={setId}
         state={state}
         reload={load}
-        onClose={onClose}
         onBalanceChanged={onBalanceChanged}
         onBuy={onBuy}
         admin={admin}
       />
     )
-}
-
-function BackLink({ onClose }) {
-  return (
-    <button
-      type="button"
-      className="btn btn-quiet triage-back"
-      onClick={onClose}
-      aria-label="All Triages"
-      title="All Triages"
-    >
-      <span aria-hidden="true">‹</span>
-    </button>
-  )
 }
 
 // --------------------------------------------------------------- builder ---
@@ -777,7 +257,7 @@ function BackLink({ onClose }) {
  * required rather than decorative: Section 2.4 wants the JD, the valid count,
  * the excluded count and the price all on screen before a credit moves.
  */
-function TriageBuilder({ id, onCreated, state, reload, onClose, onBalanceChanged, onBuy, admin }) {
+function TriageBuilder({ id, onCreated, state, reload, onBalanceChanged, onBuy, admin }) {
   const [jd, setJd] = useState(state.triage.jd ?? '')
   const [title, setTitle] = useState(state.triage.title ?? '')
   const [saving, setSaving] = useState(false)
@@ -787,7 +267,6 @@ function TriageBuilder({ id, onCreated, state, reload, onClose, onBalanceChanged
   const [launching, setLaunching] = useState(false)
 
   const fileInput = useRef(null)
-  const folderInput = useRef(null)
   const jdInput = useRef(null)
 
   /**
@@ -982,7 +461,6 @@ async function filesFromDrop(dataTransfer) {
     } finally {
       setUpload((was) => (was ? { ...was, finished: true } : was))
       if (fileInput.current) fileInput.current.value = ''
-      if (folderInput.current) folderInput.current.value = ''
     }
   }
 
@@ -1055,7 +533,10 @@ async function filesFromDrop(dataTransfer) {
         <h3>Step 1 · The role</h3>
 
         <label className="field">
-          <span className="field-label">Name this Triage</span>
+          {/* "Job title", not "Name this Triage". It is the same words the
+              recruiter will type into a job board, and step 3 reads it back
+              under the same label rather than translating it into "Role". */}
+          <span className="field-label">Job title</span>
           <input
             type="text"
             value={title}
@@ -1065,38 +546,44 @@ async function filesFromDrop(dataTransfer) {
           />
         </label>
 
-        <label className="field">
-          <span className="field-label">Job description</span>
+        {/*
+          A div, not a label, because the paperclip sits inside it now: a button
+          inside a <label> is a button that also focuses the field it sits on,
+          so pressing it opened the picker AND put a caret in the textarea.
+          htmlFor does the same binding without that.
+        */}
+        <div className="field">
+          <div className="field-label-row triage-jd-head">
+            <label className="field-label" htmlFor="triage-jd">Job description</label>
+            {/* The same paperclip the composer uses, on the line that names the
+                field rather than stranded under a tall textarea where it read
+                as belonging to whatever came next. */}
+            <input
+              ref={jdInput}
+              type="file"
+              accept=".pdf,.docx"
+              className="visually-hidden"
+              onChange={(event) => attachJd(event.target.files?.[0])}
+            />
+            <button
+              type="button"
+              className="icon-button attach-button"
+              onClick={() => jdInput.current?.click()}
+              aria-label="Attach the job description as a file"
+              title="Attach the job description as a file"
+            >
+              <PaperclipIcon />
+            </button>
+            {saving && <span className="muted">Saving…</span>}
+          </div>
           <textarea
+            id="triage-jd"
             rows={8}
             value={jd}
             placeholder="Paste the job description, or attach it as a PDF or Word file…"
             onChange={(event) => setJd(event.target.value)}
             onBlur={() => saveJd()}
           />
-        </label>
-
-        <div className="triage-jd-actions">
-          <input
-            ref={jdInput}
-            type="file"
-            accept=".pdf,.docx"
-            className="visually-hidden"
-            onChange={(event) => attachJd(event.target.files?.[0])}
-          />
-          {/* The same paperclip the composer uses. An attachment control that is
-              a word here and an icon there is two things to learn for one
-              gesture. */}
-          <button
-            type="button"
-            className="icon-button attach-button"
-            onClick={() => jdInput.current?.click()}
-            aria-label="Attach the job description as a file"
-            title="Attach the job description as a file"
-          >
-            <PaperclipIcon />
-          </button>
-          {saving && <span className="muted">Saving…</span>}
         </div>
       </section>
 
@@ -1113,27 +600,6 @@ async function filesFromDrop(dataTransfer) {
           type="file"
           multiple
           accept=".pdf,.docx"
-          className="visually-hidden"
-          onChange={(event) => addFiles(event.target.files ?? [])}
-        />
-        {/*
-          The same control pointed at a directory.
-
-          A separate input because `webkitdirectory` is a property of the picker
-          and not of the pick: one input cannot offer both, and a recruiter with
-          a folder of applications should not have to open it and select five
-          hundred files to hand over the folder they already have.
-
-          `accept` is deliberately absent — it is advisory at best on a
-          directory pick and browsers differ on whether they honour it — so the
-          filtering that matters is done on what comes back, in addFiles.
-        */}
-        <input
-          ref={folderInput}
-          type="file"
-          multiple
-          webkitdirectory=""
-          directory=""
           className="visually-hidden"
           onChange={(event) => addFiles(event.target.files ?? [])}
         />
@@ -1157,21 +623,19 @@ async function filesFromDrop(dataTransfer) {
             filesFromDrop(event.dataTransfer).then(addFiles)
           }}
         >
-          <strong>Drop the CVs or a folder here, or click to browse</strong>
-          <span className="muted">PDF or DOCX. Select them all at once</span>
-
           {/*
-            Its own control, because clicking the zone opens the file picker and
-            a folder needs the other one. stopPropagation, or pressing it opens
-            both pickers — the zone underneath is itself a button.
+            One control, whichever shape the pile arrives in.
+
+            There was a second button here — "Choose a folder instead" — because
+            `webkitdirectory` is a property of the PICKER and not of the pick, so
+            no single file input can offer both. Dropping does not have that
+            limitation: filesFromDrop walks directory entries, so a folder
+            dragged onto this zone is read whole. The button is gone and the
+            copy says which gesture does what, rather than making the recruiter
+            choose between two controls before they know the difference.
           */}
-          <button
-            type="button"
-            className="btn btn-quiet btn-small triage-folder-pick"
-            onClick={(event) => { event.stopPropagation(); folderInput.current?.click() }}
-          >
-            Choose a folder instead
-          </button>
+          <strong>Drop the CVs or a folder here, or click to browse</strong>
+          <span className="muted">PDF or DOCX. A whole folder can be dropped in</span>
         </div>
 
         {upload && !upload.finished && (
@@ -1218,7 +682,7 @@ async function filesFromDrop(dataTransfer) {
 
         <dl className="triage-summary">
           <div>
-            <dt>Role</dt>
+            <dt>Job title</dt>
             <dd>{triage.title || <span className="muted">Not named yet</span>}</dd>
           </div>
           <div>
@@ -1312,12 +776,54 @@ async function filesFromDrop(dataTransfer) {
  * for the next tranche — which is the whole progressive design, and the reason
  * this component never needs to know that a tranche is twenty-five.
  */
-function TriageResults({ id, initial, onClose, onBalanceChanged }) {
+function TriageResults({ id, initial, onBalanceChanged, folders = [], setFolders }) {
   const [state, setState] = useState(null)
   const [rows, setRows] = useState([])
   const [error, setError] = useState('')
   const [loadingMore, setLoadingMore] = useState(false)
   const [open, setOpen] = useState(null)
+  /* Which applicant is in which folder. The folder LIST itself is the
+     workspace's — passed in — because the rail's count and the Folders tab read
+     the same state, and a folder created here has to appear in both. */
+  const [filed, setFiled] = useState({})
+  /* Which applicant the folder dialog is open for, if any. */
+  const [filing, setFiling] = useState(null)
+
+  async function fileInto(applicantId, folderId) {
+    try {
+      /* Made first, then filed into — the same two steps a search takes, and
+         for the same reason: the create returns the id the file needs, and a
+         failure at either end leaves nothing half-done. */
+      let target = folderId
+      if (folderId === 'new') {
+        const name = prompt('Name the new folder', 'Shortlist')
+        if (name === null || !name.trim()) return
+        const made = await post('/api/hr/folders', { name: name.trim() }, 'recruiter')
+        setFolders(made.folders)
+        target = made.id
+      }
+
+      const data = await post(`/api/hr/folders/${target}/triage-items`, { applicantId }, 'recruiter')
+      if (data.folders) setFolders(data.folders)
+      if (data.filed) setFiled(data.filed)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setFiling(null)
+    }
+  }
+
+  async function unfile(applicantId) {
+    try {
+      const data = await del(`/api/hr/folders/triage-items/${applicantId}`, 'recruiter')
+      if (data.folders) setFolders(data.folders)
+      setFiled(data.filed ?? {})
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setFiling(null)
+    }
+  }
 
   const loaded = rows.length
 
@@ -1337,6 +843,7 @@ function TriageResults({ id, initial, onClose, onBalanceChanged }) {
     try {
       const data = await fetchPage(0, false)
       setState(data)
+      if (data.filed) setFiled(data.filed)
       /* Only the first page is re-read on a poll. Re-fetching everything the
          recruiter has scrolled through would reorder the list under their
          cursor every two and a half seconds. */
@@ -1388,12 +895,27 @@ function TriageResults({ id, initial, onClose, onBalanceChanged }) {
   const states = state?.states ?? initial.states
   const failures = initial.failures ?? []
 
+  /*
+   * How many the button will actually add.
+   *
+   * It said "Show the next 25" whatever was left, so a Triage with 27 analysed
+   * applicants offered 25 more and produced 2 — the one moment the count
+   * matters is the last press, and that is exactly where it was wrong.
+   *
+   * Capped at the page size the server just reported rather than a 25 written
+   * here: the tranche is configurable (TRIAGE_PAGE_SIZE), and a number typed
+   * into the client would be a second opinion about it.
+   */
+  const nextPage = Math.min(
+    state?.pageSize ?? 25,
+    Math.max((state?.total ?? 0) - loaded, 0),
+  )
+
   return (
     <div className="triage-page">
       <header className="triage-head">
         <div>
           <div className="triage-title-row">
-            <BackLink onClose={onClose} />
             <h2>{triage.title || 'Untitled Triage'}</h2>
           </div>
           <p className="muted triage-progress-line">
@@ -1429,6 +951,8 @@ function TriageResults({ id, initial, onClose, onBalanceChanged }) {
                 row={row}
                 triageId={id}
                 onOpen={() => setOpen(row)}
+                folder={filed[row.id] ?? null}
+                onFile={() => setFiling(row.id)}
               />
             ))}
           </ol>
@@ -1441,7 +965,7 @@ function TriageResults({ id, initial, onClose, onBalanceChanged }) {
                 disabled={loadingMore}
                 onClick={showMore}
               >
-                {loadingMore ? 'Loading…' : 'Show the next 25'}
+                {loadingMore ? 'Loading…' : `Show the next ${nextPage}`}
               </button>
             ) : working ? (
               <p className="muted">
@@ -1457,6 +981,19 @@ function TriageResults({ id, initial, onClose, onBalanceChanged }) {
       )}
 
       {failures.length > 0 && <TriageFailures failures={failures} />}
+
+      {filing !== null && (
+        <FolderDialog
+          folders={folders}
+          onPick={(folderId) => fileInto(filing, folderId)}
+          /* Its own prop, not onPick('new') — the dialog calls this one for the
+             "+ New folder…" row, and without it that row did nothing. */
+          onNewFolder={() => fileInto(filing, 'new')}
+          onClose={() => setFiling(null)}
+          inFolderId={filed[filing]?.id ?? null}
+          onRemove={() => unfile(filing)}
+        />
+      )}
 
       {open && (
         <TriageApplicantDialog
@@ -1528,39 +1065,89 @@ function TriageFailures({ failures }) {
 }
 
 /**
- * One applicant.
+ * One applicant, drawn as the card a search draws.
  *
- * The same shape as a Search result card, minus the two things that would be
- * lies here: there is no reveal chip, because nothing is locked — this CV
- * arrived in the recruiter's own inbox — and no activity dot, because an
- * applicant has no Cursus profile whose freshness could be reported.
+ * It used to be its own row — a rank number, a middle column and a score on the
+ * right — which made an applicant look like a different KIND of object from a
+ * candidate. They are the same object seen from two places: somebody a
+ * recruiter is deciding about. So this uses the search card's classes and the
+ * search card's arrangement, and differs only where the difference is real:
+ *
+ *   no reveal chip and no reveal button — nothing is locked, because this CV
+ *   arrived in the recruiter's own inbox rather than out of the marketplace;
+ *
+ *   no activity dot — an applicant has no Cursus profile whose freshness could
+ *   be reported, and a dot that never lights is a column of nothing;
+ *
+ *   no rank number — the list is already in order, which is the same reason the
+ *   search card dropped its own.
+ *
+ * The score keeps the corner it has everywhere else, and the CV download joins
+ * the ⋮ rather than sitting beside the number as a second loud thing.
  */
-function TriageResultCard({ row, triageId, onOpen }) {
+function TriageResultCard({ row, triageId, onOpen, onFile, folder = null }) {
   const band = scoreBand(row.score)
+
+  const menuItems = [
+    onFile && {
+      key: 'folder',
+      label: 'Save in folder',
+      onSelect: () => onFile(),
+    },
+    {
+      key: 'cv',
+      label: 'Download CV',
+      onSelect: () => downloadFile(
+        `/api/hr/triage/${triageId}/applicants/${row.id}/file`,
+        row.fileName,
+      ),
+    },
+  ].filter(Boolean)
 
   return (
     <li className="result">
       <div
-        className="result-main triage-result-main"
+        className="result-main"
         role="button"
         tabIndex={0}
         onClick={onOpen}
         onKeyDown={(event) => {
-          /* Only what lands on the row itself. */
+          /* Only what lands on the row itself — the corner holds its own
+             controls, and a space typed into one of them should not open the
+             applicant underneath. */
           if (event.target !== event.currentTarget) return
           if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onOpen() }
         }}
         title={`Open ${row.name}`}
       >
-        <span className="result-rank">{row.rank}</span>
+        <span className="result-lead">
+          <span className="result-portrait">
+            {/*
+              Initials, always. An applicant has no photograph — a CV is a
+              document, not a profile — so there is no src to pass and the
+              component falls back to the letters, which is what it is for.
+            */}
+            <Avatar firstName={row.name?.split(/\s+/)[0]} lastName={row.name?.split(/\s+/)[1]} />
+          </span>
 
-        <div className="result-identity">
-          <h3>{row.name}</h3>
-          <p className="muted">
-            {[row.location, row.email, row.phone].filter(Boolean).join(' · ') || row.fileName}
-          </p>
+          <div className="result-identity">
+            <h3>
+              <span className="result-name">{row.name}</span>
+            </h3>
+            <p className="muted">
+              {[row.location, row.email, row.phone].filter(Boolean).join(' · ') || row.fileName}
+            </p>
+          </div>
+        </span>
 
-          <div className="result-tags">
+        <div className="result-side">
+          <div className="result-chips">
+            {/* Where they are filed, in the slot the search card keeps for it. */}
+            {folder && (
+              <span className="chip chip-folder" title={`Saved in your ${folder.name} folder`}>
+                {folder.name}
+              </span>
+            )}
             {row.reviewedAt && <span className="chip chip-neutral">Opened</span>}
             {row.analysis.confidence && (
               <span className="chip chip-neutral">{row.analysis.confidence} confidence</span>
@@ -1575,26 +1162,22 @@ function TriageResultCard({ row, triageId, onOpen }) {
             )}
           </div>
 
-          {row.analysis.reasoning && <p className="reasoning-line">{row.analysis.reasoning}</p>}
-        </div>
+          <span className="result-menu" onClick={(event) => event.stopPropagation()}>
+            <PopMenu
+              vertical
+              label={`Actions for ${row.name}`}
+              items={menuItems}
+            />
+          </span>
 
-        <div className="result-side">
           <div className={`score score-${band}`}>
-            <span className="score-value">{row.score}</span>
-            <span className="score-label">{row.analysis.fit ?? 'match'}</span>
+            <span className="score-value">{row.score}%</span>
           </div>
-
-          <button
-            type="button"
-            className="btn btn-secondary btn-small"
-            onClick={(event) => {
-              event.stopPropagation()
-              downloadFile(`/api/hr/triage/${triageId}/applicants/${row.id}/file`, row.fileName)
-            }}
-          >
-            CV
-          </button>
         </div>
+
+        {row.analysis.reasoning && (
+          <p className="reasoning-line triage-reasoning">{row.analysis.reasoning}</p>
+        )}
       </div>
     </li>
   )
@@ -1603,6 +1186,16 @@ function TriageResultCard({ row, triageId, onOpen }) {
 /** The full read on one applicant, over the list rather than instead of it. */
 function TriageApplicantDialog({ row, triageId, onClose }) {
   const { analysis } = row
+  const [view, setView] = useState('profile')
+
+  /* Score only when there is one. An applicant whose deep analysis failed still
+     has a profile worth reading, and a Score tab over an empty panel is a tab
+     that lies about what is behind it. */
+  const TABS = [
+    ['profile', 'Profile'],
+    ...(Number.isFinite(row.score) ? [['score', 'Score']] : []),
+  ]
+  const showing = TABS.some(([key]) => key === view) ? view : 'profile'
 
   useEffect(() => {
     const onKey = (event) => { if (event.key === 'Escape') onClose() }
@@ -1623,54 +1216,136 @@ function TriageApplicantDialog({ row, triageId, onClose }) {
           <button type="button" className="btn btn-quiet" onClick={onClose} aria-label="Close">×</button>
         </header>
 
-        <div className="triage-modal-score">
-          <span className={`score score-${scoreBand(row.score)}`}>
-            <span className="score-value">{row.score}</span>
-            <span className="score-label">{analysis.fit ?? 'match'}</span>
-          </span>
-          <button
-            type="button"
-            className="btn btn-primary btn-small"
-            onClick={() => downloadFile(`/api/hr/triage/${triageId}/applicants/${row.id}/file`, row.fileName)}
-          >
-            Open the CV
-          </button>
+        {/*
+          The same two tabs the candidate profile has, and deliberately not its
+          third.
+
+          A candidate dialog offers Profile, Score and Messages. There is no
+          Messages here and there cannot be: an applicant is a CV somebody sent
+          to this recruiter, not a Cursus profile with an inbox, so a message
+          tab would be a channel with nobody at the other end of it. The two
+          that are real are the two that are here.
+
+          Everything used to be on one scroll: the score, the reasoning, four
+          lists, the evidence and the criteria, above the person's own details.
+          That is the score's thought process, which is what you read when you
+          are interrogating a number, not when you are asking who this is.
+        */}
+        <div
+          className="role-switch dialog-tabs"
+          role="tablist"
+          aria-label="What to read"
+          onKeyDown={(event) => {
+            const step = { ArrowRight: 1, ArrowLeft: -1 }[event.key]
+            if (!step) return
+            event.preventDefault()
+            const here = TABS.findIndex(([key]) => key === showing)
+            setView(TABS[(here + step + TABS.length) % TABS.length][0])
+          }}
+        >
+          {TABS.map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              role="tab"
+              aria-selected={showing === key}
+              id={`applicant-tab-${key}`}
+              aria-controls="applicant-tabpanel"
+              tabIndex={showing === key ? 0 : -1}
+              className={`role-option${showing === key ? ' role-option-on' : ''}`}
+              onClick={() => setView(key)}
+            >
+              {label}
+            </button>
+          ))}
         </div>
 
-        {analysis.reasoning && <p className="triage-modal-reasoning">{analysis.reasoning}</p>}
+        <div
+          id="applicant-tabpanel"
+          role="tabpanel"
+          aria-labelledby={`applicant-tab-${showing}`}
+          tabIndex={0}
+        >
+          {showing === 'profile' ? (
+            <>
+              {/*
+                What is actually known about this person, as labelled rows.
 
-        <TriageList title="Strengths" items={analysis.strengths} tone="hit" />
-        <TriageList title="Gaps" items={analysis.gaps} tone="miss" />
-        <TriageList title="Transferable" items={analysis.transferable} />
-        <TriageList title="Worth asking about" items={analysis.probes} />
+                Everything here was read out of the CV by the parser, so a field
+                it could not find is absent rather than blank: an empty "Phone"
+                row would state that the CV has no phone number on it, which is
+                a claim, and not one this screen can make.
+              */}
+              <dl className="triage-facts">
+                {[
+                  ['Name', row.name],
+                  ['Email', row.email],
+                  ['Phone', row.phone],
+                  ['Location', row.location],
+                  ['CV', row.fileName],
+                  ['Size', formatBytes(row.fileSize)],
+                ].filter(([, value]) => value).map(([label, value]) => (
+                  <div key={label}>
+                    <dt>{label}</dt>
+                    <dd>{value}</dd>
+                  </div>
+                ))}
+              </dl>
 
-        {analysis.evidence?.length > 0 && (
-          <section className="triage-evidence">
-            <h3>Evidence from the CV</h3>
-            <ul>
-              {analysis.evidence.map((item, index) => (
-                <li key={index}>
-                  <strong>{item.claim}</strong>
-                  <q>{item.quote}</q>
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
+              <button
+                type="button"
+                className="btn btn-primary btn-small"
+                onClick={() => downloadFile(`/api/hr/triage/${triageId}/applicants/${row.id}/file`, row.fileName)}
+              >
+                Open the CV
+              </button>
+            </>
+          ) : (
+            <>
+              <div className="triage-modal-score">
+                <span className={`score score-${scoreBand(row.score)}`}>
+                  <span className="score-value">{row.score}</span>
+                  <span className="score-label">{analysis.fit ?? 'match'}</span>
+                </span>
+              </div>
 
-        {analysis.criteria?.length > 0 && (
-          <section className="triage-criteria">
-            <h3>Against the job description</h3>
-            <ul>
-              {analysis.criteria.map((item, index) => (
-                <li key={index} className={item.assessment === 'meets' ? 'criteria-hit' : 'criteria-miss'}>
-                  <span>{item.requirement}</span>
-                  <span className="muted">{item.class === 'must-have' ? 'Required' : 'Preferred'}</span>
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
+              {analysis.reasoning && <p className="triage-modal-reasoning">{analysis.reasoning}</p>}
+
+              <TriageList title="Strengths" items={analysis.strengths} tone="hit" />
+              <TriageList title="Gaps" items={analysis.gaps} tone="miss" />
+              <TriageList title="Transferable" items={analysis.transferable} />
+              <TriageList title="Worth asking about" items={analysis.probes} />
+
+              {analysis.evidence?.length > 0 && (
+                <section className="triage-evidence">
+                  <h3>Evidence from the CV</h3>
+                  <ul>
+                    {analysis.evidence.map((item, index) => (
+                      <li key={index}>
+                        <strong>{item.claim}</strong>
+                        <q>{item.quote}</q>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+
+              {analysis.criteria?.length > 0 && (
+                <section className="triage-criteria">
+                  <h3>Against the job description</h3>
+                  <ul>
+                    {analysis.criteria.map((item, index) => (
+                      <li key={index} className={item.assessment === 'meets' ? 'criteria-hit' : 'criteria-miss'}>
+                        <span>{item.requirement}</span>
+                        <span className="muted">{item.class === 'must-have' ? 'Required' : 'Preferred'}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+            </>
+          )}
+        </div>
       </div>
     </div>
   )

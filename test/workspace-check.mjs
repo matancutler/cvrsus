@@ -392,9 +392,11 @@ check('the "no skills recognised" line is gone',
 check('the activity legend has one key, not two',
   !panel.includes('No sign of them in that time'))
 check('and an inactive candidate gets no mark',
-  panel.includes('activity-dot-none') && !panel.includes("' activity-dot-off'"))
-check('but keeps the space, so the column stays aligned',
-  css.includes('.activity-dot-none{background:none;border:0}'))
+  /if \(!fresh\) return null/.test(panel) && !panel.includes("' activity-dot-off'"),
+  'not an empty placeholder either — .activity-dot carries an inset ring, so a '
+  + 'cleared background still drew a pale circle on every ordinary candidate')
+check('so nothing is left to draw one',
+  !panel.includes('activity-dot-none') && !css.includes('.activity-dot-none'))
 
 section('The composer asks for one thing')
 check('the optional steer is gone', !hero.includes('composer-instruction"'))
@@ -425,38 +427,43 @@ check('the thread payload carries no photo filename',
   || read('../server/src/workspace.js').includes('const { name, first_name, last_name, photo_name, ...rest } = thread'),
   'the filename identifies someone on its own; a boolean is all the avatar needs')
 
-section('Several rows at once, the same way on both lists')
+section('Several rows at once, on the list that has rows')
+
 /*
- * Folders and Triage are the same list of the same shape, so selection is one
- * module used twice rather than two that happen to agree today. What is checked
- * here is the part a second implementation would get subtly different: that the
- * tick REPLACES the row icon instead of adding a column — otherwise opening
- * select mode shoves every name sideways — and that a ticked row does not also
- * open.
+ * This used to say "the same way on BOTH lists".
+ *
+ * Triage had a dashboard — a list of every Triage the organization had run,
+ * with its own search, its own sort and the same tick-and-delete machinery
+ * Folders uses. It is gone: the rail lists the Triages on every screen, so the
+ * dashboard was a second and worse copy of it, and once the chevron that
+ * reached it was removed it had no way in either.
+ *
+ * What survives is the half that still has a list. The tick REPLACES the row
+ * icon rather than adding a column — otherwise opening select mode shoves
+ * every name sideways — and a ticked row does not also open.
  */
 const triageTab = read('../client/src/components/TriageTab.jsx')
 const listSelect = read('../client/src/components/ListSelect.jsx')
 
-check('one selection module, imported by both lists',
-  /from '\.\.\/components\/ListSelect\.jsx'/.test(panel)
-  && /from '\.\/ListSelect\.jsx'/.test(triageTab))
+check('Folders uses the shared selection module',
+  /from '\.\.\/components\/ListSelect\.jsx'/.test(panel))
+check('and Triage no longer has a list to select in',
+  !/from '\.\/ListSelect\.jsx'/.test(triageTab)
+  && !/function TriageDashboard/.test(triageTab),
+  'the rail is the list now')
 check('the tick takes the icon’s place rather than a column of its own',
-  /selection\.selecting \? <RowTick[\s\S]{0,40}: <FolderIcon/.test(panel)
-  && /selecting \? <RowTick[\s\S]{0,40}: <TriageIcon/.test(triageTab))
+  /selection\.selecting \? <RowTick[\s\S]{0,40}: <FolderIcon/.test(panel))
 check('so no row is given an extra grid track while selecting',
   !/\.drive-item-selecting\{[^}]*grid-template-columns/.test(css))
 check('a ticked row ticks instead of opening',
-  /selection\.selecting \? selection\.toggle\(folder\.id\) : setOpenFolder/.test(panel)
-  && /const act = selecting \? onTick : onOpen/.test(triageTab))
+  /selection\.selecting \? selection\.toggle\(folder\.id\) : setOpenFolder/.test(panel))
 check('and says so to a screen reader',
-  (panel.match(/aria-checked=/g) ?? []).length >= 1
-  && (triageTab.match(/aria-checked=/g) ?? []).length >= 1)
+  (panel.match(/aria-checked=/g) ?? []).length >= 1)
 check('deleting several asks first, by number and by name',
   /Delete \{things\}\?/.test(listSelect),
   'the one thing this control makes easy is destroying several things at once')
 check('and each row is deleted by the route a single delete uses',
-  /del\(`\/api\/hr\/folders\/\$\{id\}`/.test(panel)
-  && /del\(`\/api\/hr\/triage\/\$\{id\}`/.test(triageTab),
+  /del\(`\/api\/hr\/folders\/\$\{id\}`/.test(panel),
   'a bulk path with its own route is a bulk path with its own permission bugs')
 check('a selection cannot outlive the rows it points at',
   /const present = new Set\(ids\)/.test(listSelect),
@@ -472,21 +479,27 @@ check('the builder counts its steps out loud',
     .every((heading) => triageTab.includes(`<h3>${heading}</h3>`)))
 
 /*
- * And a folder is a way of handing over CVs.
+ * And a folder is a way of handing over CVs — through the one control.
  *
- * Applications arrive in a directory, not as a selection — and there were two
- * ways for that to go nowhere: the file picker cannot be told to take one, and
+ * Applications arrive in a directory, not as a selection, and
  * `dataTransfer.files` is empty when a folder is dropped, so the most natural
- * gesture on a dropzone did nothing at all. Both are answered: a second input
- * that asks for a directory, and a walk of the entries when something is
- * dropped.
+ * gesture on a dropzone did nothing at all. That is answered by walking the
+ * entries.
+ *
+ * There was also a second button, "Choose a folder instead", because
+ * `webkitdirectory` is a property of the PICKER and not of the pick — no single
+ * file input can offer both. It is gone: two controls to choose between before
+ * you know the difference is worse than one that reads a dropped folder whole.
  */
-check('a folder can be picked',
-  /webkitdirectory=""/.test(triageTab)
-  && /Choose a folder instead/.test(triageTab))
-check('and the picker it opens is not the other one',
-  /event\.stopPropagation\(\); folderInput\.current\?\.click\(\)/.test(triageTab),
-  'the dropzone underneath is itself a button, and would open the file picker too')
+/* Matched against code, not prose: the comment above the dropzone explains why
+   the second control went, and names it. */
+check('there is one control, not a file button and a folder button',
+  !/triage-folder-pick/.test(triageTab)
+  && !/folderInput\.current/.test(triageTab)
+  && !/webkitdirectory=""/.test(triageTab))
+check('and the zone says a folder can be dropped on it',
+  /Drop the CVs or a folder here/.test(triageTab)
+  && /A whole folder can be dropped in/.test(triageTab))
 check('a dropped folder is walked rather than ignored',
   /webkitGetAsEntry\(\)/.test(triageTab)
   && /filesFromDrop\(event\.dataTransfer\)/.test(triageTab),
@@ -526,17 +539,18 @@ check('the folder carries it back out, named and dated',
  * stored for this candidate is all present; nothing is recomputed.
  */
 /*
- * And the row shows it, nought included. `item.score && …` would hide exactly
- * the candidate a recruiter most wants to spot in a shortlist — the one who
- * matched nothing — so the test is for a finite number rather than a truthy
- * one, and the cell is rendered either way so the grid does not shift.
+ * And the card shows it, nought included.
+ *
+ * The folder row used to draw its own score cell, guarded by
+ * `Number.isFinite(item.score)` so that a candidate who matched nothing — the
+ * one a recruiter most wants to spot in a shortlist — was not hidden by a
+ * truthiness test. The row is the search card now, so the guard that matters
+ * is the card's: it prints `result.score` unconditionally, and the adapter
+ * hands it `item.score` whatever that is.
  */
-check('the folder row carries the score, and nought is a score',
-  /Number\.isFinite\(item\.score\) && \(/.test(panel)
-  && /className="drive-item-score"/.test(panel))
-check('with the cell present even when there is nothing to put in it',
-  /<span className="drive-item-score">\s*\{Number\.isFinite/.test(panel),
-  'a disappearing cell drags the next column left on that row alone')
+check('a filed candidate keeps the score they were filed with',
+  /score: item\.score,/.test(panel)
+  && /<span className="score-value">\{result\.score\}%<\/span>/.test(panel))
 
 check('a row saved before the snapshot recovers its reading',
   /function recoveredReading\(candidateId, folderId\)/.test(workspace)
@@ -546,10 +560,16 @@ check('and the dialog says it is a snapshot, not a live ranking',
   /As it stood on/.test(panel) && /may place them differently/.test(panel),
   'a stale number shown as though it were current is the more misleading of the two')
 
-check('pressing + on Triage writes nothing',
-  /function create\(\) \{[\s\S]{0,200}onOpen\(null\)/.test(triageTab)
-  && !/function create\(\) \{[\s\S]{0,200}post\('\/api\/hr\/triage'/.test(triageTab),
-  'it used to POST a draft, so opening the screen and leaving added a row to everyone’s list')
+/*
+ * The + that this described lived on the Triage dashboard, which is gone. The
+ * rule it protected has not: starting a Triage must not write a row, or opening
+ * the screen and leaving would add one to everyone's list. The + is the rail's
+ * "+ New → + Triage" now, and it opens the builder with no id at all.
+ */
+check('starting a Triage writes nothing until something is typed',
+  !/post\('\/api\/hr\/triage'/.test(read('../client/src/pages/HrPanel.jsx').slice(
+    0, read('../client/src/pages/HrPanel.jsx').indexOf('function SearchTab'))),
+  'the rail opens the builder; the row is created by the first thing written into it')
 check('the row is created by the first thing written into the builder',
   /async function ensureId\(\)/.test(triageTab)
   && /if \(idRef\.current\) return idRef\.current/.test(triageTab))
@@ -667,7 +687,12 @@ check('the folder line is a control, not a statement',
   + 'the one moment a recruiter is most likely to want a different folder')
 check('and pressing it opens the folder dialog',
   /\{filing !== null && \(\s*\n\s*<FolderDialog/.test(panel)
-  && /onPick=\{\(folderId\) => saveToSearchFolder\(filing, folderId\)\}/.test(panel))
+  && /onPick=\{\(folderId\) => fileFromSearch\(filing, folderId\)\}/.test(panel))
+check('which files through the one path that carries the score',
+  /async function fileFromSearch\(candidateId, folderId\)/.test(panel)
+  && /await saveToSearchFolder\(candidateId, folderId\)/.test(panel),
+  'the displayed score is stored nowhere, so filing by any other route files '
+  + 'them with no reading at all')
 /*
  * The corner is now one stack: buttons, then the score under them.
  *
@@ -879,21 +904,43 @@ check('the messages tab can close a conversation and reopen it',
   'said on the lock rather than in a button, so it still has to say both')
 
 /*
- * The select is gone from both screens, not just from one.
+ * One filing dialog, opened from the profile's corner menu.
  *
- * It was the only filing control a candidate opened from a folder had, and it
- * sat at the foot of the body under a CV — while the corner menu, where every
- * other per-row action lives, had nothing in it at all once they were revealed.
- * Every folder is named in the menu instead, with a way out of the current one.
+ * Three shapes have been tried here. A select at the foot of the body under the
+ * CV, which was the only filing control a candidate opened from a folder had
+ * and sat nowhere near the other per-row actions. Then every folder named as
+ * its own menu item — "Move to Backend hires", "Move to Graduates", one row
+ * each — which is a list pretending to be a menu and grew a row longer with
+ * every folder anyone made. Now one line that opens the dialog the result card
+ * opens, which has a search box.
  */
-check('filing is in the corner menu rather than a select under the CV',
+check('filing is one line in the corner menu, not a select and not a list',
   !/className="folder-picker"/.test(dialog)
-  && /const filing = onAddToFolder \?/.test(dialog)
-  && /\.\.\.filing,/.test(dialog))
-check('and a candidate in a folder can be taken out of it',
-  /key: 'folder-remove'/.test(dialog) && /onRemoveFromFolder\(candidateId\)/.test(dialog)
+  && !/const filing = onAddToFolder \?/.test(dialog)
+  && /label: 'Save in folder'/.test(dialog)
+  && /onSelect: \(\) => setFiling\(true\)/.test(dialog))
+check('and it opens the same dialog the card opens',
+  /\{filing && \(\s*\n\s*<FolderDialog/.test(dialog),
+  'one component, so the two cannot drift')
+check('a candidate in a folder can still be taken out of it',
+  /onRemove=\{onRemoveFromFolder/.test(dialog)
+  && /onRemoveFromFolder\(candidateId\); onClose\(\)/.test(dialog)
   && /onRemoveFromFolder=\{removeItem\}/.test(panel),
   'the dialog could put them in a folder and never take them out of one')
+check('and the profile opened from a search can file too',
+  /onAddToFolder=\{fileFromSearch\}/.test(panel),
+  'it used to show a dead "Saved in X" line there, because no handler was passed')
+
+/*
+ * The dialog searches its folders, and never searches away the one that matters.
+ */
+const folderDialog = read('../client/src/components/FolderDialog.jsx')
+check('the folder dialog has a search box',
+  /type="search"/.test(folderDialog) && /placeholder="Search folders"/.test(folderDialog))
+check('and the folder they are in is held out of it',
+  /\.filter\(\(folder\) => folder\.id !== inFolderId\)/.test(folderDialog)
+  && /className="folder-current"/.test(folderDialog),
+  'a search that could hide the current folder would hide Remove with it')
 check('and the running reveal balance is no longer printed on every profile',
   !/Costs 1 reveal/.test(dialog))
 check('but a zero balance still says why the button is dead',
@@ -969,8 +1016,14 @@ check('a menu item cannot run off the menu, however long the folder name',
 
 check('the profile offers Reveal only while there is something to reveal',
   /!revealed && \{ key: 'reveal', label: 'Reveal', onSelect: reveal \}/.test(dialog))
-check('and Add to folder becomes where they went, once they are filed',
-  /label: result\?\.folder \? `Saved in \$\{result\.folder\.name\}` : 'Add to folder'/.test(dialog))
+/* The line no longer changes with the state, because it is no longer a report:
+   "Save in folder" is what pressing it does whether they are filed or not, and
+   the dialog it opens is what says where they are. */
+check('and the folder line reads the same whether or not they are filed',
+  /label: 'Save in folder'/.test(dialog)
+  && !/`Saved in \$\{result\.folder\.name\}`/.test(dialog))
+check('the dialog is what says where they are',
+  /Filed in/.test(read('../client/src/components/FolderDialog.jsx')))
 
 section('Five bands, because a 51 and a 74 are not the same answer')
 /* One module now, because Triage and the public demo draw scores too and each
@@ -1229,16 +1282,71 @@ check('a tag written on a row reaches the list it is in',
   && /function tagsChanged\(candidateId, next\)/.test(panel),
   'otherwise the filter cannot offer a tag until the next search')
 check('the folder row draws the strip too',
-  /<span className="drive-item-tags">[\s\S]{0,700}<TagStrip tags=\{item\.tags\}/.test(panel))
+  /tags: item\.tags \?\? \[\],/.test(panel),
+  'through the card, which draws the strip for both lists')
 check('and wears no badge its twin in the search does not',
   !/includes\('cover_letter'\)[\s\S]{0,120}Cover letter/.test(panel),
   'a chip reporting what is attached is a detail of the profile, not a reason '
   + 'to open somebody')
-check('the two rows lead with the same two facts',
-  /\[item\.location, item\.availability\]\.filter\(Boolean\)/.test(panel)
-  && !/\[item\.location, item\.availability, item\.capacity\]/.test(panel),
-  'capacity appeared in the folder and nowhere else, which made one person '
-  + 'look like two records')
+/*
+ * The two rows are one row now.
+ *
+ * They led with the same two facts because the folder row had been trimmed to
+ * match the card by hand — location and availability, capacity dropped. Drawing
+ * both with ResultCard is the version of that which cannot drift: there is one
+ * markup, and the folder list adapts its flat item into the shape the card
+ * reads.
+ */
+/* drive-item-name survives on the CLOSED-folder rows, which list folders and
+   not candidates. What must be gone is the candidate row's own cells. */
+check('a candidate in a folder is drawn by the search card',
+  /<ResultCard\s*\n\s*key=\{item\.candidate_id\}/.test(panel)
+  && !/drive-item-score/.test(panel) && !/drive-item-tags/.test(panel),
+  'two treatments for one object is what makes a product feel assembled')
+/*
+ * The way out of a folder is behind the dots, not a × in the corner.
+ *
+ * It was a mark, on the reasoning that it had been a mark on the row before the
+ * row became this card. In the corner it sat two pixels from a comment button
+ * and the dots, with no confirmation behind it — the easiest thing on the card
+ * to press by accident and the only one that takes something away.
+ */
+check('and the card keeps the way out of the folder',
+  /onRemove=\{\(\) => removeItem\(item\.candidate_id\)\}/.test(panel)
+  && /key: 'remove', label: removeLabel, danger: true/.test(panel)
+  && /removeLabel=\{`Remove from \$\{opened\.name\}`\}/.test(panel),
+  'the one action a folder row has that a search result never needs')
+/* And the folder card can file somebody elsewhere, not only let them go.
+   Moving between folders was otherwise two gestures through two screens: take
+   them out here, find them again in a search, put them back. */
+check('the folder card offers Save in folder as well',
+  /canSave[\s\S]{0,40}onFile=\{\(\) => setFiling\(item\.candidate_id\)\}/.test(panel))
+check('and it opens the same dialog, on this list',
+  /\{filing !== null && \([\s\S]{0,500}onPick=\{\(folderId\) => moveToFolder\(filing, folderId\)\}/.test(panel)
+  && /inFolderId=\{opened\?\.id \?\? null\}/.test(panel),
+  'opened with the current folder named, so Remove is beside it')
+
+check('and it is no longer a bare × beside the dots',
+  !/className="chip-remove"/.test(card),
+  'no confirmation, and the easiest thing on the card to hit by mistake')
+
+/*
+ * A menu with nothing in it is not drawn.
+ *
+ * This card is used in two places with different handlers. In a folder every
+ * item filtered out — no canSave, no onReveal, no onDismiss, and the candidate
+ * already revealed — and PopMenu rendered anyway, so pressing ⋮ opened an empty
+ * grey strip.
+ */
+check('the dots appear only when there is something behind them',
+  /\{menuItems\.length > 0 && \(/.test(card)
+  && /const menuItems = \[/.test(card))
+check('and every item is gated on the handler that performs it',
+  /!result\.revealed && onReveal && \{/.test(card),
+  'Reveal was gated on the state alone, so a folder card offered one that did nothing')
+check('the drag that files somebody elsewhere survives',
+  /setData\('text\/candidate-id'/.test(panel),
+  'the row was draggable with that payload before the two were merged')
 check('and neither prints the summary',
   !panel.includes('drive-item-summary') && !panel.includes('<SummaryPreview'),
   'twenty rows of self-description is a page of prose with the names as the '
@@ -1391,10 +1499,20 @@ check('it keeps the heading class, so both words are set as the heading was',
   /rail-toggle ws-rail-heading/.test(panel),
   'the 2px optical nudge that aligns the S of SEARCHES with the Y of YESTERDAY')
 
-check('and it says whose list you are looking at',
-  panel.includes('Only you can see these.') && panel.includes('Shared with your whole team.'),
-  'a search is private to whoever ran it; a Triage belongs to the company — '
-  + 'hiding that would be a poor trick to play on somebody who just switched')
+/*
+ * The caption under the switch is gone, and the fact it carried is not.
+ *
+ * It said "Only you can see these" over the searches and "Shared with your
+ * whole team" over the Triages. True, and still true — but it sat between the
+ * switch and the list on every visit to say something that changes nothing
+ * about what you do next, in the one column on this screen with no room to
+ * spare. What actually matters is whose a given Triage is, and the row says
+ * that where it applies (asserted a few checks below).
+ */
+check('there is no standing caption under the switch',
+  !panel.includes('Only you can see these.')
+  && !panel.includes('Shared with your whole team.')
+  && !panel.includes('className="rail-scope"'))
 
 check('the Triage rows are bucketed on when they were created',
   triageRail.includes('(triage) => triage.createdAt'),
@@ -1442,9 +1560,10 @@ check('while Folders still counts folders', panel.includes('{folders.length}'))
 
 section('The two lists are managed the same way')
 
+/* Triage is no longer one of the two: its dashboard, and the search and the
+   sort that sat on it, are gone. Folders is the list this describes now. */
 for (const [name, source, noun] of [
   ['Folders', panel, 'folders'],
-  ['Triage', triageTab, 'Triages'],
 ]) {
   check(`${name} has a search box that is always there`,
     source.includes(`placeholder="Search ${noun}"`) && source.includes('type="search"'))
@@ -1460,22 +1579,164 @@ for (const [name, source, noun] of [
     || /Clear\s*<\/button>/.test(source))
 }
 
-check('only Triage has a status filter, because only Triage has statuses',
-  triageTab.includes('TRIAGE_STATUSES') && !panel.includes('TRIAGE_STATUSES'))
-check('and it offers the statuses the column can actually hold',
-  ['draft', 'processing', 'ready', 'completed', 'failed']
-    .every((state) => triageTab.includes(`['${state}',`)),
-  'a filter offering a state the database cannot hold returns nothing, always')
-check('search and status narrow the same list in one pass',
-  /if \(status !== 'all' && t\.status !== status\) return false/.test(triageTab)
-  && /return \(t\.title \|\| 'Untitled Triage'\)\.toLowerCase\(\)\.includes\(wanted\)/.test(triageTab),
-  'so neither control can quietly override the other')
-check('a filter that is hiding rows looks different from one that is not',
-  triageTab.includes('list-sort-toggle-on') && css.includes('.list-sort-toggle-on{'))
+/*
+ * The Triage status filter is gone with the dashboard it filtered.
+ *
+ * It offered draft / processing / ready / completed / failed over the list of
+ * Triages. There is no list of Triages on a screen any more — the rail shows
+ * them, ungrouped by status, ordered by when they were made — so the filter
+ * had nothing to narrow.
+ *
+ * What is worth keeping from those four checks is the one fact that outlives
+ * the screen: the status vocabulary the database can actually hold. Anything
+ * that later filters or labels a Triage has to use these five and no others.
+ */
+check('the status vocabulary is still the five the column allows',
+  ['draft', 'processing', 'ready', 'completed', 'failed'].every((state) =>
+    read('../server/src/schema.js').includes(`'${state}'`)),
+  'a filter or a label offering a state the database cannot hold shows nothing, always')
+check('and no screen filters Triages by status any more',
+  !triageTab.includes('TRIAGE_STATUSES') && !panel.includes('TRIAGE_STATUSES'))
 
 section('The workspace serves')
 check('/hr is served', (await fetch(`${BASE}/hr`)).status === 200)
 const health = await json(await fetch(`${BASE}/api/health`))
 check('the API is up behind it', health.ok === true)
+
+// --------------------------------------------------------------------------
+section('Popups close when the next press lands somewhere else')
+
+/*
+ * One hook, used by everything.
+ *
+ * Every menu and drawer was implementing this for itself, or not implementing
+ * it: + New had it, the two rails' row menus did not, so a menu opened on one
+ * row stayed open while you clicked another and two could be on screen at once.
+ * The checks are on the call sites rather than on behaviour, because the defect
+ * is always a popup that forgot to ask — which no rendering test would notice
+ * unless it happened to open that exact popup.
+ */
+const dismissSrc = read('../client/src/useDismiss.js')
+
+check('the shared hook exists', /export default function useDismissOnOutside/.test(dismissSrc))
+check('and listens on pointerdown rather than click',
+  /addEventListener\('pointerdown'/.test(dismissSrc) && !/addEventListener\('click'/.test(dismissSrc),
+  'click fires after the press completes, so a press outside ran the other button first')
+check('the control that opens a popup counts as inside it',
+  /trigger\?\.current\?\.contains/.test(dismissSrc),
+  'otherwise pressing it while open dismisses and its own click reopens — it never closes from its own button')
+check('and a press on a node already removed is ignored',
+  /isConnected/.test(dismissSrc),
+  'React unmounts a row before the event finishes travelling')
+
+for (const [file, what] of [
+  ['components/ChatSidebar.jsx', 'the search rail row menu'],
+  ['components/TriageRail.jsx', 'the Triage rail row menu'],
+  ['components/MobileNav.jsx', 'the mobile drawer'],
+  ['components/InfoHint.jsx', 'the information bubble'],
+  ['pages/HrPanel.jsx', 'the workspace menus'],
+]) {
+  const src = read(`../client/src/${file}`)
+  check(`${what} uses it`, /useDismissOnOutside\(/.test(src), file)
+}
+
+check('and nothing keeps its own copy of the behaviour',
+  !/document\.addEventListener\('click', close\)/.test(
+    read('../client/src/pages/HrPanel.jsx')),
+  'the account menu had one that closed on clicks inside itself too')
+
+// --------------------------------------------------------------------------
+section('The rail menu says which of the two takes something away')
+
+const wsCss = read('../client/src/styles.css')
+check('Delete is red, at a specificity that wins',
+  /\.chat-item-actions \.chat-item-delete \{[^}]*color: var\(--miss\)/.test(wsCss),
+  'a bare .chat-item-delete is (0,1,0) and lost to .chat-item-actions button, which sets color at (0,1,1)')
+
+// --------------------------------------------------------------------------
+section('The filter bar groups its pickers')
+
+const filterSrc = read('../client/src/components/ResultFilters.jsx')
+check('the status picker comes before the two checkboxes',
+  filterSrc.indexOf('Any status') < filterSrc.indexOf('Cover letter'),
+  'it was last, which put one dropdown on the far side of two tick-boxes from the other four')
+
+// --------------------------------------------------------------------------
+section('A card taller than its content holds it at the top')
+
+check('the result card anchors its rows to the top',
+  /\.result-main \{[\s\S]*?align-items: start;[\s\S]*?\}/.test(wsCss),
+  'the min-height that fits the corner made short rows tall, and centred content floated in them')
+
+// --------------------------------------------------------------------------
+section('Narrowing a list of people')
+
+/*
+ * These are run against the real rules rather than asserted from the source,
+ * because the bug they cover was a runtime one: applyResultFilters read the
+ * person from row.candidate, which only search results have. A folder item and
+ * a reveal-log row ARE the person, flat, with the same field names — so every
+ * rule that touched `candidate` threw the moment somebody actually chose an
+ * availability, a relocation or a capacity inside a folder.
+ *
+ * It survived because '' is the default for all three and short-circuits before
+ * the dereference. Nothing crashed until a filter was set, and no test set one.
+ */
+/* Already imported at the top of the tag section above. */
+const flatRow = {
+  candidate_id: 7, display_name: 'Noa Levy', availability: 'immediate',
+  open_to_relocation: true, capacity: 'full_time',
+  tags: [], activity: { state: 'active' }, documents: [],
+}
+const nestedRow = {
+  candidate: {
+    display_name: 'Gil Second', availability: 'immediate',
+    open_to_relocation: false, capacity: 'full_time',
+  },
+  tags: [], activity: { state: 'active' }, documents: [],
+}
+const narrow = (rows, over) => {
+  try {
+    return applyResultFilters(rows, { ...EMPTY_RESULT_FILTERS, ...over }).length
+  } catch (error) {
+    return `threw: ${error.message}`
+  }
+}
+
+check('a folder row survives an availability filter',
+  narrow([flatRow], { availability: 'immediate' }) === 1,
+  `got ${narrow([flatRow], { availability: 'immediate' })}`)
+check('and a relocation filter', narrow([flatRow], { relocation: 'yes' }) === 1,
+  `got ${narrow([flatRow], { relocation: 'yes' })}`)
+check('and a capacity filter', narrow([flatRow], { capacity: 'full_time' }) === 1,
+  `got ${narrow([flatRow], { capacity: 'full_time' })}`)
+check('while a search result, which nests the person, still narrows the same way',
+  narrow([nestedRow], { relocation: 'no' }) === 1)
+
+check('the name search is case-insensitive',
+  narrow([flatRow], { name: 'NOA' }) === 1 && narrow([flatRow], { name: 'noa' }) === 1)
+check('matches the last name as well as the first',
+  narrow([flatRow], { name: 'levy' }) === 1)
+check('matches a partial name, so it narrows as you type',
+  narrow([flatRow], { name: 'lev' }) === 1)
+check('takes the two names in either order',
+  narrow([flatRow], { name: 'Noa Levy' }) === 1 && narrow([flatRow], { name: 'levy noa' }) === 1)
+check('excludes somebody who does not match', narrow([flatRow], { name: 'zzz' }) === 0)
+check('and whitespace alone narrows nothing',
+  narrow([flatRow], { name: '   ' }) === 1,
+  'a box the reader has cleared back to spaces is a box they are not filtering by')
+check('it works on a search result too, where the name is nested',
+  narrow([nestedRow], { name: 'gil' }) === 1)
+
+/* Where it is offered, and where it is not. */
+const filtersSrc = read('../client/src/components/ResultFilters.jsx')
+check('the box is in the always-visible bar, not behind the funnel',
+  /result-filters-bar[\s\S]{0,2000}result-name-search/.test(filtersSrc),
+  'a search you have to open something to reach is one nobody uses on a long list')
+check('and typing a name does not fling the filter panel open',
+  /\.filter\(\(key\) => key !== 'name'\)/.test(filtersSrc),
+  'activeCount drives both the funnel badge and the auto-open, and this control is not behind the funnel')
+check('a folder offers it, and so does the reveal history',
+  (panel.match(/nameSearch\b/g) ?? []).length === 2)
 
 finish()

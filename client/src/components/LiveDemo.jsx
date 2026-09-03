@@ -167,11 +167,8 @@ function DemoRail({ title, hasSearch, view, onView }) {
           </div>
         </div>
 
-        {/* The same line the workspace shows, because the difference is real:
-            your searches are yours, and a Triage belongs to the company. */}
-        <p className="rail-scope">
-          {railList === 'searches' ? 'Only you can see these.' : 'Shared with your whole team.'}
-        </p>
+        {/* The workspace dropped its scope caption, so the demo does too — the
+            demo's whole job is to be the thing it is demonstrating. */}
 
         {/*
           Scenery, and stated as such by being drawn as text.

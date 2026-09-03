@@ -1,4 +1,7 @@
+import { useCallback, useRef, useState } from 'react'
+
 import { bucketOf, ORDER, railSlice } from '../rail.js'
+import useDismissOnOutside from '../useDismiss.js'
 
 /**
  * The company's Triages, in the rail, the way searches are listed beside them.
@@ -20,7 +23,23 @@ import { bucketOf, ORDER, railSlice } from '../rail.js'
  * so a colleague's 300-CV run would drag their Triage to the top of your rail
  * a dozen times while it processed, and rows would move under the cursor.
  */
-export default function TriageRail({ triages, activeId, onOpen, meId }) {
+export default function TriageRail({
+  triages, activeId, onOpen, onRename, onDelete, meId,
+}) {
+  /* Which row has its menu open. One at a time, and held here rather than in
+     the row so opening a second closes the first. */
+  const [menuFor, setMenuFor] = useState(null)
+
+  /* Same as the search rail above it: a press outside the open menu shuts it. */
+  const openMenu = useRef(null)
+  const openTrigger = useRef(null)
+  useDismissOnOutside({
+    ref: openMenu,
+    trigger: openTrigger,
+    onDismiss: useCallback(() => setMenuFor(null), []),
+    active: menuFor !== null,
+  })
+
   if (!triages) {
     return <p className="ws-rail-empty muted">Loading…</p>
   }
@@ -73,6 +92,69 @@ export default function TriageRail({ triages, activeId, onOpen, meId }) {
                     <span className="chat-item-author">{triage.author ?? 'A colleague'}</span>
                   )}
                 </button>
+
+                {/*
+                  The same ⋯ the search rail carries, doing the same two things.
+
+                  A Triage could be started and opened but never renamed or
+                  thrown away — the dashboard that used to offer both was
+                  deleted, and nothing took the jobs over. Which left the
+                  untitled ones untitled for good: the job title is set while
+                  building, and once a Triage was launched there was no way
+                  back to that field.
+
+                  It says "Rename" rather than "Rename Triage" because the
+                  prompt above it already names the thing. The delete warns
+                  that the CVs go with it, which is the difference from a
+                  search: a search is a question about candidates who exist
+                  elsewhere, a Triage IS the pile of files.
+                */}
+                {(onRename || onDelete) && (
+                  <button
+                    type="button"
+                    className="chat-item-menu"
+                    ref={menuFor === triage.id ? openTrigger : null}
+                    aria-label={`Options for ${triage.title?.trim() || 'this Triage'}`}
+                    onClick={() => setMenuFor(menuFor === triage.id ? null : triage.id)}
+                  >
+                    ⋯
+                  </button>
+                )}
+
+                {menuFor === triage.id && (
+                  <div className="chat-item-actions" ref={openMenu}>
+                    {onRename && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const current = triage.title?.trim() ?? ''
+                          const next = prompt('Job title', current)
+                          setMenuFor(null)
+                          if (next && next.trim() && next.trim() !== current) {
+                            onRename(triage.id, next.trim())
+                          }
+                        }}
+                      >
+                        Rename
+                      </button>
+                    )}
+                    {onDelete && (
+                      <button
+                        type="button"
+                        className="chat-item-delete"
+                        onClick={() => {
+                          setMenuFor(null)
+                          const name = triage.title?.trim() || 'this Triage'
+                          if (confirm(`Delete “${name}”? Every CV uploaded to it is deleted too.`)) {
+                            onDelete(triage.id)
+                          }
+                        }}
+                      >
+                        Delete
+                      </button>
+                    )}
+                  </div>
+                )}
 
                 {/* What it holds, in the same pill the search list uses for the
                     number of candidates saved out of one. */}

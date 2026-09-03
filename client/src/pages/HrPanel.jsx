@@ -17,6 +17,7 @@ import AddPhotoIcon from '../components/AddPhotoIcon.jsx'
 import Notice, { StatusNotice, useStandingNotice } from '../components/Notice.jsx'
 import scoreBand from '../scoreBand.js'
 import useDialogFocus from '../useDialogFocus.js'
+import useDismissOnOutside from '../useDismiss.js'
 import { RowTick, SelectButton, SelectionBar, useSelection } from '../components/ListSelect.jsx'
 import PersonIcon from '../components/PersonIcon.jsx'
 import PortalBar from '../components/PortalBar.jsx'
@@ -32,7 +33,7 @@ import ResultFilters, {
   applyResultFilters,
 } from '../components/ResultFilters.jsx'
 import { del, downloadFile, get, getToken, patch, post, put, sendForm, SESSION_ENDED, signOut as signOutRequest, withToken } from '../api.js'
-import { DATE_LOCALE, formatSeatDate } from '../dates.js'
+import { DATE_LOCALE, formatDate, formatSeatDate } from '../dates.js'
 
 export default function HrPanel() {
   const [ready, setReady] = useState(false)
@@ -476,6 +477,31 @@ function Workspace({ me, onReload, onSignOut }) {
       setTriageRows([])
     }
   }, [])
+  /*
+   * Rename and delete, for the rail.
+   *
+   * Both re-read the list rather than editing the copy in state. A Triage is
+   * the company's, so the row being renamed may be open in a colleague's tab
+   * and may have been renamed by them a second ago; the server's answer is the
+   * one that is true for everybody.
+   */
+  const renameTriage = useCallback(async (id, title) => {
+    try {
+      await patch(`/api/hr/triage/${id}`, { title }, 'recruiter')
+      await loadTriages()
+    } catch { /* the rail reloads on its next open */ }
+  }, [loadTriages])
+
+  const deleteTriage = useCallback(async (id) => {
+    try {
+      await del(`/api/hr/triage/${id}`, 'recruiter')
+      /* If the deleted one was on screen, leave the Triage tab holding nothing
+         rather than a workspace whose files are gone. */
+      setTriageOpens((was) => (was?.id === id ? { at: Date.now(), id: null } : was))
+      await loadTriages()
+    } catch { /* the rail reloads on its next open */ }
+  }, [loadTriages])
+
   /* The status vocabulary, as the server defines it. Held rather than retyped
      here so the picker cannot offer a stage the server would reject. */
   const [statuses, setStatuses] = useState([])
@@ -670,6 +696,22 @@ function Workspace({ me, onReload, onSignOut }) {
                   parentheses. One way of showing a count across the rail. */}
               <span className="ws-nav-count">{folders.length}</span>
             </button>
+
+            {/*
+              Under Folders, because it is the other standing list of people.
+
+              No count pill. Folders holds a number a recruiter chose and can
+              act on; this one only ever goes up, and a rail item that ticks
+              upward on its own reads as an inbox with unread items in it.
+            */}
+            <button
+              type="button"
+              className={tab === 'reveals' ? 'ws-nav-item ws-nav-item-on' : 'ws-nav-item'}
+              aria-current={tab === 'reveals' ? 'page' : undefined}
+              onClick={() => setTab('reveals')}
+            >
+              Reveals
+            </button>
           </nav>
 
           {/*
@@ -730,18 +772,19 @@ function Workspace({ me, onReload, onSignOut }) {
             </div>
 
             {/*
-              Whose these are, said once rather than on every row.
+              No line about who can see these.
 
-              The two lists are scoped differently and it would be a poor trick
-              to hide it: a search is private to the recruiter who ran it, a
-              Triage belongs to the company and any colleague can open, change
-              or delete it. Somebody who has just switched sides is looking at
-              a list that answers a different question, and one line here is
-              cheaper than finding that out by surprise.
+              There was one — "Only you can see these" over the searches,
+              "Shared with your whole team" over the Triages — on the reasoning
+              that the two lists are scoped differently and hiding it would be a
+              poor trick. That is still true, and the caption is still not worth
+              it: it sat between the switch and the list on every visit to say
+              something that changes nothing about what you do next, and the
+              rail is the one column on this screen with no room to spare.
+
+              The Triage screen itself still says whose it is where it matters —
+              a colleague's Triage carries their name on the row.
             */}
-            <p className="rail-scope">
-              {railList === 'searches' ? 'Only you can see these.' : 'Shared with your whole team.'}
-            </p>
 
             {railList === 'searches' ? (
               <ChatSidebar
@@ -763,6 +806,8 @@ function Workspace({ me, onReload, onSignOut }) {
                    timestamp makes pressing the same row twice two instructions
                    rather than one repeated value. */
                 onOpen={(id) => { setTab('triage'); setTriageOpens({ at: Date.now(), id }) }}
+                onRename={renameTriage}
+                onDelete={deleteTriage}
               />
             )}
 
@@ -822,11 +867,24 @@ function Workspace({ me, onReload, onSignOut }) {
           {tab === 'folders' && (
             <FoldersTab me={me} folders={folders} setFolders={setFolders} statuses={statuses} />
           )}
+          {tab === 'reveals' && (
+            <RevealsTab me={me} folders={folders} setFolders={setFolders} statuses={statuses} />
+          )}
           {tab === 'triage' && (
             <TriageTab
               opens={triageOpens}
               balance={wallet?.triage?.balance ?? 0}
               admin={admin}
+              /*
+               * The one folder list, passed down rather than fetched again.
+               *
+               * Filing an applicant can create a folder, and the rail's count
+               * and the Folders tab both read this state. A second copy inside
+               * the Triage screen meant a folder made there was invisible
+               * everywhere else until the page happened to reload.
+               */
+              folders={folders}
+              setFolders={setFolders}
               onBalanceChanged={onReload}
               /* Buying opens the Billing dialog over this screen rather than
                  navigating away, so the draft the recruiter was building is
@@ -1048,8 +1106,24 @@ const DIALOG_TITLES = {
  * confirmations: the header stays put so the way out is still there at the foot
  * of a long billing history.
  */
+/**
+ * Where a screen inside the dialog can put a control of its own.
+ *
+ * The alternative was an `actions` prop, which does not work here: the control
+ * belongs to the screen — only My profile knows whether it is editing, whether
+ * the contact details are settled, and what pressing it should do — while the
+ * place it goes belongs to the dialog. Passing it down would mean lifting that
+ * whole state up to the workspace so it could be handed back.
+ *
+ * So the dialog publishes the node and the screen portals into it. Held as
+ * state rather than a ref because a ref does not re-render: the first pass has
+ * no node yet, and without a render after it arrives the portal never appears.
+ */
+const DialogActionSlot = createContext(null)
+
 function WorkspaceDialog({ title, onClose, children }) {
   const dialogRef = useDialogFocus()
+  const [actionSlot, setActionSlot] = useState(null)
   useEffect(() => {
     function onKey(event) {
       if (event.key === 'Escape') onClose()
@@ -1081,12 +1155,18 @@ function WorkspaceDialog({ title, onClose, children }) {
       >
         <header className="modal-head workspace-dialog-head">
           <div className="modal-title"><h2>{title}</h2></div>
+          {/* Immediately after the title, because it acts on what the title
+              names. The × stays in the corner: it belongs to the dialog rather
+              than to the screen inside it, and the distance says so. */}
+          <div className="workspace-dialog-actions" ref={setActionSlot} />
           <button type="button" className="btn btn-quiet" onClick={onClose} aria-label="Close">
             &times;
           </button>
         </header>
 
-        <div className="workspace-dialog-body" tabIndex={0}>{children}</div>
+        <DialogActionSlot.Provider value={actionSlot}>
+          <div className="workspace-dialog-body" tabIndex={0}>{children}</div>
+        </DialogActionSlot.Provider>
       </div>
     </div>,
     document.body,
@@ -1106,21 +1186,22 @@ function WorkspaceDialog({ title, onClose, children }) {
  */
 function AccountMenu({ me, admin, current, onGo }) {
   const [open, setOpen] = useState(false)
+  const wrap = useRef(null)
 
-  /* Close on a click anywhere else, and on Escape. Bound while open only, so
-     the workspace is not listening to every click on the page the rest of the
-     time. */
-  useEffect(() => {
-    if (!open) return undefined
-    const close = () => setOpen(false)
-    const onKey = (event) => { if (event.key === 'Escape') setOpen(false) }
-    document.addEventListener('click', close)
-    window.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('click', close)
-      window.removeEventListener('keydown', onKey)
-    }
-  }, [open])
+  /*
+   * Shared with every other popup, rather than a copy that drifts.
+   *
+   * The copy this replaces listened for `click` on the whole document and
+   * closed on any of them — including clicks on the menu's own items, which
+   * worked only because each item closed the menu anyway, and including the
+   * press on the button that had just opened it, which is why that button
+   * needed a stopPropagation to stay openable at all.
+   */
+  useDismissOnOutside({
+    ref: wrap,
+    onDismiss: useCallback(() => setOpen(false), []),
+    active: open,
+  })
 
   /*
    * Usage and Billing are two questions, so they are two doors.
@@ -1143,9 +1224,9 @@ function AccountMenu({ me, admin, current, onGo }) {
   ]
 
   return (
-    <div className="ws-account-wrap">
+    <div className="ws-account-wrap" ref={wrap}>
       {open && (
-        <div className="ws-account-menu" role="menu" onClick={(event) => event.stopPropagation()}>
+        <div className="ws-account-menu" role="menu">
           {items.map(([key, label]) => (
             <button
               key={key}
@@ -2313,12 +2394,26 @@ function ProfileDialog({ person, company, onClose, onSaved }) {
  * — the administrator owns those — while the photo and password belong to the
  * account holder.
  */
+/** Renders its child into the dialog's header, or in place when there is none. */
+function DialogAction({ children }) {
+  const slot = useContext(DialogActionSlot)
+  if (!slot) return <div className="form-lock-bar">{children}</div>
+  return createPortal(children, slot)
+}
+
 function MyProfileTab({ me, onSaved }) {
   const person = me.recruiter
 
   const [photo, setPhoto] = useState(null)
   const [preview, setPreview] = useState(null)
   const photoInput = useRef(null)
+
+  /* The company's mark. Held apart from the portrait because it is saved by a
+     different route under a different permission. */
+  const [logo, setLogo] = useState(null)
+  const [logoPreview, setLogoPreview] = useState(null)
+  const [logoCleared, setLogoCleared] = useState(false)
+  const logoInput = useRef(null)
 
   const [current, setCurrent] = useState('')
   const [next, setNext] = useState('')
@@ -2387,6 +2482,41 @@ function MyProfileTab({ me, onSaved }) {
 
   /* Sends the picture and nothing else. Errors are left to the caller, which is
      saving several things at once and has to stop rather than carry on. */
+  /*
+   * Only an administrator may set it — and the server says so too.
+   *
+   * This decides whether the frame is a button; PATCH /api/company/logo is
+   * gated on orgAdminOnly regardless, so a colleague who reached the request
+   * another way is refused there rather than here. A non-admin still SEES the
+   * logo: it is their company.
+   */
+  const canSetLogo = Boolean(person.isOrgAdmin)
+  const storedLogo = me.company?.hasLogo
+    ? withToken(`/api/company/logo?v=${me.company.logoVersion ?? ''}`, 'recruiter')
+    : null
+  const shownLogo = logoPreview ?? (logoCleared ? null : storedLogo)
+
+  /*
+   * Whether the company's half of the header is on screen at all.
+   *
+   * One expression, read twice — by the block that draws it and by the class
+   * that lays it out. They were two separate conditions and they disagreed: the
+   * block appeared whenever `shownLogo || editing`, the banner class only when
+   * `shownLogo`. So pressing the pencil with no logo set drew the block WITHOUT
+   * the banner layout, which is the old side-by-side row — an empty rectangle
+   * beside the portrait, nothing like the header it had just replaced.
+   *
+   * Whenever this is true the layout is the banner. There is no other shape.
+   */
+  const showLogoBlock = Boolean(shownLogo) || editing
+
+  async function sendLogo(remove) {
+    const form = new FormData()
+    if (remove) form.append('removeLogo', 'true')
+    else form.append('logo', logo)
+    await sendForm('/api/company/logo', form, { method: 'PATCH', role: 'recruiter' })
+  }
+
   async function sendPhoto(remove) {
     const form = new FormData()
     if (remove) form.append('removePhoto', 'true')
@@ -2424,6 +2554,15 @@ function MyProfileTab({ me, onSaved }) {
     try {
       if (photoCleared) await sendPhoto(true)
       else if (photo) await sendPhoto(false)
+
+      /* The logo travels on the same tick, and only when this recruiter is
+         allowed to move it — the server refuses either way, but sending a
+         request that is going to be refused is not something to do on somebody
+         else's press of Save. */
+      if (canSetLogo) {
+        if (logoCleared) await sendLogo(true)
+        else if (logo) await sendLogo(false)
+      }
 
       await patch('/api/recruiter/me', {
         firstName: draft.firstName,
@@ -2483,38 +2622,81 @@ function MyProfileTab({ me, onSaved }) {
         candidate portal's pencil once unlocked the form and instantly submitted
         it. See the note on CandidateForm's lock bar.
       */}
-      <StatusNotice error={error} onDismiss={() => setError('')} />
-      {savedNotice && !editing && <p className="alert alert-ok">{savedNotice}</p>}
-
-      <div className="form-lock-bar">
-        <button
-          type="button"
-          className="icon-button"
-          aria-pressed={editing}
-          disabled={saving || (editing && !contactsSettled)}
-          aria-label={editing ? 'Save my profile' : 'Edit my profile'}
-          title={!editing ? 'Edit'
-            : contactsSettled ? 'Save'
-              : `Verify your new ${unverified.join(' and ')} first`}
-          onClick={() => { if (editing) saveProfile(); else startEditing() }}
-        >
-          {editing ? <TickIcon /> : <PencilIcon />}
-        </button>
-      </div>
-
       {/*
-        The order is who you are, then how to reach you, then a door.
+        The company's mark across the top, and the person on it.
 
-        The page used to open on two meters — reveals left, seats in use — which
-        are facts about the organization's balance rather than about the person
-        whose profile this is. They are what Usage & billing exists to show, and
-        putting them first meant the answer to "what is my username" was below
-        the fold on a page called My profile.
+        Full-bleed rather than a frame in a row: the logo is the one thing on
+        this dialog that belongs to the organization rather than to the
+        recruiter, and running it to both edges says so without a label. It
+        also fills the band of white the dialog opened with — that white was
+        there because the tallest thing in the first row was a 120px picture,
+        in a card 980px wide.
 
-        The photo needs no label either. A round frame at the top of a profile
-        holding a silhouette is not ambiguous, and the line beneath names the
-        formats.
+        Negative margins cancel .workspace-dialog-body's padding exactly, and
+        the 640px media query that changes that padding changes these with it.
+
+        Only when there IS a logo. With none, this falls back to the row it was
+        — a banner needs a picture, and an empty tinted band at the top of a
+        dialog is a loading state that never finishes.
       */}
+      <div className={showLogoBlock ? 'profile-identity profile-identity-banner' : 'profile-identity'}>
+      {showLogoBlock && (
+      <div className="profile-logo">
+        {editing && canSetLogo ? (
+          <button
+            type="button"
+            className="avatar avatar-rect avatar-editable"
+            onClick={() => logoInput.current?.click()}
+            aria-label={shownLogo ? 'Replace the company logo' : 'Add a company logo'}
+          >
+            {shownLogo
+              ? <img src={shownLogo} alt="" />
+              : <span className="avatar-empty"><AddPhotoIcon size={24} /></span>}
+          </button>
+        ) : (
+          <span className="avatar avatar-rect">
+            {shownLogo
+              ? <img src={shownLogo} alt="" />
+              : <span className="avatar-empty muted">—</span>}
+          </span>
+        )}
+
+        <input
+          ref={logoInput} type="file" accept="image/jpeg,image/png,image/webp" hidden
+          onChange={(e) => {
+            const file = e.target.files?.[0]
+            e.target.value = ''
+            if (!file) return
+            if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+              setError('The logo must be a JPG, PNG or WebP image.')
+              return
+            }
+            setError('')
+            setLogoCleared(false)
+            setLogo(file)
+            setLogoPreview(URL.createObjectURL(file))
+          }}
+        />
+
+        {editing && canSetLogo && (shownLogo || logo) && (
+          <div className="photo-actions">
+            <button
+              type="button"
+              className="btn btn-quiet btn-small"
+              disabled={saving}
+              onClick={() => { setLogo(null); setLogoPreview(null); setLogoCleared(true) }}
+            >
+              Remove
+            </button>
+          </div>
+        )}
+
+        {editing && !canSetLogo && (
+          <span className="muted photo-formats">Only the administrator can change this.</span>
+        )}
+      </div>
+      )}
+
       <div className="profile-photo-block">
         <div className="photo-row">
           {/* A picture, not a button, while the profile is locked: there is
@@ -2550,9 +2732,17 @@ function MyProfileTab({ me, onSaved }) {
               setPhoto(file)
             }}
           />
+          {/*
+            Remove first, then the caption.
+
+            The logo column beside this one is [frame][Remove], so putting the
+            format note above the button left the two Removes on different lines
+            — the eye reads across, finds a caption where the other column has a
+            control, and the pair stops looking like a pair. The note is the
+            quietest thing here and belongs last.
+          */}
           {editing && (
             <div className="photo-copy">
-              <span className="photo-formats"><Req />JPG, PNG or WebP</span>
               {/* No "Choose photo" button: the frame itself is the control, and
                   two ways to open the same file picker sitting side by side
                   read as two different things. */}
@@ -2574,10 +2764,68 @@ function MyProfileTab({ me, onSaved }) {
                   </button>
                 )}
               </div>
+              <span className="photo-formats"><Req />JPG, PNG or WebP</span>
             </div>
           )}
         </div>
       </div>
+      </div>
+
+      <StatusNotice error={error} onDismiss={() => setError('')} />
+      {savedNotice && !editing && <p className="alert alert-ok">{savedNotice}</p>}
+
+      {/*
+        The pencil, in the dialog's header rather than in the page under it.
+
+        It was a row of its own between the photograph and the first field,
+        which cost a line of vertical space to hold one 28px button and put the
+        control that unlocks the form a long way from the form. In the header it
+        sits beside the ×, where the other thing you can do to this dialog
+        already is — and the ✓ that replaces it while editing inherits the
+        position, so saving is where editing was.
+
+        Portalled, not moved: the state behind it is this component's. The
+        fallback renders it in place, so the screen still works if it is ever
+        drawn outside a dialog.
+      */}
+      <DialogAction>
+        <button
+          type="button"
+          className="icon-button"
+          aria-pressed={editing}
+          disabled={saving || (editing && !contactsSettled)}
+          aria-label={editing ? 'Save my profile' : 'Edit my profile'}
+          title={!editing ? 'Edit'
+            : contactsSettled ? 'Save'
+              : `Verify your new ${unverified.join(' and ')} first`}
+          onClick={() => { if (editing) saveProfile(); else startEditing() }}
+        >
+          {editing ? <TickIcon /> : <PencilIcon />}
+        </button>
+      </DialogAction>
+
+      {/*
+        The order is who you are, then how to reach you, then a door.
+
+        The page used to open on two meters — reveals left, seats in use — which
+        are facts about the organization's balance rather than about the person
+        whose profile this is. They are what Usage & billing exists to show, and
+        putting them first meant the answer to "what is my username" was below
+        the fold on a page called My profile.
+
+        The photo needs no label either. A round frame at the top of a profile
+        holding a silhouette is not ambiguous, and the line beneath names the
+        formats.
+      */}
+      {/*
+        The person, and the company they are from.
+
+        Two pictures, two owners, two permissions: the portrait is this
+        recruiter's and they may always change it; the logo is the
+        organization's and only an administrator may. Both are drawn for
+        everybody — a colleague who cannot change the logo still works here —
+        and only the control behind the rectangle is gated.
+      */}
 
       {/*
         One list, read the same way all the way down — and the same list turned
@@ -4779,6 +5027,34 @@ function SearchTab({ me, folders, setFolders, onControls }) {
    * to folder is the route from a search result, and it is the one the product
    * describes.
    */
+  /** Which folder this candidate is in, if any. */
+  function folderHolding(candidateId) {
+    return folders.find(
+      (folder) => folder.items?.some((item) => item.candidate_id === candidateId),
+    )?.id ?? null
+  }
+
+  /*
+   * Filing from a search, including into a folder that does not exist yet.
+   *
+   * Shaped like moveToFolder in the Folders tab — (candidateId, folderId) with
+   * 'new' meaning "ask for a name first" — so the profile dialog can be handed
+   * either one and does not need to know which list it was opened from.
+   */
+  async function fileFromSearch(candidateId, folderId) {
+    if (folderId === 'new') {
+      const name = prompt('Name the new folder', 'Shortlist')
+      if (name === null || !name.trim()) return
+      /* Made first, then filed into: the create returns the id the save needs,
+         and a failure here means nothing was moved. */
+      const made = await post('/api/hr/folders', { name: name.trim() }, 'recruiter')
+      setFolders(made.folders)
+      await saveToSearchFolder(candidateId, made.id)
+      return
+    }
+    await saveToSearchFolder(candidateId, folderId)
+  }
+
   async function saveToSearchFolder(candidateId, folderId = null) {
     if (!session?.id) {
       setError('Run a search before saving candidates.')
@@ -5038,19 +5314,9 @@ function SearchTab({ me, folders, setFolders, onControls }) {
       {filing !== null && (
         <FolderDialog
           folders={folders}
-          inFolderId={folders.find(
-            (folder) => folder.items?.some((item) => item.candidate_id === filing),
-          )?.id ?? null}
-          onPick={(folderId) => saveToSearchFolder(filing, folderId)}
-          onNewFolder={async () => {
-            const name = prompt('Name the new folder', 'Shortlist')
-            if (name === null || !name.trim()) return
-            /* Made first, then filed into — the create returns the id the save
-               needs, and a failure here means nothing was moved. */
-            const made = await post('/api/hr/folders', { name: name.trim() }, 'recruiter')
-            setFolders(made.folders)
-            await saveToSearchFolder(filing, made.id)
-          }}
+          inFolderId={folderHolding(filing)}
+          onPick={(folderId) => fileFromSearch(filing, folderId)}
+          onNewFolder={() => fileFromSearch(filing, 'new')}
           onClose={() => setFiling(null)}
         />
       )}
@@ -5165,7 +5431,10 @@ function SearchTab({ me, folders, setFolders, onControls }) {
           folders={folders}
           /* The same three the result card offers, so the profile is not a
              dead end you have to close to act on. */
-          onSave={() => saveToSearchFolder(openId)}
+          /* The same filing the card offers, so the profile is not a dead end
+             you have to close to act on. It used to show a dead "Saved in X"
+             line here because no handler was passed. */
+          onAddToFolder={fileFromSearch}
           onRevealed={(payload) => markRevealed(openId, payload)}
           onDismiss={chatId ? () => dismissFromList(openId) : null}
           onTagsChanged={tagsChanged}
@@ -5200,11 +5469,57 @@ function tagsIn(rows) {
  * so the list stays scannable and the detail has room to breathe.
  */
 function ResultCard({
-  result, onOpen, onSave, onFile, onReveal, onDismiss, onTagsChanged,
-  meId = null, canSave = false,
+  result, onOpen, onSave, onFile, onReveal, onDismiss, onTagsChanged, onRemove,
+  removeLabel = 'Remove', meId = null, canSave = false,
+  /*
+   * What sits in the bottom-right, when it is not a score.
+   *
+   * The reveal log lists people this company has paid to see, which is not a
+   * ranking: the same person can be revealed out of one search and be nothing
+   * to do with the next, so a percentage there would be a number measured
+   * against a question nobody asked. The date is the fact that list is about,
+   * and it goes exactly where the score goes so the card keeps its shape.
+   */
+  corner = null,
 }) {
   const { candidate, documents = [] } = result
   const band = scoreBand(result.score)
+
+  /*
+   * What the ⋮ offers, built here so the corner can ask whether there is
+   * anything to offer at all.
+   *
+   * Each entry is gated on the handler that performs it rather than on the
+   * screen this card is drawn in: a card with no onReveal cannot reveal, and
+   * offering it would be a menu item that does nothing. Reveal was gated on
+   * `!result.revealed` alone, which meant an unrevealed candidate in a folder
+   * — where nothing is passed — showed a Reveal that silently did nothing.
+   */
+  const menuItems = [
+    canSave && {
+      key: 'folder',
+      label: 'Save in folder',
+      onSelect: () => onFile?.(),
+    },
+    !result.revealed && onReveal && {
+      key: 'reveal', label: 'Reveal', onSelect: () => onReveal(),
+    },
+    onDismiss && {
+      key: 'dismiss', label: 'Not relevant', danger: true, onSelect: () => onDismiss(),
+    },
+    /*
+     * The way out of a folder, last and marked as the destructive one.
+     *
+     * It was a × in the corner, on the reasoning that it had been a × on the
+     * row before the row became this card. In the corner it sat between a
+     * comment button and the dots, two pixels from both, with no confirmation
+     * behind it — the easiest thing on the card to press by accident and the
+     * only one that takes something away.
+     */
+    onRemove && {
+      key: 'remove', label: removeLabel, danger: true, onSelect: () => onRemove(),
+    },
+  ].filter(Boolean)
   /*
    * What this team calls them. Read straight off the row, never copied into
    * state here: the list above is the one owner, tagsChanged writes to it, and
@@ -5300,9 +5615,37 @@ function ResultCard({
               folder first, because being filed usually comes before being paid
               for.
             */}
+            {/* The name alone. "Folder · Backend hires" spent a third of a
+                narrow chip on a word that the chip's own colour, position and
+                tooltip already say — and it sits beside a reveal chip that does
+                not announce itself as a reveal either. The title still spells it
+                out for anyone who needs it. */}
             {result.folder && (
               <span className="chip chip-folder" title={`Saved in your ${result.folder.name} folder`}>
-                Folder · {result.folder.name}
+                {result.folder.name}
+              </span>
+            )}
+            {/*
+              Where this row came from, when it did not come from a search.
+
+              Only ever set on a folder row: a Triage applicant filed into a
+              folder sits beside marketplace candidates and is otherwise
+              indistinguishable — same card, same name, same location — while
+              being a different kind of object. It has no profile to open, no
+              freshness, and no inbox. The chip is the one thing on the row that
+              says so, and it names the Triage rather than saying "Triage",
+              because which pile a CV came out of is the useful half.
+            */}
+            {result.fromTriage && (
+              <span
+                className="chip chip-triage"
+                title={result.fromTriage.title
+                  ? `Uploaded to the ${result.fromTriage.title} Triage`
+                  : 'Uploaded to a Triage'}
+              >
+                {result.fromTriage.title
+                  ? `From ${result.fromTriage.title}`
+                  : 'From a Triage'}
               </span>
             )}
             {result.revealed && (
@@ -5338,11 +5681,22 @@ function ResultCard({
               that says only "reveal" invites a click the recruiter would not
               have made knowingly.
             */}
-            {!result.revealed && (
+            {/*
+              AND onReveal, not just the state.
+
+              This is the same mistake the ⋮ menu above had and had fixed: the
+              button was gated on `!result.revealed` alone, so every unrevealed
+              candidate in a folder — where no onReveal is passed — wore a
+              struck-through eye that did nothing when pressed. It became
+              visible again with Triage applicants, who are neither revealed nor
+              revealable: a CV somebody uploaded has nothing to unlock, and the
+              row was offering to unlock it.
+            */}
+            {!result.revealed && onReveal && (
               <button
                 type="button"
                 className="icon-button result-reveal"
-                onClick={(event) => { event.stopPropagation(); onReveal?.() }}
+                onClick={(event) => { event.stopPropagation(); onReveal() }}
                 title={`Reveal ${candidate.display_name ?? 'this candidate'} — their contact `
                   + 'details and CV, for one reveal. Saving them to a folder is free.'}
                 aria-label={`Reveal ${candidate.display_name ?? 'this candidate'}`}
@@ -5350,6 +5704,18 @@ function ResultCard({
                 <EyeOffIcon />
               </button>
             )}
+            {/*
+              Tags and comments hang off a candidate id, so they are drawn only
+              where there is one.
+
+              A Triage applicant filed into a folder has none — there is no
+              marketplace profile behind them — and both of these would have
+              posted to /api/hr/candidates/null/…. The row keeps the folder
+              chip, the Triage chip and the ⋮; it loses the two controls that
+              had nothing to act on.
+            */}
+            {candidate.id != null && (
+              <>
             <TagEditor
               candidateId={candidate.id}
               tags={result.tags ?? []}
@@ -5365,35 +5731,43 @@ function ResultCard({
               meId={meId}
               label={`Comments on ${candidate.display_name ?? 'this candidate'}`}
             />
-            <PopMenu
-              vertical
-              label={`Actions for ${candidate.display_name ?? 'this candidate'}`}
-              items={[
-                /*
-                 * One line, and it is always a control.
-                 *
-                 * It used to read "Saved in Backend hires" once the candidate
-                 * was filed — a statement, in a menu, doing nothing when
-                 * pressed. The chip in the corner already says where they are;
-                 * what a menu is for is changing it.
-                 */
-                canSave && {
-                  key: 'folder',
-                  label: 'Save in folder',
-                  onSelect: () => onFile?.(),
-                },
-                !result.revealed && { key: 'reveal', label: 'Reveal', onSelect: () => onReveal?.() },
-                onDismiss && { key: 'dismiss', label: 'Not relevant', danger: true, onSelect: () => onDismiss() },
-              ].filter(Boolean)}
-            />
+              </>
+            )}
+            {/*
+              The dots, and only when they have something behind them.
+
+              This card is drawn in two places with different handlers, and in a
+              folder every item filtered out: no canSave, no onReveal, no
+              onDismiss, and the candidate already revealed. PopMenu rendered
+              anyway, so pressing ⋮ opened an empty grey strip — a control that
+              looked broken because it was doing exactly what it was told.
+            */}
+            {menuItems.length > 0 && (
+              <PopMenu
+                vertical
+                label={`Actions for ${candidate.display_name ?? 'this candidate'}`}
+                items={menuItems}
+              />
+            )}
           </span>
 
-          <div className={`score score-${band}`}>
-            {/* Out of a hundred, said as such. A bare 82 beside a name is a
-                number of something unstated, and the label under it said
-                "match" — which is the axis, not the unit. */}
-            <span className="score-value">{result.score}%</span>
-          </div>
+          {/*
+            No number, no box.
+
+            The score was drawn unconditionally, so a row with nothing to show
+            rendered a lone "%" in the corner — which happened to every folder
+            row filed without a search behind it, and to every Triage applicant
+            now that folders hold those too. Absent is the honest rendering of
+            absent; the alternative is a 0% that says something false.
+          */}
+          {corner ?? (Number.isFinite(result.score) && (
+            <div className={`score score-${band}`}>
+              {/* Out of a hundred, said as such. A bare 82 beside a name is a
+                  number of something unstated, and the label under it said
+                  "match" — which is the axis, not the unit. */}
+              <span className="score-value">{result.score}%</span>
+            </div>
+          ))}
         </div>
 
         {/*
@@ -5478,27 +5852,17 @@ function ResultCard({
 function NewMenu({ onSearch, onTriage }) {
   const [open, setOpen] = useState(false)
   const wrap = useRef(null)
+  const trigger = useRef(null)
 
-  useEffect(() => {
-    if (!open) return undefined
-
-    const onPointerDown = (event) => {
-      if (!wrap.current?.contains(event.target)) setOpen(false)
-    }
-    const onKeyDown = (event) => {
-      if (event.key !== 'Escape') return
-      setOpen(false)
-      /* Escape has to hand focus back, or it is left on a menu that is gone. */
-      wrap.current?.querySelector('.ws-new')?.focus()
-    }
-
-    document.addEventListener('pointerdown', onPointerDown)
-    document.addEventListener('keydown', onKeyDown)
-    return () => {
-      document.removeEventListener('pointerdown', onPointerDown)
-      document.removeEventListener('keydown', onKeyDown)
-    }
-  }, [open])
+  /* This is where the shared hook came from — it was the only popup in the
+     product that got this right, so it became the one everything uses. */
+  useDismissOnOutside({
+    ref: wrap,
+    onDismiss: useCallback(() => setOpen(false), []),
+    active: open,
+    /* Escape has to hand focus back, or it is left on a menu that is gone. */
+    focusOn: trigger,
+  })
 
   function choose(run) {
     setOpen(false)
@@ -5510,6 +5874,7 @@ function NewMenu({ onSearch, onTriage }) {
       <button
         type="button"
         className="ws-new"
+        ref={trigger}
         aria-expanded={open}
         aria-haspopup="menu"
         onClick={() => setOpen((was) => !was)}
@@ -5588,6 +5953,192 @@ function FolderIcon() {
   )
 }
 
+/**
+ * Everyone this company has revealed, newest first.
+ *
+ * A folder is a list somebody chose to build. This is the list the company
+ * built by spending — every reveal it has ever paid for, whether or not anyone
+ * then filed the person anywhere. It answers "who have we already unlocked?",
+ * which before this had no screen: the only way to find out was to run a search
+ * and notice the green badge, which does not work for a person no current
+ * search returns.
+ *
+ * Deliberately not a folder. It has no ordering anybody controls, nothing can
+ * be added to it by hand, and removing from it would mean unpaying — so it
+ * lives beside Folders in the rail rather than inside them.
+ */
+function RevealsTab({ me, folders, setFolders, statuses = [] }) {
+  const [reveals, setReveals] = useState(null)
+  const [error, setError] = useState('')
+  const [filters, setFilters] = useState(EMPTY_RESULT_FILTERS)
+  const [openCandidate, setOpenCandidate] = useState(null)
+  const [filing, setFiling] = useState(null)
+
+  const load = useCallback(async () => {
+    try {
+      const data = await get('/api/hr/reveals', 'recruiter')
+      setReveals(data.reveals ?? [])
+      setError('')
+    } catch (err) {
+      setError(err.message)
+      setReveals([])
+    }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  const rows = reveals ?? []
+  const visible = applyResultFilters(rows, filters)
+
+  /* The tags actually worn by the people on THIS list, so the filter cannot
+     offer a label that would empty the screen. Same rule as the folder view. */
+  const tagOptions = useMemo(() => {
+    const seen = new Map()
+    for (const row of rows) for (const tag of row.tags ?? []) seen.set(tag.id ?? tag.label, tag)
+    return [...seen.values()]
+  }, [rows])
+
+  async function fileInto(candidateId, folderId) {
+    try {
+      /* Made first, then filed into, as the search does it: the create route
+         only makes a folder, so filing is always the second call. */
+      let target = folderId
+      if (folderId === 'new') {
+        const name = prompt('Name the new folder', 'Shortlist')
+        if (name === null || !name.trim()) return
+        const made = await post('/api/hr/folders', { name: name.trim() }, 'recruiter')
+        setFolders(made.folders)
+        target = made.id
+      }
+
+      const data = await post(`/api/hr/folders/${target}/items`, { candidateId }, 'recruiter')
+      if (data.folders) setFolders(data.folders)
+      await load()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setFiling(null)
+    }
+  }
+
+  return (
+    <div className="drive">
+      <div className="drive-head">
+        <div>
+          {/* "Reveal History", not "Reveals". The rail item beside Folders is
+              still the short word — a nav label names a place, a heading says
+              what is on the page, and this page is the record rather than the
+              reveals themselves. */}
+          <h2>Reveal History</h2>
+          <p className="muted">
+            Everyone your team has spent a reveal on. Shared with your whole company.
+          </p>
+        </div>
+      </div>
+
+      <StatusNotice error={error} onDismiss={() => setError('')} />
+
+      {/*
+        The same funnel the searches and the folders use, minus the score.
+        There is no percentage on this screen to narrow by — see the note on
+        ResultCard's `corner`.
+      */}
+      {rows.length > 0 && (
+        <ResultFilters
+          filters={filters}
+          onChange={setFilters}
+          shown={visible.length}
+          matched={rows.length}
+          total={rows.length}
+          statuses={statuses}
+          showScore={false}
+          tags={tagOptions}
+          nameSearch
+        />
+      )}
+
+      {reveals === null ? (
+        <p className="muted">Loading…</p>
+      ) : rows.length === 0 ? (
+        <p className="muted triage-lede">
+          Nobody has been revealed yet. Reveal a candidate from a search and they appear here,
+          with the date and who spent the reveal.
+        </p>
+      ) : (
+        <ol className="results">
+          {visible.length === 0 && (
+            <li className="drive-empty muted">Nothing here matches the filters.</li>
+          )}
+
+          {visible.map((item) => (
+            <ResultCard
+              key={item.candidate_id}
+              result={{
+                candidate: {
+                  id: item.candidate_id,
+                  display_name: item.display_name,
+                  location: item.location,
+                  availability: item.availability,
+                  has_photo: item.has_photo,
+                },
+                score: null,
+                folder: item.folder,
+                revealed: true,
+                tags: item.tags ?? [],
+                activity: item.activity,
+                analysis: null,
+                matchedRequired: [],
+                missingRequired: [],
+              }}
+              meId={me?.recruiter?.id ?? null}
+              onOpen={() => setOpenCandidate(item.candidate_id)}
+              canSave
+              onFile={() => setFiling(item.candidate_id)}
+              /*
+               * The date, where the score would be.
+               *
+               * Who spent it goes underneath, and says "you" rather than
+               * reading the reader their own name back — the same courtesy
+               * revealIndex carries the recruiter id for.
+               */
+              corner={(
+                <div className="result-revealed">
+                  <span className="result-revealed-date">{formatDate(item.revealedAt)}</span>
+                  <span className="result-revealed-by">
+                    {item.revealedById === (me?.recruiter?.id ?? null)
+                      ? 'by you'
+                      : `by ${item.revealedBy ?? 'a former colleague'}`}
+                  </span>
+                </div>
+              )}
+            />
+          ))}
+        </ol>
+      )}
+
+      {filing !== null && (
+        <FolderDialog
+          folders={folders}
+          onPick={(folderId) => fileInto(filing, folderId)}
+          onNewFolder={() => fileInto(filing, 'new')}
+          onClose={() => setFiling(null)}
+          inFolderId={rows.find((r) => r.candidate_id === filing)?.folder?.id ?? null}
+        />
+      )}
+
+      {openCandidate !== null && (
+        <CandidateDialog
+          candidateId={openCandidate}
+          me={me}
+          folders={folders}
+          setFolders={setFolders}
+          onClose={() => setOpenCandidate(null)}
+        />
+      )}
+    </div>
+  )
+}
+
 function FoldersTab({ me = null, folders, setFolders, statuses = [] }) {
   /* Finding one folder among many. A filter over what is already loaded, so it
      answers as you type and needs no request. */
@@ -5609,6 +6160,14 @@ function FoldersTab({ me = null, folders, setFolders, statuses = [] }) {
   const [error, setError] = useState('')
   const [dragOver, setDragOver] = useState(null)
   const [openCandidate, setOpenCandidate] = useState(null)
+  /*
+   * Which candidate is being filed, if any.
+   *
+   * Held by the list rather than by the card, so one dialog serves however many
+   * rows are on screen — twenty cards each holding their own would be twenty
+   * portals waiting to be told to open. The search list does the same.
+   */
+  const [filing, setFiling] = useState(null)
   /* Which folder is open, by id rather than by object, so the row stays correct
      across a refetch that replaces every folder in the list. */
   const [openFolder, setOpenFolder] = useState(null)
@@ -5963,6 +6522,7 @@ function FoldersTab({ me = null, folders, setFolders, statuses = [] }) {
           statuses={statuses}
           showScore={false}
           tags={folderTagOptions}
+          nameSearch
         />
       )}
 
@@ -6083,7 +6643,7 @@ function FoldersTab({ me = null, folders, setFolders, statuses = [] }) {
         </div>
       ) : opened ? (
         /* Inside a folder: its candidates, one per row. */
-        <ul className="drive-items">
+        <ul className="drive-items result-list">
           {opened.items.length === 0 && (
             <li className="drive-empty muted">
               Nothing in here yet. Drag a candidate in from a search.
@@ -6098,109 +6658,82 @@ function FoldersTab({ me = null, folders, setFolders, statuses = [] }) {
             </li>
           )}
 
+          {/*
+            One card, drawn twice.
+
+            A candidate in a folder and a candidate in a search are the same
+            person seen from two places, and they were two different rows: a
+            five-column grid line here, a two-row card with a floating corner
+            there. Two treatments for one object is what makes a product feel
+            assembled out of parts.
+
+            The row's data is flat where the card's is nested, so it is adapted
+            rather than passed through — and it genuinely lacks some of what the
+            card can show (nobody has an unread count or a revealedBy here), in
+            which case the card simply draws less. What it does NOT lack is the
+            drag: this row was already `draggable` with the same
+            `text/candidate-id` payload the card sets, for dragging into another
+            folder, so that survives untouched.
+          */}
           {visibleItems.map((item) => (
-            <li
-              key={item.candidate_id}
-              className="drive-item"
-              draggable
-              onDragStart={(e) => e.dataTransfer.setData('text/candidate-id', String(item.candidate_id))}
-              role="button"
-              tabIndex={0}
-              title={`Open ${item.display_name ?? item.name}`}
-              onClick={() => setOpenCandidate(item.candidate_id)}
-              onKeyDown={(e) => {
-                /* Only what lands on the row itself. The corner carries its
-                   own controls, and a keystroke meant for one of those must not
-                   also open what is behind it. */
-                if (e.target !== e.currentTarget) return
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault()
-                  setOpenCandidate(item.candidate_id)
-                }
+            <ResultCard
+              /* Two kinds of row live in one folder now, and their ids come
+                 from two different tables — so the key has to say which. */
+              key={item.fromTriage
+                ? `t${item.triage_applicant_id}`
+                : `c${item.candidate_id}`}
+              result={{
+                candidate: {
+                  id: item.candidate_id,
+                  display_name: item.display_name ?? item.name,
+                  location: item.location,
+                  availability: item.availability,
+                  has_photo: item.has_photo,
+                },
+                /*
+                 * Where this one came from, when it is not the marketplace.
+                 *
+                 * A folder can hold a candidate somebody found in a search and
+                 * a CV somebody uploaded to a Triage, and they are not the same
+                 * kind of thing: one has a profile, a freshness clock and an
+                 * inbox, the other is a document. Nothing else on the row would
+                 * tell them apart, so the row says it.
+                 */
+                fromTriage: item.fromTriage ?? null,
+                score: item.score,
+                /* Where they are, which on this screen is the folder being
+                   read — the card's chip then names it, as it does in a
+                   search. */
+                folder: { id: opened.id, name: opened.name },
+                revealed: item.revealed,
+                tags: item.tags ?? [],
+                activity: item.activity,
+                /* The reading saved when they were filed, said as the card
+                   says a live one. scoredFor is what it was measured against,
+                   and the profile still explains that it is a snapshot. */
+                analysis: item.analysis ?? null,
+                matchedRequired: [],
+                missingRequired: [],
               }}
-            >
-              <CandidateAvatar candidate={{ ...item, id: item.candidate_id }} />
-
-              <span className="drive-item-name">
-                <strong>{item.display_name ?? item.name}</strong>
-                {/*
-                  The same two facts the search card leads with, in the same
-                  order — where they are and when they can start.
-
-                  Capacity was a third here and nowhere else. A row in a folder
-                  and a row in a search are the same person seen twice, and a
-                  field that appears in one view and not the other makes them
-                  look like different records.
-                */}
-                <span className="muted">
-                  {[item.location, item.availability].filter(Boolean).join(' · ')}
-                </span>
-              </span>
-
-              {/*
-                What they scored, on the row as well as inside the profile.
-                
-                The cell is always here, empty when there is nothing to put in
-                it: the row is a five-column grid, and a cell that disappears on
-                some rows drags the tags of those rows left into the column the
-                numbers occupy on every other one.
-
-                `Number.isFinite`, not a truthiness test. Nought is a score — it
-                is the answer for a candidate who matched nothing, which is
-                exactly the row a recruiter scanning a shortlist wants to see —
-                and `item.score && …` would hide precisely that one.
-              */}
-              <span className="drive-item-score">
-                {Number.isFinite(item.score) && (
-                  <span
-                    className={`score score-${scoreBand(item.score)}`}
-                    title={item.scoredFor
-                      ? `${item.score}% against “${item.scoredFor}”`
-                      : `${item.score}% when they were filed`}
-                  >
-                    <span className="score-value">{item.score}%</span>
-                  </span>
-                )}
-              </span>
-
-              {/*
-                No status picker and no relocation chip.
-
-                Both were flags on a row that is read by scanning down it, and
-                the two of them together took more width than the name. The
-                status a row carries is still computed — the filters above still
-                offer it, and it still comes from whether anyone has written to
-                the candidate — it simply is not set by hand from here any more.
-                Relocation is on the profile, which is where a fact about the
-                person belongs.
-              */}
-              <span className="drive-item-tags">
-                {/* What your team calls them, ahead of what the CV says about
-                    them: a colleague's word is the thing you came to read. */}
-                {/*
-                  What your team calls them, and nothing else.
-
-                  A "Cover letter" chip sat here reporting what was attached.
-                  What is attached is not a reason to open somebody — it is a
-                  detail of the profile, which is where it lives — and the
-                  search card carries no such chip, so this row wore one badge
-                  its twin did not.
-                */}
-                <TagStrip tags={item.tags} limit={2} />
-              </span>
-
-              <button
-                type="button" className="chip-remove"
-                /* The chip's row is itself key-activated, so a press here has
-                   to stop where it lands or removing a member also opens the
-                   folder behind it. */
-                onKeyDown={(e) => e.stopPropagation()}
-                aria-label={`Remove ${item.display_name ?? item.name} from ${opened.name}`}
-                onClick={(e) => { e.stopPropagation(); removeItem(item.candidate_id) }}
-              >
-                &times;
-              </button>
-            </li>
+              meId={me?.recruiter?.id ?? null}
+              onOpen={() => setOpenCandidate(item.candidate_id)}
+              onTagsChanged={tagsChanged}
+              /*
+               * Filing, from a card that is already filed.
+               *
+               * "Save in folder" reads oddly on a row inside a folder until you
+               * remember what the dialog behind it does: it says where they are
+               * and offers everywhere else. Moving somebody from one folder to
+               * another was otherwise two gestures through two screens — take
+               * them out here, find them again in a search, put them back.
+               */
+              canSave
+              onFile={() => setFiling(item.candidate_id)}
+              onRemove={() => removeItem(item.candidate_id)}
+              /* Short, because it is a line in a menu now rather than the
+                 accessible name of an unlabelled ×. */
+              removeLabel={`Remove from ${opened.name}`}
+            />
           ))}
         </ul>
       ) : (
@@ -6286,6 +6819,24 @@ function FoldersTab({ me = null, folders, setFolders, statuses = [] }) {
             )
           })}
         </ul>
+      )}
+
+      {/*
+        The same dialog the search list opens, given this screen's handlers.
+        moveToFolder already understands 'new', so the two callers hand it the
+        same shape and neither needs to know which list it was opened from.
+      */}
+      {filing !== null && (
+        <FolderDialog
+          folders={folders}
+          /* They are in the folder being read — that is what this screen is —
+             so the dialog opens with it named and Remove beside it. */
+          inFolderId={opened?.id ?? null}
+          onPick={(folderId) => moveToFolder(filing, folderId)}
+          onNewFolder={() => moveToFolder(filing, 'new')}
+          onRemove={() => removeItem(filing)}
+          onClose={() => setFiling(null)}
+        />
       )}
 
       {openCandidate !== null && (
@@ -6399,10 +6950,12 @@ function StatusPicker({ item, statuses, onChange }) {
  */
 function CandidateDialog({
   candidateId, result = null, folders = [], onAddToFolder, onRemoveFromFolder,
-  onSave, onRevealed, onDismiss, onTagsChanged, onClose, onError, meId = null,
+  onRevealed, onDismiss, onTagsChanged, onClose, onError, meId = null,
 }) {
   const dialogRef = useDialogFocus()
   const [data, setData] = useState(null)
+  /* Whether the folder dialog is over this one. */
+  const [filing, setFiling] = useState(false)
   /* The same tags the row carries, kept here so the strip in this header and
      the editor behind the + are one thing. Seeded from the row and replaced by
      the profile's own copy, which is the fresher of the two. */
@@ -6545,32 +7098,25 @@ function CandidateDialog({
    * list is a recruiter's own and short, and naming them turns two gestures
    * into one.
    */
-  const inFolder = result?.folder ?? null
-  const filing = onAddToFolder ? [
-    ...folders
-      .filter((folder) => folder.id !== inFolder?.id)
-      .map((folder) => ({
-        key: `folder-${folder.id}`,
-        label: inFolder ? `Move to ${folder.name}` : `Add to ${folder.name}`,
-        onSelect: () => onAddToFolder(candidateId, folder.id),
-      })),
-    { key: 'folder-new', label: '+ New folder…', onSelect: () => onAddToFolder(candidateId, 'new') },
-    inFolder && onRemoveFromFolder && {
-      key: 'folder-remove',
-      label: `Remove from ${inFolder.name}`,
-      danger: true,
-      /* Closed after, because the row this was opened from is about to go. */
-      onSelect: () => { onRemoveFromFolder(candidateId); onClose() },
-    },
-  ].filter(Boolean) : []
+  const inFolder = result?.folder
+    ?? folders.find((folder) => folder.items?.some((item) => item.candidate_id === candidateId))
+    ?? null
 
   const actions = [
-    onSave && {
+    /*
+     * One line, and it opens the same dialog the result card opens.
+     *
+     * This menu used to name every folder in the company — "Move to Backend
+     * hires", "Move to Graduates", "Move to Analytics" — one item each, plus a
+     * new-folder item and a remove. That is a list pretending to be a menu, and
+     * it grew a row longer every time anyone made a folder. The dialog it now
+     * opens has a search box, which is the thing a list of forty needs.
+     */
+    onAddToFolder && {
       key: 'folder',
-      label: result?.folder ? `Saved in ${result.folder.name}` : 'Add to folder',
-      onSelect: () => { if (!result?.folder) onSave() },
+      label: 'Save in folder',
+      onSelect: () => setFiling(true),
     },
-    ...filing,
     /* The dialog's own reveal, not the list's: one code path for one purchase,
        and the person being paid for is on screen while it happens. */
     !revealed && { key: 'reveal', label: 'Reveal', onSelect: reveal },
@@ -6584,6 +7130,27 @@ function CandidateDialog({
 
   return (
     <div className="modal-backdrop" onClick={onClose} role="presentation">
+      {/*
+        Over this dialog, not beside it.
+
+        Its own portal puts it on document.body, so it paints above the profile
+        rather than inside the scrolling panel — the same reason AllSearches is
+        portalled. Removing closes both: the row this was opened from is about
+        to lose the folder it was listed under.
+      */}
+      {filing && (
+        <FolderDialog
+          folders={folders}
+          inFolderId={inFolder?.id ?? null}
+          onPick={(folderId) => onAddToFolder(candidateId, folderId)}
+          onNewFolder={() => onAddToFolder(candidateId, 'new')}
+          onRemove={onRemoveFromFolder
+            ? () => { onRemoveFromFolder(candidateId); onClose() }
+            : null}
+          onClose={() => setFiling(false)}
+        />
+      )}
+
       <div
         className="modal candidate-dialog"
         role="dialog"
@@ -7397,17 +7964,21 @@ function ActivityDot({ activity }) {
     : 'No sign of activity in the last 30 days'
 
   /*
-   * Green or nothing.
+   * Green or nothing — and nothing means nothing drawn.
    *
    * The red dot said "no sign of them in 30 days", which is the ordinary state
    * for most of a candidate pool and was being drawn in the colour this product
    * uses for errors — a whole result list of alarm marks, none of which meant
-   * anything was wrong. The legend explains the green one; absence needs no key.
+   * anything was wrong. So it became an empty placeholder instead, which was
+   * still visible: .activity-dot carries an inset ring, and clearing the
+   * background and the border left the ring behind. Every ordinary candidate
+   * wore a small pale circle that meant nothing and looked like a control.
    *
-   * The space is still reserved, so names stay aligned down the column whether
-   * or not a candidate has been seen recently.
+   * The space it reserved bought nothing either. The dot follows the name
+   * rather than preceding it, so removing it moves no name — only the badge
+   * after it, which most rows do not have.
    */
-  if (!fresh) return <span className="activity-dot activity-dot-none" aria-hidden="true" />
+  if (!fresh) return null
 
   return (
     <span

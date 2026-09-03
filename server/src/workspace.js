@@ -261,12 +261,241 @@ export function listFolders(recruiterId) {
   const hidden = candidatesHiddenFrom(recruiterId)
   const visible = shaped.filter((item) => !hidden.has(item.candidate_id))
 
+  /*
+   * And the Triage applicants filed into the same folders.
+   *
+   * They are shaped to the same fields the candidate rows above carry, so the
+   * card that draws a folder does not have to know which kind it is looking at.
+   * What differs is stated rather than implied:
+   *
+   *   fromTriage   the Triage they came out of, by id and title. This is the
+   *                tag the row wears, and it is the reason a folder can hold
+   *                both kinds without the list becoming ambiguous.
+   *
+   *   candidate_id null. There is no marketplace profile behind an applicant,
+   *                so anything keyed on one — messaging, reveals, the activity
+   *                clock, tags — is absent rather than empty.
+   *
+   * No masking, and none needed: a Triage applicant is a CV this company was
+   * sent and paid to have read. There is nothing here it has not already
+   * bought, which is why an applicant has no reveal state at all.
+   */
+  const applicants = db.prepare(`
+    SELECT fti.folder_id, fti.triage_applicant_id, fti.position, fti.added_at,
+           ta.display_name, ta.file_name, ta.email, ta.phone, ta.location,
+           ta.absolute_fit, ta.deep_status,
+           t.id AS triage_id, t.title AS triage_title
+    FROM folder_triage_items fti
+    JOIN folders f ON f.id = fti.folder_id
+    JOIN triage_applicants ta ON ta.id = fti.triage_applicant_id
+    JOIN triages t ON t.id = ta.triage_id
+    WHERE f.company_id = ?
+    ORDER BY fti.position, fti.id
+  `).all(companyId).map((row) => ({
+    folder_id: row.folder_id,
+    candidate_id: null,
+    triage_applicant_id: row.triage_applicant_id,
+    position: row.position,
+    added_at: row.added_at,
+    display_name: row.display_name ?? row.file_name,
+    location: row.location,
+    email: row.email,
+    phone: row.phone,
+    availability: null,
+    summary: null,
+    /*
+     * Null, not true and not false.
+     *
+     * `true` drew the green "Revealed" chip on a row nobody had revealed and no
+     * reveal had been spent on — the chip means "your company paid to see this
+     * person", and here nothing was paid and nothing was hidden. `false` would
+     * be just as wrong the other way, since it is the state that offers a
+     * Reveal button.
+     *
+     * A CV somebody uploaded has no reveal state: there is nothing to unlock.
+     * Null says that, and both the chip and the button are gated on truthiness,
+     * so neither appears.
+     */
+    revealed: null,
+    has_photo: false,
+    open_to_relocation: null,
+    documents: [],
+    tags: [],
+    activity: null,
+    /* No status. Every one of the six is about a marketplace pipeline — saved
+       but not revealed, revealed but not messaged, they replied — and an
+       applicant is in none of it: there is nothing to reveal and no inbox to
+       message. Null rather than a seventh key, so the status filter simply
+       does not match them instead of offering a stage that means nothing. */
+    status: null,
+    score: null,
+    scoredFor: null,
+    scoredAt: null,
+    analysis: null,
+    fromTriage: { id: row.triage_id, title: row.triage_title ?? null },
+  }))
+
   return folders.map((folder) => ({
     ...folder,
     /* `shaped`, not the raw rows: those still carry the columns the masking
        strips out — first_name, last_name, photo_name. */
-    items: visible.filter((item) => item.folder_id === folder.id),
+    items: [
+      ...visible.filter((item) => item.folder_id === folder.id),
+      ...applicants.filter((item) => item.folder_id === folder.id),
+    ],
   }))
+}
+
+/**
+ * File a Triage applicant into a folder.
+ *
+ * Both ends are checked against the caller's own company before anything is
+ * written: the folder, and the Triage the applicant belongs to. Neither id is
+ * trusted, because both arrive from the client — and an unchecked applicant id
+ * would let one organization file another's CVs and then read the name, the
+ * email and the phone number off its own folder screen.
+ */
+export function placeTriageApplicant({ recruiterId, folderId, applicantId }) {
+  const companyId = companyOf(recruiterId)
+
+  const folder = db.prepare(
+    `SELECT id FROM folders WHERE id = ? AND company_id = ?`,
+  ).get(folderId, companyId)
+  if (!folder) return { ok: false, reason: 'no-folder' }
+
+  const applicant = db.prepare(`
+    SELECT ta.id FROM triage_applicants ta
+    JOIN triages t ON t.id = ta.triage_id
+    WHERE ta.id = ? AND t.company_id = ?
+  `).get(applicantId, companyId)
+  if (!applicant) return { ok: false, reason: 'no-applicant' }
+
+  const last = db.prepare(
+    `SELECT MAX(position) AS at FROM folder_triage_items WHERE folder_id = ?`,
+  ).get(folderId).at
+
+  db.prepare(`
+    INSERT OR IGNORE INTO folder_triage_items (folder_id, triage_applicant_id, position, added_at)
+    VALUES (?, ?, ?, ?)
+  `).run(folderId, applicantId, (last ?? 0) + 1, new Date().toISOString())
+
+  return { ok: true }
+}
+
+/** Take one out of every folder in this company. */
+export function removeTriageApplicant({ recruiterId, applicantId }) {
+  const companyId = companyOf(recruiterId)
+  return db.prepare(`
+    DELETE FROM folder_triage_items
+    WHERE triage_applicant_id = ?
+      AND folder_id IN (SELECT id FROM folders WHERE company_id = ?)
+  `).run(applicantId, companyId).changes > 0
+}
+
+/** Which folder each Triage applicant is in, for the Triage screen's chips. */
+export function triageFolderIndex(recruiterId) {
+  const rows = db.prepare(`
+    SELECT fti.triage_applicant_id, fti.folder_id, f.name
+    FROM folder_triage_items fti
+    JOIN folders f ON f.id = fti.folder_id
+    WHERE f.company_id = ?
+  `).all(companyOf(recruiterId))
+
+  return Object.fromEntries(rows.map((row) => [
+    row.triage_applicant_id, { id: row.folder_id, name: row.name },
+  ]))
+}
+
+/**
+ * The reveal log: everyone this company has spent a reveal on, newest first.
+ *
+ * Company-scoped from a recruiter id, exactly as listFolders is and for the
+ * same reason — a signature that took the scope would be one more place to
+ * pass the wrong one, and wrong here means reading another organization's
+ * purchase history.
+ *
+ * Three things make this simpler than the folder list:
+ *
+ * Nobody is masked. A reveal log is by definition a list of people this
+ * company has already paid to see, so the display name is the real one and the
+ * photograph is theirs. maskedDisplayName has no call site here, and that is
+ * the correct absence rather than a missing safeguard.
+ *
+ * There is no score. A reveal is not a match — the same person can be revealed
+ * out of one search and be irrelevant to the next — so no number is carried and
+ * the screen that draws this passes showScore={false}. What replaces it is the
+ * date, which is the fact this list exists to state.
+ *
+ * It reads `reveals` rather than `organization_reveals`. Both record the same
+ * event; `reveals` is the one hasRevealed and revealedCandidateIds consult, so
+ * the log says exactly what the rest of the product treats as revealed. A row
+ * that appeared here and nowhere else would be a bug nobody could see.
+ */
+export function revealLog(recruiterId) {
+  const companyId = companyOf(recruiterId)
+
+  const rows = db.prepare(`
+    SELECT r.candidate_id, r.created_at AS revealed_at, r.recruiter_id AS revealed_by_id,
+           rec.first_name AS by_first_name, rec.last_name AS by_last_name,
+           c.first_name, c.last_name, c.location, c.photo_name,
+           c.availability, c.capacity, c.open_to_relocation, c.notes,
+           c.missed_checkins, c.last_confirmed_active, c.last_seen_at, c.created_at,
+           c.hidden_from_search, c.deactivated_at, c.auto_hidden_at,
+           (SELECT GROUP_CONCAT(d.slot) FROM documents d WHERE d.candidate_id = c.id) AS slots
+    FROM reveals r
+    JOIN candidates c ON c.id = r.candidate_id
+    LEFT JOIN recruiters rec ON rec.id = r.recruiter_id
+    WHERE r.company_id = ?
+    ORDER BY r.created_at DESC, r.id DESC
+  `).all(companyId)
+
+  const tags = tagIndex(companyId)
+  /* Where each one is filed, so the card can wear the same folder chip it
+     wears in a search rather than looking like a different object here. */
+  const filed = folderIndex(recruiterId)
+
+  const shaped = rows.map((row) => ({
+    candidate_id: row.candidate_id,
+    revealed: true,
+    display_name: [row.first_name, row.last_name].filter(Boolean).join(' '),
+    location: row.location,
+    availability: row.availability,
+    capacity: row.capacity,
+    open_to_relocation: row.open_to_relocation === null ? null : Boolean(row.open_to_relocation),
+    summary: row.notes ?? null,
+    has_photo: Boolean(row.photo_name),
+    documents: row.slots ? row.slots.split(',') : [],
+    tags: tags.get(row.candidate_id) ?? [],
+    folder: filed[row.candidate_id] ?? null,
+    activity: activityStatus({
+      missed_checkins: row.missed_checkins,
+      last_confirmed_active: row.last_confirmed_active,
+      last_seen_at: row.last_seen_at,
+      created_at: row.created_at,
+      hidden_from_search: row.hidden_from_search,
+      deactivated_at: row.deactivated_at,
+      auto_hidden_at: row.auto_hidden_at,
+    }),
+    revealedAt: row.revealed_at,
+    /* Null when the account has since been deleted. The reveal still happened
+       and the company still paid for it, so the row stays and only the name
+       goes — the same rule revealedBy() follows. */
+    revealedBy: [row.by_first_name, row.by_last_name].filter(Boolean).join(' ') || null,
+    revealedById: row.revealed_by_id,
+  }))
+
+  /*
+   * A candidate who has since blocked this employer drops out, exactly as they
+   * drop out of the folders.
+   *
+   * The company did pay to see them, and this list is in one sense a receipt.
+   * But it is also a working screen with their name, their location and a link
+   * to their profile on it, and a block is a live restriction on precisely
+   * that. The `reveals` row is untouched: billing history is not rewritten,
+   * and the person reappears here if they ever unblock.
+   */
+  const hidden = candidatesHiddenFrom(recruiterId)
+  return shaped.filter((item) => !hidden.has(item.candidate_id))
 }
 
 /**

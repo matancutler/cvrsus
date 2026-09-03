@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
 import { DATE_LOCALE } from '../dates.js'
 import { ORDER, bucketOf, railSlice } from '../rail.js'
 import useDialogFocus from '../useDialogFocus.js'
+import useDismissOnOutside from '../useDismiss.js'
 
 /*
  * `bare` drops the frame and the New search button.
@@ -17,6 +18,21 @@ export default function ChatSidebar({
   chats, activeId, onNew, onOpen, onRename, onDelete, bare = false,
 }) {
   const [menuFor, setMenuFor] = useState(null)
+
+  /* The open row's menu, so a press anywhere else shuts it. Without this a menu
+     opened on one search stayed open while you clicked another, and two could
+     be on screen at once. */
+  const openMenu = useRef(null)
+  /* Only ever the ⋯ of the row whose menu is open — it is a sibling of the
+     panel, so without it a press on that button would dismiss and then be
+     toggled straight back open by its own click. */
+  const openTrigger = useRef(null)
+  useDismissOnOutside({
+    ref: openMenu,
+    trigger: openTrigger,
+    onDismiss: useCallback(() => setMenuFor(null), []),
+    active: menuFor !== null,
+  })
   const [browsing, setBrowsing] = useState(false)
 
   const shown = railSlice(chats)
@@ -69,6 +85,7 @@ export default function ChatSidebar({
                       <button
                         type="button"
                         className="chat-item-menu"
+                        ref={menuFor === chat.id ? openTrigger : null}
                         aria-label={`Options for ${chat.title}`}
                         onClick={() => setMenuFor(menuFor === chat.id ? null : chat.id)}
                       >
@@ -76,7 +93,7 @@ export default function ChatSidebar({
                       </button>
 
                       {menuFor === chat.id && (
-                        <div className="chat-item-actions">
+                        <div className="chat-item-actions" ref={openMenu}>
                           <button
                             type="button"
                             onClick={() => {

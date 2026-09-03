@@ -202,6 +202,7 @@ import {
   PASSWORD_RESET_MINUTES,
   listRecruiters,
   photoVersion,
+  setCompanyLogo,
   recruiterDeletionPreview,
   recruiterDisplayName,
   recruiterSessionIsCurrent,
@@ -237,8 +238,12 @@ import {
   positionBetween,
   recruiterThreads,
   recruiterUnreadByCandidate,
+  placeTriageApplicant,
   removeFromFolders,
+  removeTriageApplicant,
   renameFolder,
+  revealLog,
+  triageFolderIndex,
   reopenThread,
   addComment,
   setTags,
@@ -657,7 +662,17 @@ const upload = multer({
   fileFilter: (_req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase()
 
-    if (file.fieldname === 'photo') {
+    /*
+     * Two image fields, one rule.
+     *
+     * 'logo' is named here rather than folded into 'photo' because they are
+     * different things with different permissions — a photo is a person's own
+     * and any recruiter may change theirs, a logo is the company's and only an
+     * administrator may. Sharing the branch would hide that; sharing the
+     * EXTENSION list is the part worth sharing, since a logo is as much an
+     * image as a portrait and the bytes are checked the same way afterwards.
+     */
+    if (file.fieldname === 'photo' || file.fieldname === 'logo') {
       if (!PHOTO_EXTENSIONS.includes(ext)) {
         return cb(new Error(`"${ext}" is not a supported image. Use a JPG, PNG or WebP.`))
       }
@@ -766,6 +781,22 @@ const applicationUpload = [
 ]
 
 const photoUpload = [upload.single('photo'), verifyUploads]
+/*
+ * Registration takes two images at once: the administrator's own picture and
+ * the company's mark.
+ *
+ * .fields rather than .single because there is no later moment to send the
+ * logo in — registering does not sign anybody in (approval is pending), so a
+ * second request would have no session to be an administrator with.
+ */
+const registerUpload = [
+  upload.fields([{ name: 'photo', maxCount: 1 }, { name: 'logo', maxCount: 1 }]),
+  verifyUploads,
+]
+/* The same pair for the company's mark. verifyUploads is what actually refuses
+   an SVG or an HTML file dressed as a .png — it sniffs the bytes on disk and
+   deletes anything whose contents disagree with its name. */
+const logoUpload = [upload.single('logo'), verifyUploads]
 const jdUpload = [upload.single('jd'), verifyUploads]
 
 /**
@@ -818,10 +849,20 @@ function assertUploadsAreWhatTheyClaim(req) {
   const fieldFiles = req.files ?? {}
 
   const photo = req.file?.fieldname === 'photo' ? req.file : fieldFiles.photo?.[0]
+  /*
+   * The company logo, checked exactly as a photo is.
+   *
+   * This list is the whole of the byte-level defence — multer's own filter
+   * reads the NAME and nothing else, so a .png that is really an SVG gets past
+   * it every time. A field missing from here is a field nobody sniffs, which is
+   * why adding one is not optional.
+   */
+  const logo = req.file?.fieldname === 'logo' ? req.file : fieldFiles.logo?.[0]
   const jd = req.file?.fieldname === 'jd' ? req.file : fieldFiles.jd?.[0]
 
   const checks = [
     ...(photo ? [{ file: photo, allowed: PHOTO_EXTENSIONS, label: 'photo' }] : []),
+    ...(logo ? [{ file: logo, allowed: PHOTO_EXTENSIONS, label: 'logo' }] : []),
     ...(jd ? [{ file: jd, allowed: DOCUMENT_EXTENSIONS, label: 'job description' }] : []),
     ...uploadedDocuments(req).map(({ file, slot }) => ({
       file,
@@ -3036,7 +3077,7 @@ function readAdminContact(body) {
  * in immediately, and every further account is created by it from the Team
  * screen. Multipart, because the administrator may set a photo while signing up.
  */
-app.post('/api/company/register', limits.register, photoUpload, async (req, res, next) => {
+app.post('/api/company/register', limits.register, registerUpload, async (req, res, next) => {
   try {
     const name = String(req.body?.companyName ?? '').trim()
     if (name.length < 2) throw new HttpError(400, 'Enter your company name.')
@@ -3082,9 +3123,14 @@ app.post('/api/company/register', limits.register, photoUpload, async (req, res,
     const recruiter = await createRecruiter({
       companyId: company.id, firstName, lastName, password,
       email, phone, website,
-      photoName: req.file?.filename ?? null,
+      photoName: req.files?.photo?.[0]?.filename ?? null,
       isOrgAdmin: true,
     })
+
+    /* The company's mark, if one was attached. Set after the company exists,
+       which is the only moment it can be — and a failure to store it must not
+       undo a registration, so it is not allowed to throw the request away. */
+    if (req.files?.logo?.[0]) setCompanyLogo(company.id, req.files.logo[0].filename)
 
     /*
      * Now that there is somebody to give it to.
@@ -3156,7 +3202,9 @@ app.post('/api/company/register', limits.register, photoUpload, async (req, res,
       contact: { email, phone },
     })
   } catch (error) {
-    if (req.file) fs.promises.unlink(req.file.path).catch(() => {})
+    /* Both of them: .fields puts every file under req.files, so the single-file
+       cleanup this route used to do would now leave two orphans on disk. */
+    discard(Object.values(req.files ?? {}).flat())
     next(error)
   }
 })
@@ -4087,6 +4135,60 @@ app.patch('/api/recruiter/:id/password', recruiterOnly, orgAdminOnly, async (req
 })
 
 /** A recruiter's own photo. Used in the panel header and the team list. */
+/*
+ * ------------------------------------------------------------ company logo ---
+ *
+ * One image per company, set by the administrator and seen by everybody.
+ *
+ * Admin-only on the way in, because a logo is the organization's identity
+ * rather than a person's: any recruiter may change their own photo — that is
+ * the whole reason PATCH /api/recruiter/me/photo exists outside orgAdminOnly —
+ * but the mark that appears beside every colleague's name is not theirs to
+ * change. Shared on the way out for free: it is a column on companies and
+ * getCompany selects *, so there is one row and one answer.
+ */
+app.patch('/api/company/logo', recruiterOnly, orgAdminOnly, logoUpload, async (req, res, next) => {
+  try {
+    const removeLogo = String(req.body?.removeLogo) === 'true'
+    if (!req.file && !removeLogo) throw new HttpError(400, 'Choose a logo, or ask to remove it.')
+
+    /* The row stops naming the old file before the old file goes, so a failure
+       here can leave an orphan on disk but never a company pointing at nothing. */
+    const previous = setCompanyLogo(req.company.id, req.file ? req.file.filename : null)
+    if (previous) {
+      await fs.promises.unlink(path.join(UPLOAD_DIR, previous)).catch(() => {})
+    }
+
+    const company = getCompany(req.company.id)
+    track('company_logo_set', { actorType: 'recruiter', actorId: req.session.id })
+    res.json({
+      hasLogo: Boolean(company.logo_name),
+      logoVersion: photoVersion(company.logo_name),
+    })
+  } catch (error) {
+    if (req.file) fs.promises.unlink(req.file.path).catch(() => {})
+    next(error)
+  }
+})
+
+/*
+ * Your own company's logo, and no way to ask for anybody else's.
+ *
+ * There is no :id in this path on purpose. The recruiter photo route takes one
+ * and then checks that the target is a colleague; this one cannot be asked the
+ * wrong question at all, because the only company it can answer for is the one
+ * the session belongs to.
+ */
+app.get('/api/company/logo', recruiterOnly, (req, res) => {
+  const recruiter = getRecruiter(req.session.id)
+  const company = recruiter ? getCompany(recruiter.company_id) : null
+
+  const logoPath = company ? resolveUpload(company.logo_name) : null
+  if (!logoPath) return res.status(404).json({ error: 'No logo on file.' })
+
+  sendUploadedFile(res, logoPath)
+})
+
 app.get('/api/recruiter/:id/photo', recruiterOnly, (req, res) => {
   const viewer = getRecruiter(req.session.id)
   const target = getRecruiter(Number(req.params.id))
@@ -4269,6 +4371,22 @@ app.get('/api/recruiter/me', recruiterOnly, (req, res) => {
       phone: recruiter.phone ?? '',
       website: recruiter.website ?? '',
     },
+    /*
+     * The company's own mark, told to every seat.
+     *
+     * Here rather than on the recruiter, because it is not theirs: one row,
+     * one answer, and a colleague who is not an administrator still needs to
+     * SEE it even though they may not change it. The version is the same sha1
+     * of the filename the photos use, so a replaced logo busts its own cache.
+     */
+    company: (() => {
+      const company = getCompany(recruiter.company_id)
+      return {
+        name: recruiter.company_name,
+        hasLogo: Boolean(company?.logo_name),
+        logoVersion: photoVersion(company?.logo_name),
+      }
+    })(),
     // §15 — so the workspace can say why it is empty rather than showing a
     // wall of failed requests to someone who has done nothing wrong.
     approval: getCompany(recruiter.company_id)?.approval_status ?? 'approved',
@@ -6304,6 +6422,11 @@ app.get('/api/hr/triage/:id/results', recruiterOnly, (req, res, next) => {
       states: pipelineStates(triage.id),
       working: queueDepth(triage.id) > 0,
       queued,
+      /* Where each applicant is filed, so a row can wear the folder chip the
+         search results wear. Company-wide and sent with the page rather than
+         fetched per row: a folder is shared, so a colleague's filing shows up
+         here, and twenty-five rows would otherwise be twenty-five requests. */
+      filed: triageFolderIndex(req.session.id),
       /* Said once, here, for the same reason Search says it: a score that moves
          when more people are analysed looks like instability unless the
          recruiter is told the scale moved rather than the candidate. */
@@ -6397,6 +6520,69 @@ app.delete('/api/hr/triage/:id', recruiterOnly, async (req, res, next) => {
 
     track('triage_deleted', { actorType: 'recruiter', actorId: req.session.id, triageId: triage.id })
     res.json({ deleted: true, triages: listTriages(companyId) })
+  } catch (error) {
+    next(error)
+  }
+})
+
+/**
+ * Everyone this company has revealed, newest first.
+ *
+ * No :id and no query parameter for the company — the scope comes off the
+ * session, so one organization reading another's is not a thing an argument can
+ * ask for. Same construction as GET /api/company/logo.
+ *
+ * The statuses ride along for the same reason they do on the folders route: the
+ * filter bar over this list offers them, and a second copy of the vocabulary in
+ * the client is a second thing to keep in step.
+ */
+/**
+ * File a Triage applicant into a folder, or take them out of every folder.
+ *
+ * Separate from the candidate routes beside it because the thing being filed is
+ * a different object with a different owner: an applicant belongs to a Triage,
+ * which belongs to a company, and the check that the caller's company owns that
+ * Triage is the whole point. Reusing the candidate route with a flag would have
+ * meant one handler doing two different authorisations.
+ */
+app.post('/api/hr/folders/:id/triage-items', recruiterOnly, (req, res, next) => {
+  try {
+    const applicantId = Number(req.body?.applicantId)
+    if (!Number.isInteger(applicantId)) {
+      return res.status(400).json({ error: 'An applicant is required.' })
+    }
+
+    const outcome = placeTriageApplicant({
+      recruiterId: req.session.id,
+      folderId: Number(req.params.id),
+      applicantId,
+    })
+
+    /* One message for both misses. Which of the two ids was wrong is exactly
+       the thing a caller probing other companies would like to be told. */
+    if (!outcome.ok) return res.status(404).json({ error: 'No such folder or applicant.' })
+
+    res.json({ folders: listFolders(req.session.id), filed: triageFolderIndex(req.session.id) })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.delete('/api/hr/folders/triage-items/:applicantId', recruiterOnly, (req, res, next) => {
+  try {
+    removeTriageApplicant({
+      recruiterId: req.session.id,
+      applicantId: Number(req.params.applicantId),
+    })
+    res.json({ folders: listFolders(req.session.id), filed: triageFolderIndex(req.session.id) })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.get('/api/hr/reveals', recruiterOnly, (req, res, next) => {
+  try {
+    res.json({ reveals: revealLog(req.session.id), statuses: FOLDER_STATUSES })
   } catch (error) {
     next(error)
   }
@@ -6803,22 +6989,85 @@ app.use((error, req, res, _next) => {
  * every applicant CV in the product on the next restart — silently, and with no
  * way back. Any new table that stores an upload belongs in this union.
  */
+/*
+ * Where swept files go instead of nowhere.
+ *
+ * Inside UPLOAD_DIR so it moves with it and is covered by the same .gitignore
+ * line; skipped by the sweep itself, which only ever considers plain files.
+ */
+const QUARANTINE_DIR = path.join(UPLOAD_DIR, '_swept')
+
+/**
+ * Files on disk that no row names, moved aside rather than deleted.
+ *
+ * This used to unlink them, and that was a loaded gun. The referenced set is
+ * built by reading five columns across four tables, so ANY moment at which that
+ * function is incomplete — a table added without being added here, a checkout,
+ * a stash, a branch switch — turns the next start into a destructive pass over
+ * files nobody can get back. It is not hypothetical: `npm run dev` runs the
+ * server under `node --watch`, which restarts on every source change, so an
+ * editor with the wrong revision open for four seconds is enough. A company
+ * logo, a recruiter's photograph and two candidate documents were destroyed
+ * exactly that way.
+ *
+ * So nothing is deleted. An orphan is renamed into _swept/ and left there. The
+ * disk cost is the size of files nobody references, which is small and bounded
+ * by how often uploads are abandoned; the alternative cost is unrecoverable
+ * data loss, which is neither. Emptying it is a decision for whoever is looking
+ * at it, not for a process that has just started up and knows nothing.
+ */
 function sweepOrphanUploads() {
   const referenced = referencedUploadNames()
   for (const name of triageUploadNames()) referenced.add(name)
-  let removed = 0
+  let moved = 0
 
-  for (const name of fs.readdirSync(UPLOAD_DIR)) {
-    if (referenced.has(name)) continue
+  for (const entry of fs.readdirSync(UPLOAD_DIR, { withFileTypes: true })) {
+    if (!entry.isFile()) continue
+    if (referenced.has(entry.name)) continue
     try {
-      fs.unlinkSync(path.join(UPLOAD_DIR, name))
-      removed += 1
+      fs.mkdirSync(QUARANTINE_DIR, { recursive: true })
+      /* Renamed, not copied: same volume, so it is atomic and costs nothing.
+         A name that is somehow already in there keeps the newer file rather
+         than clobbering the older one. */
+      let target = path.join(QUARANTINE_DIR, entry.name)
+      if (fs.existsSync(target)) target = path.join(QUARANTINE_DIR, `${Date.now()}-${entry.name}`)
+      fs.renameSync(path.join(UPLOAD_DIR, entry.name), target)
+      moved += 1
     } catch {
-      // A file we cannot delete is not worth failing startup over.
+      // A file we cannot move is not worth failing startup over.
     }
   }
 
-  return removed
+  return moved
+}
+
+/**
+ * The other direction: rows that name a file which is not there.
+ *
+ * The sweep's failure mode is silent by construction — it destroys the file and
+ * leaves the row, so the product goes on rendering a broken image or a download
+ * that 404s, and nobody learns until somebody clicks. This says it at startup,
+ * once, with the owning table and the id, which is the only place an operator
+ * would see it before a user does.
+ */
+function reportMissingUploads() {
+  const missing = []
+
+  for (const [table, column, sql] of [
+    ['candidates', 'stored_name', `SELECT id, stored_name AS f FROM candidates WHERE stored_name IS NOT NULL`],
+    ['candidates', 'photo_name', `SELECT id, photo_name AS f FROM candidates WHERE photo_name IS NOT NULL`],
+    ['documents', 'stored_name', `SELECT id, stored_name AS f FROM documents WHERE stored_name IS NOT NULL`],
+    ['recruiters', 'photo_name', `SELECT id, photo_name AS f FROM recruiters WHERE photo_name IS NOT NULL`],
+    ['companies', 'logo_name', `SELECT id, logo_name AS f FROM companies WHERE logo_name IS NOT NULL`],
+  ]) {
+    for (const row of db.prepare(sql).all()) {
+      if (!fs.existsSync(path.join(UPLOAD_DIR, row.f))) {
+        missing.push(`${table}.${column} #${row.id} → ${row.f}`)
+      }
+    }
+  }
+
+  return missing
 }
 
 /**
@@ -6830,10 +7079,21 @@ const CHECKIN_SWEEP_MS = 24 * 60 * 60 * 1000
 
 app.listen(PORT, async () => {
   const swept = sweepOrphanUploads()
+  const missing = reportMissingUploads()
 
   console.log(`  Cursus API listening on http://localhost:${PORT}`)
   console.log(`  ${countCandidates()} candidate(s), ${countCompanies()} company account(s)`)
-  if (swept > 0) console.log(`  swept ${swept} orphaned upload(s)`)
+  if (swept > 0) {
+    console.log(`  moved ${swept} unreferenced upload(s) to uploads/_swept — nothing was deleted`)
+  }
+  /* Loud, and listed. A row pointing at a file that is not there renders a
+     broken image or a download that 404s, and says nothing until somebody
+     clicks it. */
+  if (missing.length > 0) {
+    console.log(`  ${missing.length} row(s) name an upload that is not on disk:`)
+    for (const line of missing.slice(0, 20)) console.log(`    ${line}`)
+    if (missing.length > 20) console.log(`    …and ${missing.length - 20} more`)
+  }
 
   /*
    * §3.2 — candidates who predate the matching architecture have no

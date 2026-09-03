@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+
+import useDismissOnOutside from '../useDismiss.js'
 import { createPortal } from 'react-dom'
 
 /**
@@ -47,6 +49,22 @@ export default function InfoHint({ text, label = 'More information' }) {
   const id = useId()
   const anchor = useRef(null)
   const bubble = useRef(null)
+
+  /*
+   * A press anywhere else closes it.
+   *
+   * On a pointer this opens on hover and closes on leave, so it never mattered.
+   * On a touch screen there is no leave: the bubble is opened by tapping the
+   * (i) and then stayed until something else re-rendered the page. The bubble
+   * is portalled out of the anchor to escape the card's overflow, so the two
+   * are passed separately — neither contains the other.
+   */
+  useDismissOnOutside({
+    ref: bubble,
+    trigger: anchor,
+    onDismiss: useCallback(() => setOpen(false), []),
+    active: open,
+  })
 
   const place = useCallback(() => {
     const trigger = anchor.current?.getBoundingClientRect()

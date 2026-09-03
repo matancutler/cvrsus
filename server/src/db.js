@@ -819,12 +819,39 @@ export function countCandidates() {
 }
 
 /** Every upload filename the database still points at. */
+/**
+ * Every filename any row in the database points at.
+ *
+ * This is the whitelist the startup sweep deletes against, so a table left out
+ * of it is a table whose files are destroyed on the next restart — silently,
+ * and with no way back. It knew about candidates only, and three owners were
+ * already missing:
+ *
+ *   documents        a candidate's cover letter, portfolio and references
+ *   recruiters       a recruiter's own photograph
+ *   companies        the company logo
+ *
+ * The first of those was not hypothetical. A database with three document rows
+ * had one file left on disk; the other two had been swept, months of restarts
+ * ago, from under rows that still name them.
+ *
+ * ANY new table that stores an upload belongs here. The sweep's own comment
+ * says so, and this is the list it means.
+ */
 export function referencedUploadNames() {
   const names = new Set()
-  for (const row of db.prepare(`SELECT stored_name, photo_name FROM candidates`).all()) {
-    if (row.stored_name) names.add(row.stored_name)
-    if (row.photo_name) names.add(row.photo_name)
+
+  const add = (rows) => {
+    for (const row of rows) {
+      for (const value of Object.values(row)) if (value) names.add(value)
+    }
   }
+
+  add(db.prepare(`SELECT stored_name, photo_name FROM candidates`).all())
+  add(db.prepare(`SELECT stored_name FROM documents`).all())
+  add(db.prepare(`SELECT photo_name FROM recruiters`).all())
+  add(db.prepare(`SELECT logo_name FROM companies`).all())
+
   return names
 }
 

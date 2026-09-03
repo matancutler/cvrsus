@@ -257,8 +257,14 @@ check('and a duplicate is an error on the form, not a card instead of it',
   && !signup.includes("state: 'exists'")
   && /alert alert-error/.test(signup),
   'the server names the detail that is taken, and the field stays there to fix')
+/* The step it goes back to is 'form', not 'phone'. Contact details stopped
+   being a step of their own when signup collapsed to form → building, so the
+   name this looked for had not existed for some time and the check had been
+   failing on a property the code still honours — the catch does setStep('form')
+   with everything still in the fields. Asserting the behaviour rather than the
+   old step name, so the next rename does not fail it again. */
 check('and it returns to the step that can change the detail',
-  /setStep\('phone'\)/.test(signup),
+  /catch[\s\S]{0,300}setError\(err\.message\)[\s\S]{0,300}setStep\('form'\)/.test(signup),
   'an error on a screen with nothing to edit is a dead end')
 
 const portal = fs.readFileSync(new URL('../client/src/pages/CandidatePortal.jsx', import.meta.url), 'utf8')

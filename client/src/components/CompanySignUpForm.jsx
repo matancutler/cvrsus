@@ -32,6 +32,11 @@ export default function CompanySignUpForm({ onCreated, chrome = 'panel', demoSea
   const [error, setError] = useState('')
   const [photo, setPhoto] = useState(null)
   const [photoPreview, setPhotoPreview] = useState(null)
+  /* The company's mark, sent with the registration rather than after it:
+     registering does not sign anybody in, so there is no later moment when
+     this browser could prove it is the administrator. */
+  const [logo, setLogo] = useState(null)
+  const [logoPreview, setLogoPreview] = useState(null)
   const [proofs, setProofs] = useState({ email: '', phone: '' })
 
   /* Agreement to the Terms and the Privacy Policy. Unticked to start, and never
@@ -58,6 +63,19 @@ export default function CompanySignUpForm({ onCreated, chrome = 'panel', demoSea
   }, [photo])
 
   const update = (key, value) => setForm((prev) => ({ ...prev, [key]: value }))
+
+  /* The same validation the portrait gets — one rule for both, so a file that
+     is refused as a picture is not quietly accepted as a mark. */
+  function chooseLogo(selected) {
+    if (!selected) return
+    if (!PHOTO_TYPES.includes(selected.type)) {
+      setError(PHOTO_TYPE_ERROR)
+      return
+    }
+    setError('')
+    setLogo(selected)
+    setLogoPreview(URL.createObjectURL(selected))
+  }
 
   function choosePhoto(selected) {
     if (!selected) return
@@ -92,6 +110,7 @@ export default function CompanySignUpForm({ onCreated, chrome = 'panel', demoSea
     try {
       const data = new FormData()
       if (photo) data.append('photo', photo)
+      if (logo) data.append('logo', logo)
       for (const key of Object.keys(form)) data.append(key, form[key])
       data.append('emailProof', proofs.email)
       data.append('phoneProof', proofs.phone)
@@ -147,14 +166,33 @@ export default function CompanySignUpForm({ onCreated, chrome = 'panel', demoSea
       */}
       <div className="form-divider" />
 
-      {/* §16 — the same uploader as the candidate form: label above the circle,
-          no Add photo button, the dashed circle as the only target. */}
-      <PhotoUploader
-        photoUrl={photoPreview}
-        onChoose={choosePhoto}
-        onRemove={() => setPhoto(null)}
-        disabled={busy}
-      />
+      {/*
+        Who you are, and who you are from — side by side, left-aligned with the
+        fields underneath.
+
+        Two controls rather than one because they are two different pictures
+        with two different owners: the portrait is this administrator's and
+        follows them, the logo is the company's and every colleague will see
+        it. The rectangle is not decoration — a wordmark in a circle loses its
+        ends, which is where the name usually is.
+      */}
+      <div className="identity-pair">
+        <PhotoUploader
+          photoUrl={photoPreview}
+          onChoose={choosePhoto}
+          onRemove={() => { setPhoto(null); setPhotoPreview(null) }}
+          disabled={busy}
+        />
+        <PhotoUploader
+          label="Company logo"
+          shape="rect"
+          noun="company logo"
+          photoUrl={logoPreview}
+          onChoose={chooseLogo}
+          onRemove={() => { setLogo(null); setLogoPreview(null) }}
+          disabled={busy}
+        />
+      </div>
 
       <div className="grid-2">
         <div className="field">

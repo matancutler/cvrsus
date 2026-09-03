@@ -156,10 +156,31 @@ export default function ResultFilters({
   /* The tags worn by the rows this bar is narrowing — computed by the screen
      that owns them, since only it knows what is on the list. */
   tags = [],
+  /*
+   * Whether to offer a name box.
+   *
+   * On for the screens that are lists of people you already know — a folder,
+   * the reveal history — where you arrive wanting one person and finding them
+   * by eye means reading every row. Off for a search, where the list is a
+   * ranked answer to a job description and you do not yet know whose names are
+   * in it; a name box there invites you to narrow a ranking by something that
+   * has nothing to do with the ranking.
+   */
+  nameSearch = false,
 }) {
   const set = (key, value) => onChange({ ...filters, [key]: value })
 
+  /*
+   * How many of the collapsed controls are set — which is what the badge on the
+   * funnel counts, and what decides whether the panel springs open.
+   *
+   * `name` is excluded: its box is in the bar and always visible, so counting it
+   * would put a badge on the funnel for a control that is not behind the funnel
+   * — and worse, the effect below would fling the panel open on the first
+   * keystroke of a name.
+   */
   const activeCount = Object.keys(EMPTY_RESULT_FILTERS)
+    .filter((key) => key !== 'name')
     .filter((key) => filters[key] !== EMPTY_RESULT_FILTERS[key]).length
 
   /*
@@ -187,6 +208,35 @@ export default function ResultFilters({
         <span className="result-filters-count" title={`${total} candidate${total === 1 ? '' : 's'} searched`}>
           <strong>{shown}</strong> of {matched} match{matched === 1 ? '' : 'es'}
         </span>
+
+        {/*
+          In the bar, not in the panel behind the funnel.
+
+          Same reasoning as the folder list's own search box: a search you have
+          to open something to reach is a search nobody uses once the list is
+          long enough to need it. It is also the one control here that is not a
+          question about the candidate — it is how you find a specific person —
+          so it belongs beside the count rather than among the pickers.
+        */}
+        {nameSearch && (
+          <label className="result-name-search">
+            <svg
+              className="result-name-search-icon" width="14" height="14" viewBox="0 0 24 24"
+              fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"
+              aria-hidden="true" focusable="false"
+            >
+              <circle cx="11" cy="11" r="7" />
+              <path d="m20 20-3.5-3.5" />
+            </svg>
+            <span className="sr-only">Search by name</span>
+            <input
+              type="search"
+              value={filters.name}
+              placeholder="Search by name"
+              onChange={(event) => set('name', event.target.value)}
+            />
+          </label>
+        )}
 
         <button
           type="button"
@@ -277,6 +327,28 @@ export default function ResultFilters({
           onPick={(label) => set('tag', label)}
         />
 
+        {/*
+          Where they stand, on the screens that have a pipeline.
+
+          Ahead of the two checkboxes, so every dropdown is in one run and every
+          tick-box in another. It was last, which put a picker on the far side
+          of two checkboxes from the four other pickers — the row read as
+          [choose][choose][choose][choose][tick][tick][choose] and the eye had
+          to go back for the last one.
+        */}
+        {statuses && (
+          <select
+            value={filters.status}
+            onChange={(e) => set('status', e.target.value)}
+            aria-label="Status"
+          >
+            <option value="">Any status</option>
+            {statuses.map((status) => (
+              <option key={status.key} value={status.key}>{status.label}</option>
+            ))}
+          </select>
+        )}
+
         <label className="chip-toggle">
           <input
             type="checkbox"
@@ -294,20 +366,6 @@ export default function ResultFilters({
           />
           Extra documents
         </label>
-
-        {/* Where they stand, on the screens that have a pipeline. */}
-        {statuses && (
-          <select
-            value={filters.status}
-            onChange={(e) => set('status', e.target.value)}
-            aria-label="Status"
-          >
-            <option value="">Any status</option>
-            {statuses.map((status) => (
-              <option key={status.key} value={status.key}>{status.label}</option>
-            ))}
-          </select>
-        )}
 
         {/* Not on a folder: the people in one arrived from different searches,
             so there is no single number to compare them on. */}

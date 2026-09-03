@@ -191,6 +191,19 @@ export function getCompany(id) {
   return db.prepare(`SELECT * FROM companies WHERE id = ?`).get(id) ?? null
 }
 
+/**
+ * Set or clear the company's logo, returning the filename it replaced.
+ *
+ * The old name comes back so the caller can unlink the file AFTER the row has
+ * stopped pointing at it — the same order every photo route here follows, so a
+ * failed write never leaves a row naming a file that is already gone.
+ */
+export function setCompanyLogo(companyId, logoName) {
+  const previous = db.prepare(`SELECT logo_name FROM companies WHERE id = ?`).get(companyId)
+  db.prepare(`UPDATE companies SET logo_name = ? WHERE id = ?`).run(logoName ?? null, companyId)
+  return previous?.logo_name ?? null
+}
+
 export function countCompanies() {
   return db.prepare(`SELECT COUNT(*) AS n FROM companies`).get().n
 }

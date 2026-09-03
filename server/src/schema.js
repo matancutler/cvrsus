@@ -967,6 +967,33 @@ export const SCHEMA = `
   );
 
   CREATE INDEX IF NOT EXISTS idx_triage_cost ON triage_cost_events(triage_id, created_at);
+
+  /* A Triage applicant filed into a folder.
+
+     A separate table rather than a nullable column on folder_items, because the
+     two things being filed are genuinely different objects. folder_items points
+     at candidates(id) NOT NULL, which is the constraint that makes every folder
+     query safe to join on; relaxing it to hold applicants too would make that
+     column mean "a candidate, or nothing, check the other one" at forty call
+     sites. Here the table it comes from IS the answer to which kind it is, and
+     that is also exactly the fact the row's tag reports.
+
+     ON DELETE CASCADE, both ways. Deleting a folder takes its rows, as it
+     always has. Deleting a Triage takes the applicants with it — and therefore
+     these — which is the honest outcome rather than a bug: the CV file is
+     deleted with the Triage, so a surviving folder row would name a document
+     that no longer exists and open nothing. The rail's delete says so before it
+     does it. */
+  CREATE TABLE IF NOT EXISTS folder_triage_items (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    folder_id           INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+    triage_applicant_id INTEGER NOT NULL REFERENCES triage_applicants(id) ON DELETE CASCADE,
+    position            REAL NOT NULL,
+    added_at            TEXT NOT NULL,
+    UNIQUE (folder_id, triage_applicant_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_folder_triage ON folder_triage_items(folder_id);
 `
 
 /**
@@ -1242,6 +1269,20 @@ export const ADDED_COLUMNS = {
        names the pack it will buy so nothing is bought by surprise. */
     ['auto_replenish_pack', 'TEXT'],
     ['auto_replenish_at', 'TEXT'],
+    /*
+     * The company's own mark, as a stored filename.
+     *
+     * Here rather than in the CREATE TABLE because companies shipped without
+     * it — see the note above the triages block: a column added to a table
+     * that already exists has to be in this map or it silently never appears
+     * on anybody's database.
+     *
+     * One per company, and every seat reads the same row, so a logo set by the
+     * administrator is the logo every colleague sees. That is the whole of the
+     * mechanism: getCompany selects *, so nothing else had to change to make
+     * it shared.
+     */
+    ['logo_name', 'TEXT'],
   ],
   recruiters: [
     /*

@@ -19,6 +19,10 @@ export const EMPTY_RESULT_FILTERS = {
      than by an id — the tags are the words, and there is nothing else to key
      them by. */
   tag: '',
+  /* Somebody's name. Only the screens that are lists of people you already know
+     offer the control — see ResultFilters' nameSearch prop — but the rule lives
+     here with the others so there is one place that decides what a filter is. */
+  name: '',
 }
 
 /**
@@ -44,7 +48,35 @@ export const ACTIVITY_FILTERS = [
  */
 export function applyResultFilters(results, filters) {
   return results.filter((row) => {
-    const { candidate, documents = [] } = row
+    /*
+     * A search result nests the person under `candidate`; a folder item and a
+     * reveal-log row ARE the person, with the same field names at the top
+     * level. Both shapes reach this function, and it only ever read the nested
+     * one — so `candidate` was undefined for two of the three screens and every
+     * rule below that touched it threw the moment the filter was actually set.
+     *
+     * Nobody had noticed because the default is '' for all of them, which
+     * short-circuits before the dereference: the crash needed somebody to
+     * choose an availability, a relocation or a capacity inside a folder.
+     */
+    const candidate = row.candidate ?? row
+    const { documents = [] } = row
+
+    /*
+     * By name, case-insensitively, in any order.
+     *
+     * Every whitespace-separated term has to appear somewhere in the name, so
+     * "noa", "levy", "noa levy" and "levy noa" all find Noa Levy, and a
+     * half-typed "lev" finds her too. Matching the DISPLAY name rather than the
+     * first and last separately, because that is the string on the card — and
+     * before a reveal it is a first name and a masked surname, so this searches
+     * what the reader can actually see rather than what the row is hiding.
+     */
+    if (filters.name?.trim()) {
+      const hay = String(candidate.display_name ?? '').toLowerCase()
+      const terms = filters.name.trim().toLowerCase().split(/\s+/)
+      if (!terms.every((term) => hay.includes(term))) return false
+    }
 
     if (filters.tag) {
       const wanted = filters.tag.toLowerCase()

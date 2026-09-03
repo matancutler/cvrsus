@@ -1,4 +1,6 @@
 import { useEffect, useRef } from 'react'
+
+import useDismissOnOutside from '../useDismiss.js'
 import { Link, NavLink, useLocation } from 'react-router-dom'
 
 import Wordmark from './Wordmark.jsx'
@@ -56,6 +58,16 @@ export default function MobileNav({ open, onOpen, onClose, onDemo }) {
   const { pathname } = useLocation()
   const panel = useRef(null)
   const toggle = useRef(null)
+
+  /* A press on the page behind the drawer closes it, as it does for every other
+     popup. Escape already did; a tap did not, so the one gesture everybody
+     tries on a drawer was the one that did nothing. */
+  useDismissOnOutside({
+    ref: panel,
+    trigger: toggle,
+    onDismiss: onClose,
+    active: open,
+  })
 
   // Arriving somewhere is the end of navigating, so the drawer closes itself
   // rather than needing every link to remember to.

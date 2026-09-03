@@ -96,8 +96,12 @@ check('and above it on the account page', form.includes('photoFirst && ('))
 const uploader = read('../client/src/components/PhotoUploader.jsx')
 check('an empty circle shows a plus where a picture can be added',
   /canAdd \? <AddPhotoIcon size=\{40\} \/> : <PersonIcon size=\{44\} \/>/.test(uploader))
+/* The noun is a prop now: the same control frames a company logo on the
+   recruiter sign-up, and "Add a profile picture" is the wrong thing to say
+   about one — the shape is the only other cue, and a screen reader has none. */
 check('and the accessible name says the same thing',
-  /canAdd \? 'Add a profile picture' : 'No profile picture'/.test(uploader))
+  /canAdd \? `Add a \$\{noun\}` : `No \$\{noun\}`/.test(uploader)
+  && /noun = 'profile picture',/.test(uploader))
 check('the portal follows its own lock',
   form.includes('canAdd={!locked}') && form.includes('disabled={submitting || locked}'),
   'a locked page is a profile being read: no Remove, no picker, and a silhouette')

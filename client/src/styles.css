@@ -1738,7 +1738,6 @@ input:focus, select:focus, textarea:focus, .chip-input:focus-within {
 .dropzone-file { color: var(--accent); word-break: break-all; }
 /* Set apart from the two lines above it: they describe the zone, this is a
    second way in. */
-.triage-folder-pick { margin-top: 0.5rem; }
 
 .dropzone-error, .dropzone-error:hover { border-color: var(--miss); background: var(--miss-soft); }
 .field-error { font-size: 0.8rem; color: var(--miss); }
@@ -2193,7 +2192,18 @@ input:focus, select:focus, textarea:focus, .chip-input:focus-within {
   cursor: pointer;
 }
 .chat-item-actions button:hover { background: var(--surface-2); }
-.chat-item-delete { color: var(--miss); }
+
+/*
+ * The destructive one, in the colour destructive things are.
+ *
+ * Scoped through .chat-item-actions rather than left as a bare class. The rule
+ * above it is `.chat-item-actions button`, which sets `color: var(--text)` at
+ * specificity (0,1,1); a lone `.chat-item-delete` is (0,1,0) and lost, so the
+ * class had been on the button for as long as the menu had existed and had
+ * never once been visible. Same specificity now, and it comes later.
+ */
+.chat-item-actions .chat-item-delete { color: var(--miss); }
+.chat-item-actions .chat-item-delete:hover { background: var(--miss-soft); }
 
 /* ------------------------------------------------------- search + composer */
 
@@ -2416,7 +2426,26 @@ input:focus, select:focus, textarea:focus, .chip-input:focus-within {
 
 /* ---------------------------------------------------------------- results */
 
-.results { display: flex; flex-direction: column; gap: 0.9rem; min-width: 0; }
+/*
+ * A list of cards, not a numbered list.
+ *
+ * This is an <ol> — the order is the ranking, and saying so in the markup is
+ * what lets assistive tech read "3 of 25" — so it was carrying the browser's
+ * default list padding: 40px of indent that pushed every card right of the
+ * heading above it, on the searches, in a folder and in the reveal history
+ * alike. Nothing wanted that space; the marker it is reserved for is not drawn.
+ * .result-list further down has had the reset all along, which is why the two
+ * lists never lined up with each other.
+ */
+.results {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  min-width: 0;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
 
 .results-head { display: flex; align-items: baseline; gap: 0.6rem; flex-wrap: wrap; }
 
@@ -2471,7 +2500,18 @@ input:focus, select:focus, textarea:focus, .chip-input:focus-within {
   /* Tight, because the second row is a continuation of the first — the summary
      reads as the same person still talking, not as a separate block. */
   row-gap: 0.15rem;
-  align-items: center;
+  /*
+   * start, not center.
+   *
+   * The card now has a min-height so its own corner fits inside it, which means
+   * a row with nothing under the name — a Triage applicant scored without a
+   * reasoning pass, a folder row with no summary, anyone in the reveal log — is
+   * taller than its content. Centred, the name and location then floated in the
+   * middle of an otherwise empty card and no two rows in a list lined up.
+   * Anchored to the top, the first line is always in the same place.
+   */
+  align-items: start;
+  align-content: start;
   padding: 0.85rem 1.1rem;
   cursor: pointer;
 }
@@ -3428,6 +3468,8 @@ input:focus, select:focus, textarea:focus, .chip-input:focus-within {
 /* What the file has to be, not a heading. It was set in bold at body size,
    which gave the quietest line in the block the loudest voice in it. */
 .photo-formats { font-size: 0.8rem; color: var(--text-muted); }
+/* Centred where the block stands alone — the Team editor and the Add-recruiter
+   dialog both use this markup and both want it that way. */
 .profile-photo-block .photo-row,
 .profile-photo-block .photo-copy,
 .profile-photo-block .photo-actions {
@@ -3437,6 +3479,100 @@ input:focus, select:focus, textarea:focus, .chip-input:focus-within {
   gap: 0.5rem;
   text-align: center;
 }
+
+/*
+ * Left, on My profile, with the rows beneath it.
+ *
+ * It was centred there too, on the reasoning that the photo led the page and
+ * had nothing to align with. It has something now — the company's mark beside
+ * it, and under both a table of labelled rows that all start at the left
+ * margin. A picture floating in the middle of a left-aligned page is the one
+ * element that begins nowhere. Scoped to .profile-identity so the two screens
+ * that still stand the block alone keep the centring this rule was written for.
+ */
+.profile-identity .photo-row,
+.profile-identity .photo-copy,
+.profile-identity .photo-actions {
+  align-items: flex-start;
+  text-align: left;
+}
+
+/*
+ * The portrait and the company's mark, on one line and level with each other.
+ *
+ * flex-START, not flex-end. Bottom-aligning two columns of different heights
+ * works only while they stay the same height, and this one does not: pressing
+ * the pencil adds a Remove under the logo, or a line saying only the
+ * administrator may change it, and the frames slid apart the moment either
+ * appeared. Aligning the tops is the thing that stays true — the frames are the
+ * same height, so level tops are level bottoms as well.
+ */
+.profile-identity {
+  display: flex;
+  align-items: flex-start;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+}
+
+/*
+ * The portrait column is exactly as wide as the portrait.
+ *
+ * Editing adds "*JPG, PNG or WebP" under the circle, and that line is wider
+ * than the 76px frame above it — so the column grew to fit the words and shoved
+ * the logo 38 pixels further right the moment the pencil was pressed. The two
+ * modes were the same size and the same alignment and still looked different,
+ * because the DISTANCE between them changed.
+ *
+ * Pinning the column to the frame keeps the gap at 24px in both. The hint wraps
+ * under it, which is what a caption should do anyway.
+ */
+/*
+ * One size, named once.
+ *
+ * The frame height, the portrait's width and the column that holds it all have
+ * to agree: the column is pinned to the frame so that editing — which adds
+ * "*JPG, PNG or WebP" underneath — cannot widen it and shove the logo sideways.
+ * Three literals that must match is three chances to change two of them, so it
+ * is a variable and they read it.
+ */
+.profile-identity { --profile-frame: 120px; }
+
+.profile-identity .profile-photo-block,
+.profile-identity .photo-row { width: var(--profile-frame); }
+.profile-identity .photo-formats { font-size: 0.72rem; line-height: 1.35; }
+
+/* After .profile-photo-block .avatar, which has the same specificity and sets
+   the smaller size the Team editor and the Add-recruiter dialog still want. */
+.profile-identity .avatar {
+  width: var(--profile-frame);
+  height: var(--profile-frame);
+}
+
+.profile-logo { display: flex; flex-direction: column; gap: 0.45rem; }
+
+/*
+ * Wider than the sign-up form's, and wider than tall by more than the frame
+ * there is. No label above it to set the column, a dialog with room to spare,
+ * and a wordmark is a long thing: 2.5 : 1 rather than 2.16 : 1.
+ *
+ * Last, because the rectangle carries .avatar too — the circle rule above would
+ * otherwise square it off.
+ */
+.profile-identity .avatar-rect {
+  width: 300px;
+  height: var(--profile-frame);
+}
+
+/*
+ * The two columns line up down as well as across.
+ *
+ * Both are [frame][Remove][anything else], so the Remove under the portrait
+ * lands on the Remove under the logo. The format note is the one thing only one
+ * column has, and it sits below both — a little further down than the buttons
+ * so it reads as a footnote to the pair rather than as another control.
+ */
+.profile-identity .photo-copy { gap: 0.45rem; }
+.profile-identity .photo-formats { margin-top: 0.25rem; }
 /* The seat count, sitting over the list of people it counts. Right-aligned so
    it reads as a tally against the rows rather than as a heading for them. */
 .team-seats {
@@ -3656,6 +3792,20 @@ input:focus, select:focus, textarea:focus, .chip-input:focus-within {
  * card above it only by accident. Flush right puts it under the ⋮, which is
  * the one control every card has.
  */
+/*
+ * The card is at least as tall as its own corner.
+ *
+ * .result-side is absolutely positioned, so it contributes no height. On a card
+ * with a summary that never showed, because the summary is taller than the
+ * chips, the ⋮ and the score stacked beside it. On one without — a Triage
+ * applicant whose reasoning pass fell back to keyword scoring, or a folder row
+ * with no summary — the corner ran 21px past the bottom border and the score
+ * was drawn outside the card it belongs to.
+ *
+ * 0.5rem of offset, 88px of stacked corner, 0.5rem of breathing room.
+ */
+.result-main { min-height: calc(88px + 1rem); }
+
 .result-side {
   position: absolute;
   top: 0.5rem;
@@ -6958,10 +7108,6 @@ html:has(.workspace-shell) { scrollbar-gutter: auto; }
   border: 0;
 }
 
-/* A candidate with no recent sign of activity gets no mark — only the space,
-   so names stay aligned down the column. See ActivityDot. */
-.activity-dot-none { background: none; border: 0; }
-
 /* The floating menu is positioned from the button in viewport coordinates, so
    it sits outside every clipping container the dock creates. */
 /*
@@ -7610,6 +7756,17 @@ html:has(.workspace-shell) { scrollbar-gutter: auto; }
 .field-label-row .field-label { flex: 1; margin: 0; }
 .field-label-row .icon-button { width: 28px; height: 28px; }
 
+/*
+ * The paperclip beside the words, not at the far end of the field.
+ *
+ * .field-label-row stretches its label so an action lands at the right edge —
+ * right for a regenerate button on a summary, wrong for an attach control that
+ * belongs to the words it follows. On a field as wide as the job description
+ * that put the clip half a screen from the thing it attaches to.
+ */
+.triage-jd-head { justify-content: flex-start; }
+.triage-jd-head .field-label { flex: none; }
+
 .regenerate-icon { display: block; }
 .is-spinning { animation: regenerate-spin 0.9s linear infinite; }
 @keyframes regenerate-spin { to { transform: rotate(360deg); } }
@@ -8003,9 +8160,6 @@ html:has(.workspace-shell) { scrollbar-gutter: auto; }
    is a confirmation, not a warning. */
 .triage-confirm { gap: 1.25rem; border-color: var(--border-strong); }
 
-.triage-jd-actions { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
-.triage-jd-actions .muted { font-size: 0.8125rem; }
-
 .triage-dropzone { margin: 0; }
 
 .triage-upload-progress { display: flex; flex-direction: column; gap: 0.4rem; }
@@ -8184,9 +8338,10 @@ html:has(.workspace-shell) { scrollbar-gutter: auto; }
    never reset it, and without this every Triage result sat inset from the
    heading above it while Search's identical list did not. */
 .triage-results { list-style: none; margin: 0; padding: 0; gap: 0.6rem; }
-/* No portrait column: an applicant has no Cursus profile, so there is no
-   photograph and no activity dot to sit beside one. */
-.triage-result-main { grid-template-columns: auto minmax(0, 1fr) auto; }
+/* The reasoning, across the card rather than in a column — same rule the
+   search card's summary follows, and the same reason: a two-line explanation
+   in a third of the width is four words a line. */
+.triage-reasoning { grid-column: 1 / -1; }
 
 .triage-more {
   display: flex;
@@ -8476,11 +8631,6 @@ html:has(.workspace-shell) { scrollbar-gutter: auto; }
   /* The chip instead of that button, and it is narrower with its name
      hidden — a 13px eye in 0.4rem of padding either side. */
   .result-main:has(.chip-revealed) .result-lead { padding-right: 10.5rem; }
-  .triage-result-main {
-    grid-template-columns: auto auto minmax(0, 1fr);
-    row-gap: 0.85rem;
-    padding: 0.9rem 1rem;
-  }
   .result-side {
     grid-column: 1 / -1;
     flex-direction: row;
@@ -9308,22 +9458,6 @@ html:has(.workspace-shell) { scrollbar-gutter: auto; }
   box-shadow: var(--shadow-xs);
 }
 
-/*
- * Whose list this is.
- *
- * Sentence case and not uppercase: it is a sentence, and setting it in the
- * heading's small caps would make it a third label in the switch rather than a
- * note about it.
- */
-.rail-scope {
-  margin: 0 0 0.35rem;
-  padding: 0 0.55rem;
-  padding-left: calc(0.55rem - 2px);
-  color: var(--ink-3);
-  font-size: 0.7rem;
-  line-height: 1.3;
-}
-
 /* The Triage rail's own empty and loading lines, in the place a list would be. */
 .ws-rail-empty {
   margin: 0;
@@ -9670,3 +9804,410 @@ html:has(.workspace-shell) { scrollbar-gutter: auto; }
   font-size: 0.875rem;
   font-weight: var(--w-semi);
 }
+
+/* The folder a candidate is in, held above the search that cannot hide it. */
+.folder-current { display: flex; flex-direction: column; gap: 0.3rem; margin-bottom: 0.75rem; }
+.folder-current .folder-choice { cursor: default; }
+.folder-choice-remove { margin-left: auto; color: var(--miss); }
+.folder-choice-remove:hover:not(:disabled) { background: var(--miss-soft); }
+
+/* Always there, so it is never a control that appears at a threshold. */
+.folder-search { margin-bottom: 0.5rem; }
+.folder-search input { min-height: 36px; }
+
+/* ------------------------------------------------- identity, side by side ---
+ *
+ * The person and the company they are from, on one line, left-aligned with the
+ * fields beneath them. The portrait was centred on its own row, which put the
+ * one thing on the form that is a picture in the one place nothing else starts.
+ */
+/*
+ * The two controls on the sign-up form, and their two labels.
+ *
+ * flex-start so the LABELS sit on one line — bottom-aligning put "Profile
+ * picture" and "Company logo" at different heights, because the circle and the
+ * rectangle are not the same height and the labels ride above them. Aligning
+ * the tops lines up the words, and the frames beneath follow.
+ *
+ * A wider gap than the profile's, because here the two are equals being chosen
+ * between rather than one thing and its context.
+ */
+.identity-pair {
+  display: flex;
+  align-items: flex-start;
+  gap: 1.75rem;
+  flex-wrap: wrap;
+}
+
+/* Both columns start their label and their frame on the same left edge, so
+   "Company logo" sits over the box it names rather than beside it. */
+.identity-pair .photo-field { align-items: flex-start; }
+
+/*
+ * A logo is wider than it is tall.
+ *
+ * Same control, same picker, same drop target — only the frame differs. A
+ * wordmark in a circle loses its ends, which is where the name usually is, so
+ * this is a rounded rectangle and the image is contained rather than cropped:
+ * a logo that has been zoomed to fill a box is a logo nobody recognises.
+ */
+.avatar-rect {
+  width: 196px;
+  height: 96px;
+  border-radius: var(--radius-sm);
+}
+
+/*
+ * Bigger on the sign-up form — but the card is only so wide.
+ *
+ * The pair has to stay on one line: flex-wrap is on so a narrow window still
+ * works, and the first attempt at these sizes tipped the total past the card's
+ * width and dropped the logo onto a row of its own. Circle + gap + rectangle
+ * is held at 292px, which is what fitted before, and the extra size is spent
+ * on HEIGHT — the direction with room in it.
+ *
+ * Declared after .avatar-rect and with the same specificity as
+ * .identity-pair .avatar, because the rectangle carries BOTH classes: a circle
+ * rule written afterwards would resize the logo into a square.
+ */
+.identity-pair { gap: 1rem; }
+.identity-pair .avatar { width: 104px; height: 104px; }
+.identity-pair .avatar-rect { width: 172px; height: 96px; }
+
+/*
+ * The two frames share a centre line, and the two labels stay where they are.
+ *
+ * The row aligns its columns by their tops so the words line up; the frames
+ * under them are different heights, so the shorter one has to come down by half
+ * the difference to sit level. Four pixels — (104 - 96) / 2 — and it is written
+ * as that sum rather than as "4px" so a change to either size carries.
+ */
+.identity-pair .avatar-rect { margin-top: calc((104px - 96px) / 2); }
+
+/* The two labels keep their own left edges even though the frames beneath them
+   are different widths — the column is as wide as its frame, and the label sits
+   at its start. */
+/*
+ * A logo is fitted inside the frame, never sized to it.
+ *
+ * .avatar img sets width:100% AND height:100%, which is right for a circle and
+ * wrong here. The frame is a grid with place-items:center, so its row height is
+ * indeterminate for percentage resolution and `height: 100%` computes to auto —
+ * the image then takes its own aspect ratio from the width and overflows. A
+ * 240x96 frame was drawing a 238x238 image with the middle band showing through
+ * overflow:hidden, which looks exactly like a logo stretched to fill.
+ *
+ * max-* rather than width/height, so a small mark stays its own size instead of
+ * being blown up to the frame.
+ */
+.avatar-rect img {
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+/*
+ * A logo that is there has no frame around it.
+ *
+ * .avatar draws a hairline and a grey ground because it is a portrait well: an
+ * empty circle needs an edge to be a target, and a face needs something to sit
+ * against. Neither is true of a mark somebody designed — a wordmark on its own
+ * white already has its own edges, and a box around it reads as a placeholder
+ * that failed to load rather than as a logo.
+ *
+ * :has(img), so the EMPTY frame keeps its border and stays a visible thing to
+ * press. The moment it holds a picture it gets out of the way, and the picture
+ * fills the space it was padding.
+ */
+.avatar-rect:has(img) {
+  border-color: transparent;
+  background: none;
+}
+
+/* ------------------------------------------------ profile, as a banner ---
+ *
+ * The company's logo across the whole top of the dialog, with the recruiter's
+ * portrait sitting on its lower edge.
+ *
+ * The row this replaced put the two pictures side by side under a band of
+ * white as tall as they were. Side by side they read as a pair of equal facts
+ * about the person, which the logo is not: it is the same picture for everyone
+ * at the company, and the one thing on My profile that is not about the person
+ * whose profile it is. Behind them it is context, which is what it is.
+ *
+ * Everything below is scoped to .profile-identity-banner, which is only set
+ * when there is a logo to draw. Without one the plain flex row is still there
+ * and still correct.
+ */
+/*
+ * And the block no longer clears a row that is not there.
+ *
+ * The pencil sat in a .form-lock-bar between this and the first field, so the
+ * header was followed by an empty line holding one 28px button. It is in the
+ * dialog's own header now, and the space it reserved goes with it.
+ */
+.profile-identity-banner {
+  display: block;
+  position: relative;
+  /* Cancels .workspace-dialog-body's padding, so the logo touches three edges
+     of the card. Kept as the same literal that padding uses — see the media
+     query at the foot of this block, which changes both together. */
+  margin: -1.25rem -1.25rem 0;
+  /*
+   * The portrait hangs below the banner by half of itself; this is the room it
+   * hangs into, so the fields underneath start clear of it — and no more than
+   * that. It was 0.75rem of clearance on top of the overhang, which together
+   * with the panel's own 1.1rem gap and the row of nothing where the pencil
+   * used to sit put fifty pixels of white between the picture and the first
+   * fact about the person.
+   */
+  padding-bottom: calc(var(--profile-overhang) + 0.25rem);
+  /* And the panel's gap is wider than this seam wants. Negative, so the rest of
+     the page comes up rather than the header growing to meet it. */
+  margin-bottom: -0.6rem;
+  --profile-banner-h: 168px;
+  --profile-overhang: 44px;
+}
+
+/* The banner itself: a strip, not a frame. No border, no radius, no ground of
+   its own — .avatar-rect's hairline and tint would draw a box inside the card
+   exactly where the card's own edge already is. */
+.profile-identity-banner .profile-logo {
+  display: block;
+  width: 100%;
+  height: var(--profile-banner-h);
+}
+
+.profile-identity-banner .avatar-rect,
+.profile-identity-banner .avatar-rect:has(img) {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: var(--surface-2);
+}
+
+/*
+ * cover, not contain.
+ *
+ * Contain is right for a logo in a frame — a wordmark scaled to fill a box it
+ * does not share proportions with is a wordmark nobody recognises. A banner is
+ * the other case: it has no edges of its own to sit inside, so a contained
+ * image leaves two pillars of tint that read as a broken image rather than as
+ * whitespace. cover fills the strip and crops rather than distorting, which is
+ * what every banner on every profile anywhere does.
+ */
+.profile-identity-banner .avatar-rect img {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  object-fit: cover;
+}
+
+/*
+ * The portrait, on the banner's lower edge.
+ *
+ * Absolute rather than a negative margin: the banner is a fixed height and the
+ * portrait overhangs it by a fixed amount, so both numbers are stated once and
+ * the block's padding-bottom is computed from the same variable. A margin would
+ * have put the overhang in one place and the room for it in another.
+ *
+ * Left edge at 1.25rem — back to where the dialog's own padding was, so the
+ * portrait starts on the same line as every field below it despite the block it
+ * sits in having been pulled out to the card's edge.
+ */
+.profile-identity-banner .profile-photo-block {
+  position: absolute;
+  left: 1.25rem;
+  top: calc(var(--profile-banner-h) - var(--profile-frame) + var(--profile-overhang));
+  width: auto;
+  z-index: 1;
+}
+
+/* The ring is what lifts it off the banner. Two pixels of the card's own
+   background, so it reads as the portrait sitting in front rather than as a
+   circle drawn on top. */
+.profile-identity-banner .avatar {
+  box-shadow: 0 0 0 4px var(--surface);
+}
+
+/*
+ * Editing puts the controls beside the portrait, not under it.
+ *
+ * Under it they would be over the fields — the portrait already overhangs the
+ * banner, and hanging a Remove and a format note below that would push the
+ * whole form down by another two lines every time the pencil was pressed. The
+ * row is the one direction with space in it: to the right of a 120px circle
+ * there is the rest of a 980px card.
+ */
+/*
+ * Under the portrait, not beside it.
+ *
+ * Beside it, the Remove button and the format note ran off to the right of the
+ * circle into the middle of the banner — a column of controls floating in the
+ * company's logo, belonging to neither. Under it they read as what they are:
+ * the two things you can do to the picture directly above them.
+ *
+ * It was beside it because under it would have collided with the fields, back
+ * when the block's only room below the banner was the portrait's overhang. It
+ * has its own room now — see the padding-bottom below, which grows while
+ * editing by exactly what these two lines need.
+ */
+.profile-identity-banner .photo-row {
+  flex-direction: column;
+  align-items: center;
+  gap: 0.45rem;
+  width: var(--profile-frame);
+}
+
+/* Centred under the circle they act on, rather than ranged left against an
+   edge the circle does not have. */
+.profile-identity-banner .photo-copy {
+  align-items: center;
+  text-align: center;
+  gap: 0.3rem;
+}
+.profile-identity-banner .photo-formats { margin-top: 0; }
+
+/*
+ * Room for them, only when they are there.
+ *
+ * Viewing, the block ends just below the portrait's overhang. Editing adds a
+ * button and a caption underneath, so the block grows by their height — which
+ * is stated here rather than left to the layout, because the portrait is
+ * absolutely positioned and contributes nothing to it.
+ */
+.profile-identity-banner:has(.photo-copy) {
+  padding-bottom: calc(var(--profile-overhang) + 3.9rem);
+}
+
+/* The logo's own controls sit on the banner, top right, where they are over
+   the picture they act on and clear of the portrait at the other end. */
+.profile-identity-banner .profile-logo .photo-actions,
+.profile-identity-banner .profile-logo .photo-formats {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.75rem;
+  z-index: 2;
+}
+
+/* Readable on whatever the logo happens to be behind it. */
+.profile-identity-banner .profile-logo .photo-actions .btn,
+.profile-identity-banner .profile-logo .photo-formats {
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  padding: 0.15rem 0.5rem;
+  box-shadow: var(--shadow-xs);
+}
+
+@media (max-width: 640px) {
+  /* Both halves of the full-bleed trick move together: the body's padding
+     becomes 1rem, so the pull-out and the portrait's left edge do too. */
+  .profile-identity-banner { margin: -1rem -1rem 0; }
+  .profile-identity-banner .profile-photo-block { left: 1rem; }
+  .profile-identity-banner { --profile-banner-h: 132px; }
+}
+
+/*
+ * The reveal date, in the corner the score usually holds.
+ *
+ * Same box, same alignment, deliberately not the same weight: a score is the
+ * loudest thing on a search card because it is what the card is sorted by, and
+ * a date on a list that is already in date order is context rather than a
+ * verdict. So it takes the position and drops the colour and the size.
+ */
+.result-revealed {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.1rem;
+  text-align: right;
+  line-height: 1.25;
+}
+.result-revealed-date {
+  font-size: 0.875rem;
+  font-weight: var(--w-semi);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.result-revealed-by { font-size: 0.75rem; color: var(--text-muted); }
+
+/* The applicant's own details, as labelled rows — the same read as the
+   candidate profile's list, which is the screen this one is modelled on. */
+.triage-facts { margin: 0 0 1rem; display: grid; gap: 0; }
+.triage-facts > div {
+  display: grid;
+  grid-template-columns: 8.5rem minmax(0, 1fr);
+  gap: 1rem;
+  padding: 0.6rem 0;
+  border-bottom: 1px solid var(--line);
+}
+.triage-facts > div:last-child { border-bottom: 0; }
+.triage-facts dt { color: var(--text-muted); }
+.triage-facts dd { margin: 0; overflow-wrap: anywhere; }
+
+/* Where a folder row came from, when it did not come from a search. Neutral
+   rather than coloured: it is a provenance note, not a state anybody acted on,
+   and the folder chip beside it is the one that should carry the colour. */
+.chip-triage {
+  background: var(--surface-2);
+  color: var(--text-muted);
+  border: 1px solid var(--line);
+  max-width: 12rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * The screen's own control, immediately after the title it acts on.
+ *
+ * No auto margin, deliberately. It had one — which sent it to the far end
+ * beside the × — and the two controls then read as a pair, which they are not:
+ * the × belongs to the dialog and closes it whatever is on screen, while this
+ * one belongs to the screen inside and means "edit the thing this dialog is
+ * named after". Next to the name is where that reads.
+ *
+ * The close button keeps its own margin-left:auto from .modal-head .btn-quiet,
+ * so it still sits in the corner and the gap between the two says they are
+ * different kinds of control.
+ */
+.workspace-dialog-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.workspace-dialog-actions:empty { display: none; }
+
+/*
+ * Finding one person in a list you already know, beside the count of it.
+ *
+ * Sized to the name it holds rather than to the row: it sits between the count
+ * and the funnel, and a box that grew to fill the bar would read as the page's
+ * main search — which is the composer, on a different screen entirely.
+ */
+.result-name-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.result-name-search-icon {
+  position: absolute;
+  left: 0.5rem;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+.result-name-search input {
+  width: 12rem;
+  max-width: 40vw;
+  min-height: 30px;
+  padding: 0.2rem 0.5rem 0.2rem 1.75rem;
+  font-size: 0.8125rem;
+}
+/* The browser's own clear button, which is the way back out of a filter. */
+.result-name-search input::-webkit-search-cancel-button { cursor: pointer; }

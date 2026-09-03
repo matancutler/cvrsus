@@ -35,6 +35,19 @@ export const PHOTO_TYPE_ERROR = 'Your photo must be a JPG, PNG or WebP image.'
 export default function PhotoUploader({
   photoUrl, onChoose, onRemove, disabled = false, label = 'Profile picture',
   /*
+   * 'circle' for a person, 'rect' for a company.
+   *
+   * The same control either way: the same picker, the same drop target, the
+   * same validation and the same way back out. Only the frame differs, because
+   * a logo is not a portrait — it is usually wider than it is tall, and a
+   * circle crops exactly the parts of a wordmark that carry the name.
+   */
+  shape = 'circle',
+  /* What the accessible names call it. "Add a profile picture" is wrong on a
+     control that adds a logo, and a screen reader is the one place the shape
+     does not say which is which. */
+  noun = 'profile picture',
+  /*
    * Whether a picture can be added right now, which is what decides the mark in
    * an empty circle.
    *
@@ -61,12 +74,16 @@ export default function PhotoUploader({
 
       <button
         type="button"
-        className={dragging ? 'avatar avatar-editable avatar-dragging' : 'avatar avatar-editable'}
+        className={[
+          'avatar', 'avatar-editable',
+          shape === 'rect' ? 'avatar-rect' : '',
+          dragging ? 'avatar-dragging' : '',
+        ].filter(Boolean).join(' ')}
         onClick={open}
         disabled={disabled}
         aria-label={photoUrl
-          ? 'Replace profile picture'
-          : (canAdd ? 'Add a profile picture' : 'No profile picture')}
+          ? `Replace ${noun}`
+          : (canAdd ? `Add a ${noun}` : `No ${noun}`)}
         onDragOver={(e) => { e.preventDefault(); setDragging(true) }}
         onDragLeave={() => setDragging(false)}
         onDrop={(e) => {

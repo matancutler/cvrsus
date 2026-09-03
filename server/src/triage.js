@@ -485,6 +485,11 @@ export function results({ triageId, offset = 0, limit = TRIAGE.pageSize }) {
     results: page.map(({ row, score }, index) => applicantView(row, score, offset + index + 1)),
     total: ordered.length,
     offset,
+    /* How many the next page will hold, so the button can say a true number
+       rather than promising 25 and delivering 6. Same reasoning as hasMore
+       below: the size of a page is the server's fact, and a client that
+       reproduced it would be the second place defining the funnel. */
+    pageSize: limit,
     /* Whether reaching the end of this page should ask for more work. The
        client does not decide that — it would have to know the tranche size, and
        then two places would define the funnel. */

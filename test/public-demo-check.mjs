@@ -464,8 +464,14 @@ check('the rail carries Folders in the panel’s own nav',
   && !/className="ws-nav-item">Triage/.test(liveDemo),
   'Triage moved to the switch below')
 check('and the switch is the panel’s own, not a lookalike',
-  /className="rail-toggle ws-rail-heading"/.test(liveDemo)
-  && /className="rail-scope"/.test(liveDemo))
+  /className="rail-toggle ws-rail-heading"/.test(liveDemo),
+  'the same classes, so the demo cannot drift into a copy that merely resembles it')
+/* Including in what it does NOT have: the scope caption left the workspace, so
+   a demo still carrying it would be advertising a screen that no longer
+   exists. */
+check('and it has dropped the scope caption with the workspace',
+  !/className="rail-scope"/.test(liveDemo)
+  && !/Only you can see these\./.test(liveDemo))
 check('the two live controls are + New and the switch',
   (liveDemo.slice(liveDemo.indexOf('function DemoRail'), liveDemo.indexOf('function DemoCard'))
     .match(/<button/g) ?? []).length === 5,
@@ -594,9 +600,23 @@ check('and the count considered is every file handed over', sorted.considered ==
  * The part that matters most. A stranger's CVs are the most sensitive thing
  * this server is ever handed, and it has no business keeping them.
  */
+/*
+ * Named, not counted. "Something appeared" sends you looking through the whole
+ * demo path; the filename usually says which step left it.
+ *
+ * Files only. The startup sweep keeps a _swept/ directory beside them for
+ * uploads no row references, and its appearing between two runs was failing
+ * this on a directory rather than on a stranger's CV — which is the only thing
+ * the check is about.
+ */
+const appeared = fs.readdirSync(uploadDir, { withFileTypes: true })
+  .filter((entry) => entry.isFile() && !uploadsBefore.has(entry.name))
+  .map((entry) => entry.name)
 check('nothing was written to disk',
-  fs.readdirSync(uploadDir).filter((name) => !uploadsBefore.has(name)).length === 0,
-  'the files are unlinked in a finally, so a failure cannot leave them behind either')
+  appeared.length === 0,
+  appeared.length
+    ? `left behind: ${appeared.join(', ')}`
+    : 'the files are unlinked in a finally, so a failure cannot leave them behind either')
 check('and no Triage row was created for it',
   countRows('triage_applicants') === applicantsBefore,
   'the demo is not a free tier of the paid product — it stores nothing at all')

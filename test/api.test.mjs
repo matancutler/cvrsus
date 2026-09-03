@@ -1030,16 +1030,78 @@ const referenced = new Set()
   for (const row of db.prepare(
     `SELECT stored_name FROM triage_applicants`,
   ).all()) referenced.add(row.stored_name)
+  /* And the company logo, for the same reason: a file this list forgets is a
+     file the startup sweep deletes. */
+  for (const row of db.prepare(
+    `SELECT logo_name FROM companies WHERE logo_name IS NOT NULL`,
+  ).all()) referenced.add(row.logo_name)
   db.close()
 }
 
 const uploadDir = new URL('../server/uploads/', import.meta.url)
-const { readdirSync, existsSync } = await import('node:fs')
+const { readdirSync, existsSync, readFileSync } = await import('node:fs')
 const onDisk = existsSync(uploadDir) ? readdirSync(uploadDir) : []
 const orphans = onDisk.filter((file) => !referenced.has(file))
 
+/*
+ * The other half of the same rule, checked from the row's side.
+ *
+ * The sweep deletes any file this union forgets, so the dangerous direction is
+ * a table missing from referencedUploadNames — not a stray file. A database
+ * with three document rows was found with one file on disk; the other two had
+ * been swept from under rows that still named them, and nothing noticed.
+ */
+const { referencedUploadNames } = await import('../server/src/db.js')
+const spared = referencedUploadNames()
+const missing = []
+{
+  const db2 = new Database(fileURLToPath(new URL('../server/data/cking.db', import.meta.url)))
+  for (const [table, column] of [
+    ['candidates', 'stored_name'], ['candidates', 'photo_name'],
+    ['documents', 'stored_name'], ['recruiters', 'photo_name'],
+    ['companies', 'logo_name'],
+  ]) {
+    for (const row of db2.prepare(
+      `SELECT ${column} AS name FROM ${table} WHERE ${column} IS NOT NULL`,
+    ).all()) if (!spared.has(row.name)) missing.push(`${table}.${column}`)
+  }
+  db2.close()
+}
+check('every file a row still names is spared by the sweep',
+  missing.length === 0,
+  missing.length ? `unprotected: ${[...new Set(missing)].join(', ')}` : 'candidates, documents, recruiters, companies')
+
 check('no orphaned files left on disk', orphans.length === 0,
   orphans.length ? orphans.join(', ') : `${onDisk.length} file(s), all referenced`)
+
+/*
+ * And the sweep moves rather than deletes.
+ *
+ * The whole point of the union above is that a table missing from it destroys
+ * files. That guard is one function away from being wrong at any moment — a new
+ * table, a checkout, a stash — and `npm run dev` runs the server under
+ * node --watch, so a restart is four seconds away at all times. A company logo,
+ * a recruiter photograph and two candidate documents were lost exactly so.
+ *
+ * Quarantine is the property that makes the guard's failure survivable rather
+ * than final, which is why it is asserted on the source: there is no way to
+ * observe a startup sweep from out here without restarting the server.
+ */
+const serverSrc = readFileSync(new URL('../server/src/index.js', import.meta.url), 'utf8')
+const sweepBody = serverSrc.slice(
+  serverSrc.indexOf('function sweepOrphanUploads'),
+  serverSrc.indexOf('function reportMissingUploads'),
+)
+check('the startup sweep never unlinks',
+  sweepBody.length > 0 && !/unlink/.test(sweepBody),
+  'an orphan is moved to uploads/_swept, so a wrong answer is recoverable')
+check('it moves them aside instead', /renameSync/.test(sweepBody) && /_swept/.test(serverSrc))
+check('and it only ever considers plain files, so the quarantine is not swept into itself',
+  /withFileTypes: true/.test(sweepBody) && /isFile\(\)/.test(sweepBody))
+check('a row whose file is missing is reported at startup',
+  /function reportMissingUploads/.test(serverSrc)
+  && /name an upload that is not on disk/.test(serverSrc),
+  'the failure is silent otherwise — a broken image nobody sees until they click')
 
 // There is no API for deleting a company — deliberately, since that would be a
 // dangerous thing to expose. The suite tidies up its own rows directly instead,
