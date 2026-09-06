@@ -338,7 +338,7 @@ check('without promising outreach that does not happen',
 /* The hero microcopy: one line under the button answering "what does pressing
    that cost me", different on each side. */
 for (const line of [
-  'Free for candidates. No cover letter. Ever.',
+  'Upload your CV once. Update it whenever you want.',
   'Paste a job description. Get a ranked shortlist.',
 ]) check(`and the hero says "${line.slice(0, 28)}"`, bundle.includes(line))
 

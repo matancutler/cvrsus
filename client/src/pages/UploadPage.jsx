@@ -259,7 +259,7 @@ export default function UploadPage() {
         <p className="muted landing-microcopy">
           {recruiter
             ? 'Paste a job description. Get a ranked shortlist.'
-            : 'Free for candidates. No cover letter. Ever.'}
+            : 'Upload your CV once. Update it whenever you want.'}
         </p>
 
         {/*
