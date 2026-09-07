@@ -4,37 +4,97 @@ import Req from './Req.jsx'
 import { post } from '../api.js'
 
 /*
- * The prefixes an Israeli mobile can start with.
+ * Country dialling codes, the common ones.
  *
- * Mobiles only, deliberately: every field this component draws is verified by
- * SMS, so a landline here is a number the candidate can never receive a code
- * on. Offering 03 would be offering a choice that fails at the next step.
+ * Not every country: a list of two hundred is a list nobody scrolls. These are
+ * the places candidates plausibly are, with Israel first because that is who
+ * signs up and the default should cost no clicks. Adding one is adding a line.
  */
-const PHONE_PREFIXES = ['050', '051', '052', '053', '054', '055', '058']
+const DIAL_CODES = [
+  ['+972', 'Israel'],
+  ['+1', 'US / Canada'],
+  ['+44', 'United Kingdom'],
+  ['+33', 'France'],
+  ['+49', 'Germany'],
+  ['+31', 'Netherlands'],
+  ['+32', 'Belgium'],
+  ['+41', 'Switzerland'],
+  ['+43', 'Austria'],
+  ['+39', 'Italy'],
+  ['+34', 'Spain'],
+  ['+351', 'Portugal'],
+  ['+353', 'Ireland'],
+  ['+46', 'Sweden'],
+  ['+47', 'Norway'],
+  ['+45', 'Denmark'],
+  ['+358', 'Finland'],
+  ['+48', 'Poland'],
+  ['+420', 'Czechia'],
+  ['+36', 'Hungary'],
+  ['+30', 'Greece'],
+  ['+40', 'Romania'],
+  ['+380', 'Ukraine'],
+  ['+7', 'Russia / Kazakhstan'],
+  ['+90', 'Turkey'],
+  ['+971', 'United Arab Emirates'],
+  ['+357', 'Cyprus'],
+  ['+91', 'India'],
+  ['+86', 'China'],
+  ['+81', 'Japan'],
+  ['+82', 'South Korea'],
+  ['+65', 'Singapore'],
+  ['+852', 'Hong Kong'],
+  ['+61', 'Australia'],
+  ['+64', 'New Zealand'],
+  ['+27', 'South Africa'],
+  ['+55', 'Brazil'],
+  ['+52', 'Mexico'],
+  ['+54', 'Argentina'],
+]
 
-/* Seven digits after the prefix — every Israeli mobile number is ten in total. */
-const PHONE_REST_DIGITS = 7
+/* Israel, because that is who signs up. The field opens ready to use. */
+const DEFAULT_DIAL = '+972'
+
+/* Longest first, so +972 is not mistaken for +9 and +351 not for +35. */
+const DIAL_BY_LENGTH = [...DIAL_CODES]
+  .map(([code]) => code)
+  .sort((a, b) => b.length - a.length)
 
 /**
- * A stored number, taken apart into the two boxes.
+ * The digits a subscriber number is actually made of.
  *
- * Handles what is already in the database as well as what a person types:
- * "+972529592503" and "00972529592503" are the same number as "052-959-2503",
- * and a profile saved before this control existed holds any of them.
+ * Leading zeros go. In most of the world a number is written locally with a
+ * trunk "0" that is dropped the moment a country code is put in front —
+ * 052-959-2503 dialled from abroad is +972 52 959 2503, not +972 052…. Twilio
+ * refuses the second with an error about the destination that says nothing
+ * about the zero, so it is removed here, as it is typed, rather than becoming a
+ * mistake somebody has to be told about.
+ */
+function subscriberDigits(value) {
+  return String(value ?? '').replace(/\D/g, '').replace(/^0+/, '')
+}
+
+/**
+ * A stored number, taken apart into the two controls.
  *
- * A number matching no known prefix comes back with an empty one and its digits
- * intact, so the field shows what is there and lets it be corrected — rather
- * than guessing a prefix and quietly changing somebody's number.
+ * Handles what is already in the database as well as what somebody types:
+ * "+972529592503", "00972529592503" and "052-959-2503" are one number, and a
+ * profile saved before this control existed holds any of them. A value with no
+ * country code is read as the default one, which is what it always meant.
  */
 function splitPhone(value) {
-  let digits = String(value ?? '').replace(/\D/g, '')
+  let text = String(value ?? '').replace(/[\s()\-.]/g, '')
+  if (text.startsWith('00')) text = `+${text.slice(2)}`
 
-  /* Longest international form first: 00972… also starts with 0. */
-  if (digits.startsWith('00972')) digits = `0${digits.slice(5)}`
-  else if (digits.startsWith('972')) digits = `0${digits.slice(3)}`
+  if (text.startsWith('+')) {
+    const dial = DIAL_BY_LENGTH.find((code) => text.startsWith(code))
+    if (dial) return { dial, rest: subscriberDigits(text.slice(dial.length)) }
+    /* A country not on the list: keep the digits, fall back to the default so
+       the control still has something selected, and let the person fix it. */
+    return { dial: DEFAULT_DIAL, rest: subscriberDigits(text.slice(1)) }
+  }
 
-  const prefix = PHONE_PREFIXES.find((p) => digits.startsWith(p)) ?? ''
-  return { prefix, rest: prefix ? digits.slice(prefix.length) : digits }
+  return { dial: DEFAULT_DIAL, rest: subscriberDigits(text) }
 }
 
 /**
@@ -184,16 +244,15 @@ export default function VerifiedField({
         {channel === 'phone' ? (
           <>
             <select
-              className="phone-prefix"
-              aria-label="Mobile prefix"
-              value={splitPhone(value).prefix}
+              className="phone-dial"
+              aria-label="Country dialling code"
+              value={splitPhone(value).dial}
               disabled={disabled || (verified && lockWhenVerified)}
-              onChange={(e) => {
-                changed(`${e.target.value}${splitPhone(value).rest}`)
-              }}
+              onChange={(e) => changed(`${e.target.value}${splitPhone(value).rest}`)}
             >
-              <option value="" disabled>Prefix</option>
-              {PHONE_PREFIXES.map((p) => <option key={p} value={p}>{p}</option>)}
+              {DIAL_CODES.map(([code, country]) => (
+                <option key={`${code} ${country}`} value={code}>{code} {country}</option>
+              ))}
             </select>
 
             <input
@@ -203,16 +262,14 @@ export default function VerifiedField({
               className="phone-rest"
               required={!optional}
               value={splitPhone(value).rest}
-              placeholder="9592503"
-              maxLength={PHONE_REST_DIGITS}
               autoComplete="tel-national"
               readOnly={verified && lockWhenVerified}
               disabled={disabled}
               onChange={(e) => {
-                /* Digits only. Somebody pasting "052-959-2503" into this box
-                   would otherwise end up with the prefix twice. */
-                const rest = e.target.value.replace(/\D/g, '').slice(-PHONE_REST_DIGITS)
-                changed(`${splitPhone(value).prefix}${rest}`)
+                /* Through subscriberDigits, so a pasted "052-959-2503" and a
+                   typed leading zero both become the same thing the dialling
+                   code expects to be followed by. */
+                changed(`${splitPhone(value).dial}${subscriberDigits(e.target.value)}`)
               }}
             />
           </>

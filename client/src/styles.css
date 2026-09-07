@@ -10219,11 +10219,15 @@ html:has(.workspace-shell) { scrollbar-gutter: auto; }
  * select is sized to its content and the input takes the rest of the row —
  * a half-and-half split would leave "052" floating in a box built for a name.
  */
-.verified-row .phone-prefix {
-  flex: none;
-  /* Wide enough for three digits AND the chevron the browser draws inside the
-     box — at 5.5rem the last digit sat under it. */
-  width: 6.5rem;
+/*
+ * Wide enough for the longest label it holds — "+971 United Arab Emirates" —
+ * without letting a select full of country names take the row from the number
+ * itself. Past that it truncates, which is fine: the code is the part that has
+ * to stay readable, and it is first.
+ */
+.verified-row .phone-dial {
+  flex: 0 1 11rem;
+  min-width: 7.5rem;
   font-variant-numeric: tabular-nums;
 }
 .verified-row .phone-rest {
