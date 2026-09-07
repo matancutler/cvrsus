@@ -3,6 +3,40 @@ import { useEffect, useRef, useState } from 'react'
 import Req from './Req.jsx'
 import { post } from '../api.js'
 
+/*
+ * The prefixes an Israeli mobile can start with.
+ *
+ * Mobiles only, deliberately: every field this component draws is verified by
+ * SMS, so a landline here is a number the candidate can never receive a code
+ * on. Offering 03 would be offering a choice that fails at the next step.
+ */
+const PHONE_PREFIXES = ['050', '051', '052', '053', '054', '055', '058']
+
+/* Seven digits after the prefix — every Israeli mobile number is ten in total. */
+const PHONE_REST_DIGITS = 7
+
+/**
+ * A stored number, taken apart into the two boxes.
+ *
+ * Handles what is already in the database as well as what a person types:
+ * "+972529592503" and "00972529592503" are the same number as "052-959-2503",
+ * and a profile saved before this control existed holds any of them.
+ *
+ * A number matching no known prefix comes back with an empty one and its digits
+ * intact, so the field shows what is there and lets it be corrected — rather
+ * than guessing a prefix and quietly changing somebody's number.
+ */
+function splitPhone(value) {
+  let digits = String(value ?? '').replace(/\D/g, '')
+
+  /* Longest international form first: 00972… also starts with 0. */
+  if (digits.startsWith('00972')) digits = `0${digits.slice(5)}`
+  else if (digits.startsWith('972')) digits = `0${digits.slice(3)}`
+
+  const prefix = PHONE_PREFIXES.find((p) => digits.startsWith(p)) ?? ''
+  return { prefix, rest: prefix ? digits.slice(prefix.length) : digits }
+}
+
 /**
  * An email address or phone number, with the code that proves it is yours.
  *
@@ -122,27 +156,79 @@ export default function VerifiedField({
 
   const canSend = value.trim().length > 3 && !busy && !disabled
 
+  /* Every edit, whichever box it came from, means the same thing: what was
+     proved about the old value no longer covers this one. */
+  function changed(next) {
+    onChange(next)
+    if (verified) onProof('')
+    if (step === 'code') setStep('idle')
+  }
+
   return (
     <div className="field verified-field">
       <label className="field-label" htmlFor={id}>{label}{optional ? null : <Req />}</label>
 
       <div className="verified-row">
-        <input
-          id={id}
-          type={type}
-          required={!optional}
-          value={value}
-          placeholder={placeholder}
-          autoComplete={autoComplete}
-          readOnly={verified && lockWhenVerified}
-          disabled={disabled}
-          onChange={(e) => {
-            onChange(e.target.value)
-            // Any edit invalidates what was proved about the old value.
-            if (verified) onProof('')
-            if (step === 'code') setStep('idle')
-          }}
-        />
+        {/*
+          A phone is two controls, an email is one.
+
+          Free text let somebody write 052-959-2503, +972 52 959 2503, or
+          0529592503, and every one of those had to be guessed at before it
+          could be dialled. A prefix from a list and seven digits cannot be
+          ambiguous — there is one number it can mean.
+
+          Both halves are still reported through the same onChange as one
+          string, so nothing outside this component knows the field changed
+          shape: the form submits what it always submitted.
+        */}
+        {channel === 'phone' ? (
+          <>
+            <select
+              className="phone-prefix"
+              aria-label="Mobile prefix"
+              value={splitPhone(value).prefix}
+              disabled={disabled || (verified && lockWhenVerified)}
+              onChange={(e) => {
+                changed(`${e.target.value}${splitPhone(value).rest}`)
+              }}
+            >
+              <option value="" disabled>Prefix</option>
+              {PHONE_PREFIXES.map((p) => <option key={p} value={p}>{p}</option>)}
+            </select>
+
+            <input
+              id={id}
+              type="tel"
+              inputMode="numeric"
+              className="phone-rest"
+              required={!optional}
+              value={splitPhone(value).rest}
+              placeholder="9592503"
+              maxLength={PHONE_REST_DIGITS}
+              autoComplete="tel-national"
+              readOnly={verified && lockWhenVerified}
+              disabled={disabled}
+              onChange={(e) => {
+                /* Digits only. Somebody pasting "052-959-2503" into this box
+                   would otherwise end up with the prefix twice. */
+                const rest = e.target.value.replace(/\D/g, '').slice(-PHONE_REST_DIGITS)
+                changed(`${splitPhone(value).prefix}${rest}`)
+              }}
+            />
+          </>
+        ) : (
+          <input
+            id={id}
+            type={type}
+            required={!optional}
+            value={value}
+            placeholder={placeholder}
+            autoComplete={autoComplete}
+            readOnly={verified && lockWhenVerified}
+            disabled={disabled}
+            onChange={(e) => changed(e.target.value)}
+          />
+        )}
 
         {verified ? (
           <span className="verified-mark" title="Verified">

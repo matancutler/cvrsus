@@ -10211,3 +10211,24 @@ html:has(.workspace-shell) { scrollbar-gutter: auto; }
 }
 /* The browser's own clear button, which is the way back out of a filter. */
 .result-name-search input::-webkit-search-cancel-button { cursor: pointer; }
+
+/*
+ * The two halves of a phone number.
+ *
+ * The prefix is a fixed three characters and the number is seven, so the
+ * select is sized to its content and the input takes the rest of the row —
+ * a half-and-half split would leave "052" floating in a box built for a name.
+ */
+.verified-row .phone-prefix {
+  flex: none;
+  /* Wide enough for three digits AND the chevron the browser draws inside the
+     box — at 5.5rem the last digit sat under it. */
+  width: 6.5rem;
+  font-variant-numeric: tabular-nums;
+}
+.verified-row .phone-rest {
+  flex: 1;
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
