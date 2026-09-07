@@ -427,14 +427,38 @@ async function deliver({ to, subject, lines }) {
 
 /* ------------------------------------------------------------------ SMS --- */
 
+/* Which account. Always this, even when an API key does the authenticating:
+   it is part of the URL, and Twilio needs to know whose messages these are. */
 const SMS_SID = process.env.TWILIO_ACCOUNT_SID ?? ''
+
+/*
+ * Two ways to prove who we are, and the better one first.
+ *
+ * An API key (SK…) plus its secret is revocable on its own: if it leaks, you
+ * delete that one key and every other thing using the account keeps working.
+ * The account's Auth Token is the master credential — revoking it means
+ * rotating everything at once, and this project has already had one credential
+ * end up somewhere public.
+ *
+ * The Auth Token still works, because it is one field instead of two and that
+ * is a reasonable way to get the first text sent. But if both are present the
+ * key wins, so moving to one later is a matter of adding two variables and
+ * deleting one.
+ */
+const SMS_KEY = process.env.TWILIO_API_KEY ?? ''
+const SMS_SECRET = process.env.TWILIO_API_SECRET ?? ''
 const SMS_TOKEN = process.env.TWILIO_AUTH_TOKEN ?? ''
+
+const SMS_USER = SMS_KEY || SMS_SID
+const SMS_PASS = SMS_KEY ? SMS_SECRET : SMS_TOKEN
+
 /* The number or alphanumeric sender ID messages come from. Twilio rejects a
-   send with no From, so all three have to be present before anything is live. */
+   send with no From, so all of these have to be present before anything is
+   live. */
 const SMS_FROM = process.env.TWILIO_FROM ?? ''
 
 /** True when a text would really be sent, so callers can log honestly. */
-export const SMS_LIVE = Boolean(SMS_SID && SMS_TOKEN && SMS_FROM)
+export const SMS_LIVE = Boolean(SMS_SID && SMS_USER && SMS_PASS && SMS_FROM)
 
 /*
  * A test run must not be able to send a real text.
@@ -493,7 +517,7 @@ async function sendSms({ to, body, expiresInMinutes, code }) {
         /* Basic auth is what Twilio's REST API takes. Buffer rather than btoa
            so this does not depend on which globals the runtime happens to
            expose. */
-        authorization: `Basic ${Buffer.from(`${SMS_SID}:${SMS_TOKEN}`).toString('base64')}`,
+        authorization: `Basic ${Buffer.from(`${SMS_USER}:${SMS_PASS}`).toString('base64')}`,
         'content-type': 'application/x-www-form-urlencoded',
       },
       body: new URLSearchParams({ To: to, From: SMS_FROM, Body: body }),

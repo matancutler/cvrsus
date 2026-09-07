@@ -137,9 +137,16 @@ services:
       # these set still prints.
       - key: TWILIO_ACCOUNT_SID
         sync: false
-      - key: TWILIO_AUTH_TOKEN
-        sync: false
       - key: TWILIO_FROM
+        sync: false
+      # Either an API key and its secret — revocable on its own, so a leak costs
+      # one key rather than the whole account — or the account's Auth Token,
+      # which is one field instead of two. The key wins when both are present.
+      - key: TWILIO_API_KEY
+        sync: false
+      - key: TWILIO_API_SECRET
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
         sync: false
 
       # Without these two, CV reading and match scoring fall back to keyword

@@ -40,11 +40,24 @@ takes longer. Better later; a number is fine to start.
 
 From the Console dashboard:
 
+**Preferred — an API key.** Console → **Settings → API keys & auth tokens →
+Create API key**. Name it `cursus-sms`, type **Standard**. Twilio shows the
+secret once.
+
 | Twilio calls it | You need it as |
 |---|---|
-| Account SID (starts `AC…`) | `TWILIO_ACCOUNT_SID` |
-| Auth Token (click to reveal) | `TWILIO_AUTH_TOKEN` |
+| Account SID (starts `AC…`, also in the console URL) | `TWILIO_ACCOUNT_SID` |
+| API key SID (starts `SK…`) | `TWILIO_API_KEY` |
+| API key Secret (shown once) | `TWILIO_API_SECRET` |
 | Your number, E.164 e.g. `+15551234567` | `TWILIO_FROM` |
+
+An API key can be deleted on its own if it leaks; the Auth Token is the master
+credential, and revoking it means rotating everything at once.
+
+**Simpler — the Auth Token.** One field instead of two, on the **AUTH TOKENS**
+tab of the same page. Set `TWILIO_AUTH_TOKEN` instead of the two `TWILIO_API_*`
+values. If both are present the API key wins, so you can move over later by
+adding two variables and deleting one.
 
 ### 1d. Put them in Render
 
