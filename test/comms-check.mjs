@@ -264,4 +264,41 @@ for (const row of db.prepare(`SELECT id, name FROM companies WHERE name LIKE ?`)
 }
 check('test data removed', true)
 
+// --------------------------------------------------------------------------
+section('A phone number Twilio can actually route')
+
+/*
+ * Candidates type what they would tell a friend. Twilio needs E.164 — a plus, a
+ * country code, subscriber digits, nothing else — and refuses anything else
+ * with error 21211, which reads as "invalid To number" and says nothing about
+ * formatting. So every code would have failed to send, and the log would not
+ * have said why.
+ *
+ * Deliberately not phoneKey: that keeps the last nine digits so two spellings
+ * of one number match each other, which is right for looking somebody up and
+ * wrong for dialling them. Nine digits are a fingerprint of a number, not one.
+ */
+const { toE164 } = await import('../server/src/notify.js')
+
+for (const [typed, expected, why] of [
+  ['052-959-2503', '+972529592503', 'the ordinary Israeli form'],
+  ['0529592503', '+972529592503', 'no separators'],
+  ['054 987 6543', '+972549876543', 'spaces'],
+  ['(052) 959-2503', '+972529592503', 'brackets'],
+  ['00972529592503', '+972529592503', 'the 00 international prefix'],
+  ['+972 52 959 2503', '+972529592503', 'already international, still tidied'],
+  ['+972529592503', '+972529592503', 'already correct, left alone'],
+  ['+15551234567', '+15551234567', 'another country, not rewritten'],
+]) {
+  check(`${typed} dials as ${expected}`, toE164(typed) === expected,
+    `${why} — got ${toE164(typed)}`)
+}
+
+check('a number it cannot place is passed through rather than guessed at',
+  toE164('12345') === '12345',
+  'inventing a country code would send a code to a stranger in another one')
+
+check('and the country is configurable, so this is not only an Israeli product',
+  toE164('0529592503', '44') === '+44529592503')
+
 finish()

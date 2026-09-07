@@ -148,6 +148,10 @@ services:
         sync: false
       - key: TWILIO_AUTH_TOKEN
         sync: false
+      # The dialling code a bare national number belongs to. Israel unless this
+      # says otherwise — see toE164 in notify.js.
+      - key: SMS_COUNTRY
+        value: "972"
 
       # Without these two, CV reading and match scoring fall back to keyword
       # overlap. The app runs; it just stops being the product.

@@ -479,6 +479,51 @@ export const SMS_LIVE = Boolean(SMS_SID && SMS_USER && SMS_PASS && SMS_FROM)
 const SMS_ALLOWED = process.env.NODE_ENV === 'production'
   || process.env.SMS_ALLOW_NON_PRODUCTION === 'true'
 
+/*
+ * The country a bare national number belongs to.
+ *
+ * Israel unless told otherwise, because that is who signs up. Set SMS_COUNTRY
+ * to another dialling code — "44", "1" — if that ever stops being true.
+ */
+const SMS_COUNTRY = process.env.SMS_COUNTRY ?? '972'
+
+/**
+ * A phone number in the form Twilio can route.
+ *
+ * Candidates type what they would tell a friend: "052-959-2503", "054 987
+ * 6543", sometimes "+972 52 959 2503". Twilio needs E.164 — a plus, a country
+ * code, then the subscriber digits and nothing else — and rejects anything else
+ * with error 21211, which reads as "invalid To number" and says nothing about
+ * formatting.
+ *
+ * This is NOT phoneKey. That keeps the last nine digits so two spellings of one
+ * number match each other, which is the right rule for looking somebody up and
+ * the wrong one for dialling them: nine digits are not a phone number, they are
+ * a fingerprint of one.
+ *
+ * Three cases, in order:
+ *   already international   +972529592503  → unchanged
+ *   00-prefixed             00972529592503 → +972529592503
+ *   national, leading zero  0529592503     → +972529592503
+ *
+ * Anything else is returned as-is rather than guessed at. A number this cannot
+ * place is one Twilio should refuse loudly, not one we should invent a country
+ * for and send somewhere unexpected.
+ */
+export function toE164(value, country = SMS_COUNTRY) {
+  const text = String(value ?? '').trim()
+  if (!text) return text
+
+  /* Spaces, dashes and brackets are decoration everywhere they appear. */
+  const cleaned = text.replace(/[\s()\-.]/g, '')
+
+  if (cleaned.startsWith('+')) return cleaned
+  if (cleaned.startsWith('00')) return `+${cleaned.slice(2)}`
+  if (cleaned.startsWith('0')) return `+${country}${cleaned.slice(1)}`
+
+  return cleaned
+}
+
 function printedSms(to, code, expiresInMinutes, note) {
   console.log('')
   console.log(`  ┌─ candidate sign-in code (${note}) ─────────────`)
@@ -520,7 +565,10 @@ async function sendSms({ to, body, expiresInMinutes, code }) {
         authorization: `Basic ${Buffer.from(`${SMS_USER}:${SMS_PASS}`).toString('base64')}`,
         'content-type': 'application/x-www-form-urlencoded',
       },
-      body: new URLSearchParams({ To: to, From: SMS_FROM, Body: body }),
+      /* Converted here rather than at the call site: every path into this
+         function carries whatever the candidate typed, and one conversion at
+         the edge is one place to be right. */
+      body: new URLSearchParams({ To: toE164(to), From: SMS_FROM, Body: body }),
     },
   )
 
