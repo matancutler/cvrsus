@@ -524,6 +524,39 @@ export function toE164(value, country = SMS_COUNTRY) {
   return cleaned
 }
 
+/**
+ * The From, in the form Twilio accepts.
+ *
+ * It needs E.164 here too, and a number pasted into a dashboard without its
+ * leading + is refused with 21212 — "Invalid From Number", naming a number that
+ * looks perfectly correct to a reader. Normalising it costs nothing and removes
+ * a whole class of configuration error that is invisible until the first send.
+ *
+ * Only when it IS a number. An alphanumeric sender ID — "Cursus" instead of a
+ * number, which is worth having once the account supports it — must be passed
+ * through untouched, and running it through toE164 would mangle it.
+ */
+function sender() {
+  /* An alphanumeric sender ID is not a number and must survive untouched. */
+  if (!/^[+\d\s()\-.]+$/.test(SMS_FROM)) return SMS_FROM
+
+  const dialled = toE164(SMS_FROM)
+  if (dialled.startsWith('+')) return dialled
+
+  /*
+   * Bare digits, and toE164 left them alone because for a DESTINATION it
+   * refuses to guess: 529592503 could be a national number missing its country
+   * or an international one missing its plus, and inventing the wrong answer
+   * texts a stranger.
+   *
+   * A sender has no such ambiguity. You never configure a From in national
+   * format — the number you were given by Twilio is international — so digits
+   * with no plus are digits missing their plus, and that is what 21212 was
+   * complaining about.
+   */
+  return `+${dialled.replace(/\D/g, '')}`
+}
+
 function printedSms(to, code, expiresInMinutes, note) {
   console.log('')
   console.log(`  ┌─ candidate sign-in code (${note}) ─────────────`)
@@ -568,7 +601,7 @@ async function sendSms({ to, body, expiresInMinutes, code }) {
       /* Converted here rather than at the call site: every path into this
          function carries whatever the candidate typed, and one conversion at
          the edge is one place to be right. */
-      body: new URLSearchParams({ To: toE164(to), From: SMS_FROM, Body: body }),
+      body: new URLSearchParams({ To: toE164(to), From: sender(), Body: body }),
     },
   )
 
