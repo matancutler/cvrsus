@@ -450,8 +450,29 @@ export async function ensureSummary(candidateId, { cvText = null, signal } = {})
  * see abstractSummaryEmployers, which returns null rather than a ruined
  * summary.
  */
+/*
+ * An address or a phone number has no place in a professional summary.
+ *
+ * The summary is the one long free-text field a recruiter reads BEFORE paying,
+ * and it is assembled from the CV — including current_title, which used to be
+ * whatever line two of the CV happened to be. A poisoned title became a
+ * persisted summary opening with the candidate's email address, which every
+ * masked search card printed and the folder export wrote into a spreadsheet
+ * beside a column correctly reading "Hidden until revealed".
+ *
+ * Redacted rather than dropped: a summary that loses a sentence reads as
+ * broken, and the point is that the reader learns nothing they did not pay
+ * for, not that the text is pristine.
+ */
+function stripContactDetails(text) {
+  return String(text ?? '')
+    .replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, '[removed]')
+    .replace(/\b(?:\+?\d[\d\s()-]{7,}\d)\b/g, '[removed]')
+    .replace(/\b(?:https?:\/\/|www\.)\S+/gi, '[removed]')
+}
+
 export async function sanitiseText(text, context, { signal } = {}) {
-  const deterministic = abstractEmployers(text, context).text
+  const deterministic = stripContactDetails(abstractEmployers(text, context).text)
 
   const assisted = await abstractSummaryEmployers(deterministic, { signal }).catch(() => null)
 

@@ -4688,11 +4688,29 @@ function recruiterCandidateView(candidate, revealed) {
    */
   const written = trimOrNull(candidate.notes)
 
+  /*
+   * "Equally unidentifying" is an assumption, so it is checked.
+   *
+   * extracted_title comes from the CV. The extractor now refuses lines that
+   * look like contact details, but it is one heuristic over text nobody
+   * controls, and this field crosses the reveal boundary — which is the line
+   * the whole product charges for. So the boundary verifies rather than trusts:
+   * before a reveal, a title carrying this candidate's own surname or address
+   * is withheld rather than served.
+   *
+   * Cheap, and it fails closed. If the extractor ever regresses, or a CV
+   * defeats it in a way nobody predicted, the leak stops here instead of
+   * arriving in a recruiter's JSON with revealed:false beside it.
+   */
+  const title = trimOrNull(profile.current_title)
+  const identifying = !revealed && title && [candidate.last_name, candidate.email, candidate.phone]
+    .filter(Boolean)
+    .some((value) => title.toLowerCase().includes(String(value).toLowerCase()))
+
   return {
     ...candidateForRecruiter(candidate, { revealed }),
     summary: written,
-    // Read alongside the summary, and equally unidentifying.
-    extracted_title: profile.current_title ?? null,
+    extracted_title: identifying ? null : title,
     seniority: profile.seniority ?? null,
   }
 }
@@ -5111,12 +5129,32 @@ app.post('/api/hr/candidates/:id/availability-check', recruiterOnly, refuseIfBlo
  */
 function notifyAvailabilityWatchers(candidate, answer) {
   const waiting = resolveAvailabilityChecks(candidate.id, answer)
-  const candidateName = candidate.name
+  const fullName = candidate.name
     ?? [candidate.first_name, candidate.last_name].filter(Boolean).join(' ')
 
   for (const check of waiting) {
     const recruiter = getRecruiter(check.recruiter_id)
     if (!recruiter?.email) continue
+
+    /*
+     * The name is resolved PER WATCHER, not once for the batch.
+     *
+     * It used to be computed above the loop as the candidate's full name and
+     * mailed to everyone who had asked — and asking is free. So a recruiter
+     * could press Check Availability on every Orange candidate they could see,
+     * pay nothing, and receive "Dana Cohen is available" for each one who
+     * answered: a surname, attached to a specific masked card that already
+     * carried a city, a title and a seniority. That is the identification the
+     * reveal exists to charge for, given away by a free button.
+     *
+     * The check row has carried company_id since availability.js:102, so the
+     * question "has this watcher paid" was always answerable here.
+     */
+    const revealedToThem = check.company_id != null
+      && hasRevealed(check.company_id, candidate.id)
+    const candidateName = revealedToThem
+      ? fullName
+      : maskedDisplayName(candidate.first_name)
 
     const send = answer === 'yes'
       ? sendAvailabilityConfirmedEmail({

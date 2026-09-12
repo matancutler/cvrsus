@@ -158,11 +158,36 @@ function normalizeExtraction(raw) {
  * What the platform did before Claude: taxonomy matching over the CV text.
  * Weaker on titles and history, but it never invents anything.
  */
+/*
+ * Lines near the top of a CV that are not a job title.
+ *
+ * "The line after the name is very often the current title" is true and was the
+ * whole rule, so anything short with a letter in it qualified — and lines two
+ * to four of a real CV are at least as often the email address, the phone
+ * number, a LinkedIn URL, or the name again under a letterhead.
+ *
+ * That mattered because current_title is served BEFORE a reveal, under a
+ * comment calling it "equally unidentifying". A title reading
+ * "dana.levi@gmail.com" is not unidentifying; it is the whole disclosure the
+ * reveal is charged for, given away in the field beside it.
+ */
+const NOT_A_TITLE = /@|https?:|linkedin|\bwww\.|\d[\d\s()+-]{6,}/i
+
 export function deterministicExtraction(cvText) {
   const firstLines = String(cvText ?? '').split('\n').map((line) => line.trim()).filter(Boolean)
 
-  // The line after the name is very often the current title.
-  const titleLine = firstLines.slice(1, 4).find((line) => line.length < 80 && /[a-z]/i.test(line))
+  /*
+   * The line after the name is very often the current title — but only if it
+   * is a title. A line carrying an address, a URL or a run of digits long
+   * enough to be a phone number is contact detail, and a line that simply
+   * repeats the first one is the name under a header.
+   */
+  const titleLine = firstLines.slice(1, 4).find((line) => (
+    line.length < 80
+    && /[a-z]/i.test(line)
+    && !NOT_A_TITLE.test(line)
+    && line.toLowerCase() !== String(firstLines[0] ?? '').toLowerCase()
+  ))
 
   return {
     current_title: titleLine ?? null,
