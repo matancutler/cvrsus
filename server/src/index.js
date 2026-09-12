@@ -7096,10 +7096,35 @@ app.use((error, req, res, _next) => {
     })
   }
 
-  const status = error.status ?? 400
-  if (status >= 500) console.error(error)
+  /*
+   * An error nobody chose to raise is a 500, and its words stay here.
+   *
+   * This defaulted to 400 and returned error.message whatever the error was.
+   * Two consequences, both bad and both quiet:
+   *
+   * A genuine fault — a TypeError, a SQLite constraint, a provider timeout —
+   * was reported to the caller as "your request was wrong", with its internal
+   * text attached. `SqliteError: UNIQUE constraint failed: candidates.email_key`
+   * names a table and a column; a provider refusal can carry configuration. It
+   * also skipped the console.error, because that only fired at 500 — so the one
+   * class of error worth waking up for was the one class never written down.
+   *
+   * HttpError still says what it means: it sets .status deliberately, and those
+   * messages are written for the person reading them. Anything else gets a
+   * sentence that gives nothing away, and the real error goes to the log where
+   * it belongs.
+   */
+  const status = Number.isInteger(error.status) ? error.status : 500
 
-  res.status(status).json({ error: error.message || 'Something went wrong.' })
+  if (status >= 500) {
+    console.error(`  ${req.method} ${req.path} — ${error.stack ?? error.message}`)
+  }
+
+  res.status(status).json({
+    error: status >= 500
+      ? 'Something went wrong at our end. Please try again.'
+      : error.message || 'Something went wrong.',
+  })
 })
 
 /**
