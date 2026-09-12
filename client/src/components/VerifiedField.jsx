@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import Req from './Req.jsx'
 import { post } from '../api.js'
+import useDismissOnOutside from '../useDismiss.js'
 
 /*
  * Country dialling codes, the common ones.
@@ -11,49 +12,81 @@ import { post } from '../api.js'
  * signs up and the default should cost no clicks. Adding one is adding a line.
  */
 const DIAL_CODES = [
-  ['+972', 'Israel'],
-  ['+1', 'US / Canada'],
-  ['+44', 'United Kingdom'],
-  ['+33', 'France'],
-  ['+49', 'Germany'],
-  ['+31', 'Netherlands'],
-  ['+32', 'Belgium'],
-  ['+41', 'Switzerland'],
-  ['+43', 'Austria'],
-  ['+39', 'Italy'],
-  ['+34', 'Spain'],
-  ['+351', 'Portugal'],
-  ['+353', 'Ireland'],
-  ['+46', 'Sweden'],
-  ['+47', 'Norway'],
-  ['+45', 'Denmark'],
-  ['+358', 'Finland'],
-  ['+48', 'Poland'],
-  ['+420', 'Czechia'],
-  ['+36', 'Hungary'],
-  ['+30', 'Greece'],
-  ['+40', 'Romania'],
-  ['+380', 'Ukraine'],
-  ['+7', 'Russia / Kazakhstan'],
-  ['+90', 'Turkey'],
-  ['+971', 'United Arab Emirates'],
-  ['+357', 'Cyprus'],
-  ['+91', 'India'],
-  ['+86', 'China'],
-  ['+81', 'Japan'],
-  ['+82', 'South Korea'],
-  ['+65', 'Singapore'],
-  ['+852', 'Hong Kong'],
-  ['+61', 'Australia'],
-  ['+64', 'New Zealand'],
-  ['+27', 'South Africa'],
-  ['+55', 'Brazil'],
-  ['+52', 'Mexico'],
-  ['+54', 'Argentina'],
+  ['+1', 'United States', 'US'],
+  ['+1', 'Canada', 'CA'],
+  ['+44', 'United Kingdom', 'GB'],
+  ['+972', 'Israel', 'IL'],
+  ['+61', 'Australia', 'AU'],
+  ['+43', 'Austria', 'AT'],
+  ['+32', 'Belgium', 'BE'],
+  ['+55', 'Brazil', 'BR'],
+  ['+86', 'China', 'CN'],
+  ['+357', 'Cyprus', 'CY'],
+  ['+420', 'Czechia', 'CZ'],
+  ['+45', 'Denmark', 'DK'],
+  ['+358', 'Finland', 'FI'],
+  ['+33', 'France', 'FR'],
+  ['+49', 'Germany', 'DE'],
+  ['+30', 'Greece', 'GR'],
+  ['+852', 'Hong Kong', 'HK'],
+  ['+36', 'Hungary', 'HU'],
+  ['+91', 'India', 'IN'],
+  ['+353', 'Ireland', 'IE'],
+  ['+39', 'Italy', 'IT'],
+  ['+81', 'Japan', 'JP'],
+  ['+52', 'Mexico', 'MX'],
+  ['+31', 'Netherlands', 'NL'],
+  ['+64', 'New Zealand', 'NZ'],
+  ['+47', 'Norway', 'NO'],
+  ['+48', 'Poland', 'PL'],
+  ['+351', 'Portugal', 'PT'],
+  ['+40', 'Romania', 'RO'],
+  ['+65', 'Singapore', 'SG'],
+  ['+27', 'South Africa', 'ZA'],
+  ['+82', 'South Korea', 'KR'],
+  ['+34', 'Spain', 'ES'],
+  ['+46', 'Sweden', 'SE'],
+  ['+41', 'Switzerland', 'CH'],
+  ['+90', 'Turkey', 'TR'],
+  ['+380', 'Ukraine', 'UA'],
+  ['+971', 'United Arab Emirates', 'AE'],
 ]
 
-/* Israel, because that is who signs up. The field opens ready to use. */
-const DEFAULT_DIAL = '+972'
+/*
+ * The United States, because that is who the product is for now.
+ *
+ * It was Israel, which is where it was built. The two are the same one-line
+ * change and this is the line — see also SMS_COUNTRY on the server, which has
+ * to agree with it or a number typed here dials somewhere else.
+ */
+const DEFAULT_DIAL = '+1'
+
+/*
+ * How long before a code may be asked for again.
+ *
+ * Long enough to cover a slow SMS — carrier queues, a handset waking up — and
+ * short enough that somebody who genuinely mistyped their number is not stuck.
+ */
+const RESEND_SECONDS = 60
+
+/*
+ * A flag from an ISO country code.
+ *
+ * Regional indicator symbols: 'US' becomes two code points that a platform with
+ * flag support draws as one flag. A platform WITHOUT flag support — Windows,
+ * mostly — draws the two letters instead, "US", which is still exactly the
+ * information the flag was carrying. So the fallback needs no code.
+ */
+function flagFor(iso) {
+  return String(iso ?? '')
+    .toUpperCase()
+    .replace(/[A-Z]/g, (c) => String.fromCodePoint(0x1f1e6 + c.charCodeAt(0) - 65))
+}
+
+const DIAL_LABEL = new Map(DIAL_CODES.map(([code, country, iso]) => [
+  `${code} ${country}`, { code, country, iso },
+]))
+
 
 /* Longest first, so +972 is not mistaken for +9 and +351 not for +35. */
 const DIAL_BY_LENGTH = [...DIAL_CODES]
@@ -184,6 +217,9 @@ export default function VerifiedField({
       setDevCode(result.devCode ?? '')
       setCode('')
       setStep('code')
+      /* Only on success. A refused request sent nothing, so there is nothing to
+         wait for and the button should be pressable again immediately. */
+      setCooldown(RESEND_SECONDS)
     } catch (err) {
       setError(err.message)
     } finally {
@@ -216,6 +252,49 @@ export default function VerifiedField({
 
   const canSend = value.trim().length > 3 && !busy && !disabled
 
+  /*
+   * Which flag to draw.
+   *
+   * A dial code is not a country — +1 is the United States and Canada, and the
+   * number alone cannot say which. So the CHOICE is remembered separately and
+   * the stored value stays what it always was, a plain dial code plus digits.
+   * Nothing downstream knows or cares which of the two was picked.
+   */
+  /*
+   * Seconds until another code may be asked for.
+   *
+   * Held here rather than as a timestamp because the button renders the number:
+   * a deadline would need its own tick to be displayed anyway, and one interval
+   * that owns both the state and the display cannot show a stale value.
+   */
+  const [cooldown, setCooldown] = useState(0)
+
+  useEffect(() => {
+    if (cooldown <= 0) return undefined
+    const timer = setInterval(() => setCooldown((left) => Math.max(0, left - 1)), 1000)
+    return () => clearInterval(timer)
+  }, [cooldown > 0])
+
+  const [dialIso, setDialIso] = useState(null)
+  const [dialOpen, setDialOpen] = useState(false)
+  const dialWrap = useRef(null)
+
+  useDismissOnOutside({
+    ref: dialWrap,
+    onDismiss: useCallback(() => setDialOpen(false), []),
+    active: dialOpen,
+  })
+
+  const currentDial = splitPhone(value).dial
+  const dialChoice = (dialIso && DIAL_CODES.find(([, , iso]) => iso === dialIso))
+    ? { code: currentDial, country: DIAL_CODES.find(([, , iso]) => iso === dialIso)[1], iso: dialIso }
+    : (() => {
+      const match = DIAL_CODES.find(([code]) => code === currentDial)
+      return match
+        ? { code: match[0], country: match[1], iso: match[2] }
+        : { code: currentDial, country: currentDial, iso: '' }
+    })()
+
   /* Every edit, whichever box it came from, means the same thing: what was
      proved about the old value no longer covers this one. */
   function changed(next) {
@@ -243,17 +322,56 @@ export default function VerifiedField({
         */}
         {channel === 'phone' ? (
           <>
-            <select
-              className="phone-dial"
-              aria-label="Country dialling code"
-              value={splitPhone(value).dial}
-              disabled={disabled || (verified && lockWhenVerified)}
-              onChange={(e) => changed(`${e.target.value}${splitPhone(value).rest}`)}
-            >
-              {DIAL_CODES.map(([code, country]) => (
-                <option key={`${code} ${country}`} value={code}>{code} {country}</option>
-              ))}
-            </select>
+            {/*
+              A flag, and nothing else, when it is shut.
+
+              A native <select> shows the selected option's whole label, so
+              "+972 Israel" sat in the closed box and left the number — the part
+              somebody is actually reading back to check — in about eighty
+              pixels on a phone. This is a button and a list instead: the button
+              shows the flag, the list shows the flag, the country and the code,
+              which is what you need to CHOOSE and not what you need to SEE.
+            */}
+            <div className="phone-dial-wrap" ref={dialWrap}>
+              <button
+                type="button"
+                className="phone-dial"
+                aria-haspopup="listbox"
+                aria-expanded={dialOpen}
+                aria-label={`Country: ${dialChoice.country}, ${dialChoice.code}`}
+                disabled={disabled || (verified && lockWhenVerified)}
+                onClick={() => setDialOpen((was) => !was)}
+              >
+                <span className="phone-flag" aria-hidden="true">{flagFor(dialChoice.iso)}</span>
+                <span className="phone-dial-caret" aria-hidden="true">▾</span>
+              </button>
+
+              {dialOpen && (
+                <ul className="phone-dial-list" role="listbox" aria-label="Country">
+                  {DIAL_CODES.map(([code, country, iso]) => (
+                    <li key={`${code} ${country}`}>
+                      <button
+                        type="button"
+                        role="option"
+                        aria-selected={code === dialChoice.code && country === dialChoice.country}
+                        className={code === dialChoice.code && country === dialChoice.country
+                          ? 'phone-dial-option phone-dial-option-on'
+                          : 'phone-dial-option'}
+                        onClick={() => {
+                          setDialIso(iso)
+                          setDialOpen(false)
+                          changed(`${code}${splitPhone(value).rest}`)
+                        }}
+                      >
+                        <span className="phone-flag" aria-hidden="true">{flagFor(iso)}</span>
+                        <span className="phone-dial-country">{country}</span>
+                        <span className="phone-dial-code">{code}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
 
             <input
               id={id}
@@ -302,9 +420,23 @@ export default function VerifiedField({
             type="button"
             className="btn btn-secondary btn-small verified-send"
             onClick={request}
-            disabled={!canSend}
+            disabled={!canSend || cooldown > 0}
           >
-            {busy && step !== 'code' ? 'Sending…' : step === 'code' ? 'Resend' : 'Verify'}
+            {busy && step !== 'code'
+              ? 'Sending…'
+              /*
+               * The wait, said in seconds, on the button itself.
+               *
+               * A text can take half a minute. With nothing on screen saying so,
+               * people press Resend at twenty seconds, get a second code, and
+               * then have two — of which only the newer works, so the first one
+               * they read is the one that fails. Naming the number is what stops
+               * the second press: a disabled button with no explanation reads as
+               * broken, and a countdown reads as "not yet".
+               */
+              : cooldown > 0
+                ? `Resend in ${cooldown}s`
+                : step === 'code' ? 'Resend' : 'Verify'}
           </button>
         )}
       </div>

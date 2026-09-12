@@ -10219,20 +10219,90 @@ html:has(.workspace-shell) { scrollbar-gutter: auto; }
  * select is sized to its content and the input takes the rest of the row —
  * a half-and-half split would leave "052" floating in a box built for a name.
  */
-/*
- * Wide enough for the longest label it holds — "+971 United Arab Emirates" —
- * without letting a select full of country names take the row from the number
- * itself. Past that it truncates, which is fine: the code is the part that has
- * to stay readable, and it is first.
- */
-.verified-row .phone-dial {
-  flex: 0 1 11rem;
-  min-width: 7.5rem;
-  font-variant-numeric: tabular-nums;
-}
 .verified-row .phone-rest {
-  flex: 1;
-  min-width: 0;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.02em;
 }
+
+/* ------------------------------------------------- the country picker ---
+ *
+ * A flag when shut, a real list when open. The button is as narrow as a flag
+ * and a caret, which is the whole point: the number beside it is what somebody
+ * reads back to check, and on a phone it was getting eighty pixels.
+ */
+.phone-dial-wrap {
+  position: relative;
+  /* The flex ITEM is this wrapper, not the button inside it — so the stretch
+     has to happen here, and the button then fills it. Put on the button, it
+     collapsed to the height of one flag. */
+  align-self: stretch;
+  flex: none;
+}
+
+/*
+ * As narrow as its contents, and explicitly so.
+ *
+ * flex and min-width are both set rather than left to inherit: the rule this
+ * replaced sized a <select> holding "+971 United Arab Emirates" and pinned
+ * 120px of minimum width, which survived the element changing underneath it
+ * and kept the number in a box a third of the row wide on a phone.
+ *
+ * align-self stretch, so it is exactly as tall as the input beside it whatever
+ * the input's padding works out to — the two were 44 and 48 and it showed.
+ */
+.verified-row .phone-dial {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  gap: 0.3rem;
+  flex: none;
+  min-width: 0;
+  padding: 0 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  cursor: pointer;
+}
+.verified-row .phone-dial:disabled { cursor: default; opacity: 0.7; }
+.phone-flag { font-size: 1.15rem; line-height: 1; }
+.phone-dial-caret { font-size: 0.7rem; color: var(--text-muted); }
+
+.phone-dial-list {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 0.25rem);
+  left: 0;
+  /* Wider than the button it hangs from — it has to hold a country name, and
+     the button deliberately does not. */
+  min-width: 15rem;
+  max-height: 16rem;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0.25rem;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+.phone-dial-option {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  padding: 0.4rem 0.5rem;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  font: inherit;
+  font-size: 0.875rem;
+  text-align: left;
+  cursor: pointer;
+}
+.phone-dial-option:hover { background: var(--surface-2); }
+.phone-dial-option-on { background: var(--surface-2); font-weight: var(--w-semi); }
+.phone-dial-country { flex: 1; min-width: 0; }
+.phone-dial-code { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+
+/* And the number takes everything the flag gave back. */
+.verified-row .phone-rest { flex: 1; min-width: 0; }
