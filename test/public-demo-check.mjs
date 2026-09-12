@@ -461,6 +461,9 @@ check('and nothing on it can be typed into or pressed',
 
 check('the rail carries Folders in the panel’s own nav',
   /className="ws-nav-item">Folders<span className="ws-nav-count">/.test(liveDemo)
+  /* Reveals joined the workspace rail and the demo has to follow, or the demo
+     is advertising a screen that is one item short of the real one. */
+  && /className="ws-nav-item">Reveals</.test(liveDemo)
   && !/className="ws-nav-item">Triage/.test(liveDemo),
   'Triage moved to the switch below')
 check('and the switch is the panel’s own, not a lookalike',

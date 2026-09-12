@@ -135,14 +135,19 @@ function DemoRail({ title, hasSearch, view, onView }) {
       </div>
 
       {/*
-        One destination, in the panel's own .ws-nav with its own count pill —
-        not a lookalike, so the two cannot drift the way "Folders (3)" already
-        had. Triage is no longer here: it is the other half of the switch below,
-        because it is a thing you made and come back to rather than a place you
-        visit.
+        The panel's own .ws-nav and its own count pill — not a lookalike, so the
+        two cannot drift the way "Folders (3)" already had.
+
+        Triage is not here: it is the other half of the switch below, because it
+        is a thing you made and come back to rather than a place you visit.
+        Reveals is, because it is the other standing list of people — and it
+        carries no pill for the same reason the workspace gives it none: a
+        folder count is a number somebody chose and can act on, while this one
+        only ever goes up.
       */}
       <nav className="ws-nav" aria-hidden="true">
         <div className="ws-nav-item">Folders<span className="ws-nav-count">3</span></div>
+        <div className="ws-nav-item">Reveals</div>
       </nav>
 
       <div className="demo-rail-history">
