@@ -288,9 +288,8 @@ check('duplicate name gets a distinct username', mayaTwo.created.username === 'm
 check('the response carries what the administrator must pass on',
   mayaTwo.created.joinKey === company.joinKey
   && mayaTwo.created.name === 'Maya Cohen'
-  // username123, so a deduped username carries its suffix into the password
-  // rather than colliding with the first Maya Cohen's.
-  && mayaTwo.created.password === 'maya.cohen2123',
+  && typeof mayaTwo.created.password === 'string'
+  && mayaTwo.created.password.length >= 16,
   mayaTwo.created.password)
 
 const noaCreated = await json(await addRecruiter(maya.token, { firstName: 'Noa', lastName: 'Levi' }))
@@ -305,8 +304,26 @@ const signIn = async (joinKey, username, password) => (await json(await fetch(`$
   method: 'POST', headers: jsonHeaders(),
   body: JSON.stringify({ joinKey, username, password }),
 }))).token
-check('the starting password is derived from the name',
-  noaCreated.created.password === 'noa.levi123', noaCreated.created.password)
+/*
+ * The starting password must NOT be derivable, and this check is the reason.
+ *
+ * It used to be `${username}123`. Usernames are first.last, and GET
+ * /api/recruiter/me hands every recruiter the company join key AND every
+ * colleague's username — so the whole credential for any seat that had not
+ * changed its password was three things a colleague already had. Deleting a
+ * leaver's account did not close it: the join key cannot be rotated and the
+ * password was still computable from a name on LinkedIn.
+ */
+check('the starting password is not derivable from the username',
+  !noaCreated.created.password.toLowerCase().includes('noa')
+  && !noaCreated.created.password.toLowerCase().includes('levi')
+  && noaCreated.created.password !== 'noa.levi123',
+  noaCreated.created.password)
+check('and it is long enough to be worth guessing at',
+  noaCreated.created.password.length >= 16,
+  `${noaCreated.created.password.length} characters`)
+check('and two seats never receive the same one',
+  noaCreated.created.password !== mayaTwo.created.password)
 const noa = {
   token: await signIn(company.joinKey, 'noa.levi', noaCreated.created.password),
   recruiter: { id: noaCreated.created.id },

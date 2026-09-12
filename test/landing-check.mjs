@@ -532,6 +532,60 @@ check('the tab is titled for the product',
 const health = await json(await fetch(`${BASE}/api/health`))
 check('the API is up behind it', health.ok === true)
 
+/* ------------------------------------------------ the headers it carries --- */
+
+/*
+ * Checked on a live response rather than by reading the source, because a
+ * header is only real if it arrives. A middleware that is registered after the
+ * route it was meant to cover sets nothing, and the source looks identical
+ * either way.
+ */
+const H = (name) => home.headers.get(name)
+
+check('every response says do not sniff the type',
+  H('x-content-type-options') === 'nosniff',
+  'without it a browser may guess a stored CV is HTML and render it')
+check('and refuses to be framed', H('x-frame-options') === 'DENY')
+check('and sends no referrer', H('referrer-policy') === 'no-referrer')
+
+/*
+ * The one that decides what a mistake costs.
+ *
+ * React escapes what it renders, so CSP is not what stands between a
+ * candidate's summary and an injected <script>. It is what limits the damage
+ * if any of that escaping is ever bypassed — in a client that renders CV text,
+ * tag names, filenames and free-text comments, on an origin holding every
+ * revealed candidate's name, phone number and CV.
+ */
+const csp = H('content-security-policy') ?? ''
+check('there is a Content-Security-Policy', csp.length > 0)
+check("and script-src has no 'unsafe-inline' or 'unsafe-eval'",
+  /script-src[^;]*/.test(csp)
+  && !/script-src[^;]*unsafe-inline/.test(csp)
+  && !/script-src[^;]*unsafe-eval/.test(csp),
+  csp.match(/script-src[^;]*/)?.[0] ?? 'no script-src at all')
+check('objects and base-uri are shut',
+  /object-src 'none'/.test(csp) && /base-uri 'none'/.test(csp))
+check('and frame-ancestors backs up X-Frame-Options',
+  /frame-ancestors 'none'/.test(csp))
+
+check('nothing may use the camera, microphone or location',
+  /camera=\(\)/.test(H('permissions-policy') ?? ''))
+
+check('the server does not announce what it is',
+  !H('x-powered-by'),
+  'X-Powered-By: Express is a free hint about what to attack')
+
+/*
+ * HSTS is conditional on the connection, so it is absent here and must be.
+ * The suites run over plain http; asserting it were present would be asserting
+ * the app sends a header the spec says to ignore, and would pass for the wrong
+ * reason in production.
+ */
+check('HSTS is sent only over TLS, so not here',
+  !H('strict-transport-security'),
+  'asserted as absent on http; server/src/index.js gates it on req.secure')
+
 section('Signing up (later round)')
 
 // "I am: Candidate / Recruiter", above the card, changing only the card.

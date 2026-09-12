@@ -248,7 +248,15 @@ export async function createRecruiter({
   email = null, phone = null, website = null,
 }) {
   const username = deriveUsername(companyId, firstName, lastName)
-  const initialPassword = password ?? defaultPasswordFor(username)
+  /*
+   * A generated password is TEMPORARY; one the person chose is not.
+   *
+   * The flag is what stops a seat living forever on a credential its owner
+   * never picked — see mustChangePassword below, which the recruiter guard
+   * consults on every request.
+   */
+  const generated = password === undefined || password === null
+  const initialPassword = password ?? defaultPasswordFor()
   const passwordHash = await hashPassword(initialPassword)
 
   const info = db.prepare(`
@@ -327,8 +335,25 @@ export function updateRecruiter(id, { firstName, lastName, photoName, contact = 
  * starting password, not a secret, which is why the account holder replaces it
  * from My profile.
  */
-export function defaultPasswordFor(username) {
-  return `${String(username ?? '').trim().toLowerCase() || 'recruiter'}123`
+/**
+ * A starting password nobody can compute.
+ *
+ * This used to return `${username}123`. Usernames are `first.last`, derived
+ * from a name, and every recruiter is handed the company join key and the
+ * username of every colleague by GET /api/recruiter/me — so the complete
+ * credential for any seat that had not changed its password was three fields
+ * a colleague already held, and one an ex-colleague remembered. Deleting their
+ * account did not help: the join key cannot be rotated, and the derived
+ * password was still derivable.
+ *
+ * Twelve random bytes, base64url. It is shown to the administrator exactly
+ * once, at the moment it is set, and is never derivable from anything.
+ *
+ * The name is kept so every call site keeps compiling, but there is nothing
+ * "default" about the result any more — no two calls agree.
+ */
+export function defaultPasswordFor() {
+  return crypto.randomBytes(12).toString('base64url')
 }
 
 export async function setRecruiterPassword(id, password) {

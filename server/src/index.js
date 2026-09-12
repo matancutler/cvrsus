@@ -499,7 +499,28 @@ if (!embeddingsConfigured()) {
  * trusting those headers when nothing is in front of the app lets a caller
  * claim any address, which would defeat the rate limiter. Off unless declared.
  */
-if (process.env.TRUST_PROXY) app.set('trust proxy', process.env.TRUST_PROXY)
+/*
+ * A NUMBER, and that is the whole point.
+ *
+ * Express reads this value by type. A number is a hop count — "the last N
+ * entries of X-Forwarded-For are ours, take the one before them". A string is
+ * an address or subnet list. `process.env` only ever yields strings, so
+ * TRUST_PROXY=1 arrived as "1", which Express parsed as the IP address 1 —
+ * matching nothing.
+ *
+ * The setting was therefore inert in production, and silently so: req.ip
+ * returned the proxy's own address for every caller on earth and req.ips was
+ * empty. Every rate limit keyed on req.ip — sign-in, sign-up, code requests,
+ * the public demo — collapsed into a single global bucket, so one caller could
+ * exhaust the allowance for everybody, and per-caller throttling did not exist.
+ *
+ * A value that is not a number is passed through as written, because
+ * 'loopback' and subnet lists are legitimate settings that are not counts.
+ */
+if (process.env.TRUST_PROXY) {
+  const hops = Number(process.env.TRUST_PROXY)
+  app.set('trust proxy', Number.isInteger(hops) && hops >= 0 ? hops : process.env.TRUST_PROXY)
+}
 
 /*
  * Credentials are cookies now, so the browser attaches them automatically —
@@ -535,10 +556,59 @@ app.use(requireCsrf)
  * this origin, so even if something executable did get stored and rendered, it
  * has no origin to act on and no script to run with.
  */
-app.use((_req, res, next) => {
+app.disable('x-powered-by')
+
+app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff')
   res.setHeader('Referrer-Policy', 'no-referrer')
   res.setHeader('X-Frame-Options', 'DENY')
+
+  /*
+   * What a page on this origin is allowed to load and run.
+   *
+   * React escapes what it renders, so this is not the thing standing between a
+   * candidate's summary and an injected <script>. It is the layer that decides
+   * how much an escape is WORTH: with no script-src, one mistake anywhere in
+   * a client that renders CV text, tag names, filenames and free-text comments
+   * is arbitrary script on the origin holding every revealed candidate.
+   *
+   * 'unsafe-inline' is in style-src and nowhere else. The bundle ships one
+   * stylesheet, but React sets inline styles and the fonts arrive as data URIs;
+   * removing it needs a nonce pipeline through Vite, which is worth doing and
+   * is not worth blocking a launch on. script-src has no such escape hatch.
+   *
+   * connect-src is 'self' because the client only ever talks to this origin —
+   * the AI and mail providers are called from the server, never the browser.
+   */
+  res.setHeader('Content-Security-Policy', [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob:",
+    "font-src 'self' data:",
+    "connect-src 'self'",
+    "object-src 'none'",
+    "base-uri 'none'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+  ].join('; '))
+
+  /*
+   * A year, and only over TLS.
+   *
+   * The redirect from http already exists at the edge, but a redirect is one
+   * request the attacker gets to see and can intercept on a hostile network.
+   * HSTS removes the second visit from that risk entirely. Not sent on plain
+   * http, where it is meaningless and the spec says to ignore it.
+   */
+  if (req.secure) {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
+  }
+
+  /* Nothing here uses a camera, a microphone or a location. Saying so stops an
+     injected iframe or script asking on our behalf. */
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()')
+
   next()
 })
 

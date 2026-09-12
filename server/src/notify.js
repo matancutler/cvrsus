@@ -58,22 +58,41 @@ if (OTP_ECHO) {
 /**
  * A password reset for an organization administrator.
  *
- * Console, like everything else here, because no provider is wired up. That is
- * a delivery gap and not a logic one: the token is real, single use and
- * expiring, so wiring a mailer into this one function is all that stands
- * between this and a working reset by email.
+ * Sent, not printed.
+ *
+ * This function used to console.log the reset link and return
+ * {delivered:'console'}, with a comment saying no provider was wired up. That
+ * comment outlived its truth: deliver() has posted to Resend since
+ * RESEND_API_KEY existed, and eighteen other templates in this file go through
+ * it. The consequence was not cosmetic. The link is a single-factor account
+ * recovery credential for an ORGANIZATION ADMINISTRATOR — redeeming it needs
+ * the token and nothing else, no session and no company key — and it was being
+ * written in plaintext to a log stream that travels further than any database:
+ * dashboard viewers, log drains, exported bundles, screen shares.
+ *
+ * And the person entitled to it never received it, while the route answered
+ * {sent: true}. So administrator recovery was both broken and dangerous, in
+ * the same eleven lines.
+ *
+ * deliver() still prints when there is no key or the address is a reserved
+ * test domain, so development and the suites are unchanged — but it prints the
+ * body it would have sent, under the rule that applies to every other message,
+ * rather than because this one function opted out.
  */
 export async function sendPasswordReset({ to, name, companyName, link, expiresInMinutes }) {
-  console.log('')
-  console.log('  ┌─ recruiter password reset ───────────────────────────')
-  console.log(`  │  to:         ${to}`)
-  console.log(`  │  for:        ${name} at ${companyName}`)
-  console.log(`  │  link:       ${link}`)
-  console.log(`  │  valid for:  ${expiresInMinutes} minutes`)
-  console.log('  └──────────────────────────────────────────────────────')
-  console.log('')
-
-  return { delivered: 'console' }
+  return deliver({
+    to,
+    subject: 'Reset your Cursus password',
+    lines: [
+      `Hi ${name},`,
+      `Somebody asked to reset the password for your Cursus account at ${companyName}.`,
+      `Open this link to choose a new one: ${link}`,
+      `It is valid for ${expiresInMinutes} minutes and can be used once.`,
+      'If this was not you, ignore this email. Your password has not changed, '
+        + 'and nobody can use the link without opening it.',
+      '— Cursus',
+    ],
+  })
 }
 
 /**
