@@ -517,6 +517,23 @@ if (!embeddingsConfigured()) {
  * A value that is not a number is passed through as written, because
  * 'loopback' and subnet lists are legitimate settings that are not counts.
  */
+/*
+ * Node's own parser, not qs.
+ *
+ * Express reaches for qs so that ?a[b]=1&c[]=2 becomes nested objects and
+ * arrays. This server reads exactly four query parameters — advance, inline,
+ * offset and slot — and every one is a flat scalar. Nothing here has ever
+ * wanted the feature, and it arrives with two advisories in the express-pinned
+ * version: an array-limit bypass and a denial of service through an
+ * attacker-controlled isBuffer.
+ *
+ * Switching the parser removes qs from the request path rather than chasing
+ * its version through a dependency this project does not control. `npm audit`
+ * will still name it, because it is still in the tree — but nothing an
+ * attacker sends reaches it.
+ */
+app.set('query parser', 'simple')
+
 if (process.env.TRUST_PROXY) {
   const hops = Number(process.env.TRUST_PROXY)
   app.set('trust proxy', Number.isInteger(hops) && hops >= 0 ? hops : process.env.TRUST_PROXY)
