@@ -946,11 +946,26 @@ function assertUploadsAreWhatTheyClaim(req) {
    */
   const logo = req.file?.fieldname === 'logo' ? req.file : fieldFiles.logo?.[0]
   const jd = req.file?.fieldname === 'jd' ? req.file : fieldFiles.jd?.[0]
+  /*
+   * And a CV sent on its own.
+   *
+   * uploadedDocuments below reads req.files[slot], which is how .fields()
+   * presents things. /api/candidate/summary and /api/candidate/parse-cv use
+   * upload.single('cv'), so the file arrives as req.file and req.files is
+   * undefined — every check above passed over it and the list came back empty.
+   *
+   * Both of those routes are unauthenticated and both hand the bytes straight
+   * to the parser, so the one field a stranger can reach without an account was
+   * the one field nobody sniffed. Exactly the omission the note above warns
+   * about.
+   */
+  const cv = req.file?.fieldname === 'cv' ? req.file : null
 
   const checks = [
     ...(photo ? [{ file: photo, allowed: PHOTO_EXTENSIONS, label: 'photo' }] : []),
     ...(logo ? [{ file: logo, allowed: PHOTO_EXTENSIONS, label: 'logo' }] : []),
     ...(jd ? [{ file: jd, allowed: DOCUMENT_EXTENSIONS, label: 'job description' }] : []),
+    ...(cv ? [{ file: cv, allowed: allowedFor('cv'), label: 'CV' }] : []),
     ...uploadedDocuments(req).map(({ file, slot }) => ({
       file,
       allowed: allowedFor(slot),
