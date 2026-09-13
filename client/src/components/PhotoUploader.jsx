@@ -74,8 +74,19 @@ export default function PhotoUploader({
 
       <button
         type="button"
+        /*
+          `avatar-editable` only when it is actually editable.
+ 
+          The class carries the pointer cursor, the accent hover border and the
+          focus ring. It was applied always, so a locked profile — where the
+          button is disabled and nothing can be chosen — still lit up on hover
+          and took a focus ring on click. It looked selectable, did nothing when
+          selected, and the way to make it work was a pencil elsewhere on the
+          page that nothing connected it to.
+        */
         className={[
-          'avatar', 'avatar-editable',
+          'avatar',
+          disabled ? '' : 'avatar-editable',
           shape === 'rect' ? 'avatar-rect' : '',
           dragging ? 'avatar-dragging' : '',
         ].filter(Boolean).join(' ')}

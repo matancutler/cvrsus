@@ -27,3 +27,7 @@ surroundings/
 
 # Local editor and tool settings, which are per-machine rather than per-project.
 .claude/settings.local.json
+
+# Database and upload backups. Local safety copies, sometimes tens of MB,
+# and they contain real candidate data — never in the repository.
+backups/

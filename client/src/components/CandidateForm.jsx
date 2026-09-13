@@ -151,8 +151,20 @@ export default function CandidateForm({
    * this is opt-in.
    */
   lockable = false,
+  /*
+   * Open on the first render, despite being lockable.
+   *
+   * For exactly one arrival: the step after an account is created, where the
+   * profile on screen was assembled from a CV by a machine and has never been
+   * read by the person it describes. Everywhere else a lockable form opens
+   * locked, which is what makes the pencil meaningful.
+   *
+   * Read once, at mount. Passing it as a live prop would re-open the form under
+   * somebody who had just saved and locked it.
+   */
+  startUnlocked = false,
 }) {
-  const [unlocked, setUnlocked] = useState(!lockable)
+  const [unlocked, setUnlocked] = useState(!lockable || startUnlocked)
   const locked = lockable && !unlocked
   /* Submitting is asked for directly rather than through a submit button — see
      the note on the pencil. */

@@ -1072,6 +1072,25 @@ export const ADDED_COLUMNS = {
      */
     ['last_seen_at', 'TEXT'],
     /*
+     * When the candidate finished — or dismissed — the questions their CV
+     * cannot answer.
+     *
+     * A column rather than navigation state, which is what this was. The
+     * dialog was shown when `location.state.onboarding` was set by the
+     * redirect out of signup, on the reasoning that it is a fact about that
+     * arrival rather than about the account. It is, and the browser does not
+     * agree: history state survives a reload, so the dialog came back on every
+     * refresh of that page and on any restored tab — asking again for answers
+     * already given, which is exactly what keying off the arrival was meant to
+     * avoid.
+     *
+     * Stamped when the dialog closes by any route, including the cross. Having
+     * SEEN it is the thing that must not repeat; a candidate who chose to leave
+     * the defaults alone has answered, and re-asking would override that
+     * choice with a question.
+     */
+    ['onboarded_at', 'TEXT'],
+    /*
      * The one mailbox and the one number an account belongs to.
      *
      * Derived, never typed: emailKey folds the dots and +tags that Gmail treats
@@ -1438,6 +1457,20 @@ export const EXTRACTED_SLOT_KEYS = DOCUMENT_SLOTS.filter((slot) => slot.extracte
  */
 export const DOCUMENT_EXTENSIONS = ['.pdf', '.docx']
 export const SUPPORTING_EXTENSIONS = ['.pdf', '.docx', '.png', '.jpg', '.jpeg']
+
+/*
+ * A job description, which may be a picture of one.
+ *
+ * Its own list rather than DOCUMENT_EXTENSIONS because a JD is not a CV: it is
+ * read once for its words and deleted in the same request, so nothing depends
+ * on it being a file format anybody can open later. Recruiters are sent
+ * postings as screenshots constantly — in a message, a crop of a careers page,
+ * a photograph of a printed ad — and the only way in used to be retyping it.
+ *
+ * Images cost a vision call to read (see transcribeImage), which is why this
+ * list is not simply given to every upload field.
+ */
+export const JD_EXTENSIONS = ['.pdf', '.docx', '.png', '.jpg', '.jpeg', '.webp']
 export const MAX_DOCUMENT_BYTES = 5 * 1024 * 1024
 
 export const CAPACITY_OPTIONS = ['Full time', 'Part time', 'Freelance']

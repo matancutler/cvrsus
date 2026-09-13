@@ -646,6 +646,22 @@ if (legacyTables.has('profile_views')) {
   `)
 }
 
+/*
+ * Everyone who already had an account has already been through signup.
+ *
+ * onboarded_at is new, so every existing row reads NULL — which the portal
+ * takes as "never asked" and would answer by showing the onboarding dialog to
+ * the entire candidate base on their next sign-in, including the people whose
+ * repeat sightings of it are the reason the column exists.
+ *
+ * Stamped with created_at rather than with now(), because that is when it
+ * actually happened. Runs once: the WHERE clause matches nothing afterwards.
+ */
+db.exec(`
+  UPDATE candidates SET onboarded_at = COALESCE(created_at, CURRENT_TIMESTAMP)
+  WHERE onboarded_at IS NULL;
+`)
+
 /**
  * The earliest account in each org becomes the org admin, which is the closest
  * thing to "the person who created the company" that the data records.

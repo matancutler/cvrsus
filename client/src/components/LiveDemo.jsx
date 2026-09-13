@@ -796,6 +796,10 @@ export default function LiveDemo({ open, onClose }) {
               */}
               <SearchHero
                 greeting="See who is already on Cursus"
+                /* Reading a picture costs a vision call and anyone can reach
+                   this page without an account. The server refuses one here
+                   too; this keeps the dialog honest about it. */
+                acceptsImages={false}
                 value={jd}
                 onChange={setJd}
                 onSubmit={() => submit()}

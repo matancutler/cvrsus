@@ -281,8 +281,23 @@ function Portal({ account, reload, onSignOut }) {
    * meeting the dialog again on their next sign-in would be asking them to
    * confirm something they already left as it was.
    */
-  const { state: arrival } = useLocation()
-  const [onboarding, setOnboarding] = useState(Boolean(arrival?.onboarding))
+  /*
+   * Asked once, because the account records having been asked.
+   *
+   * This was `location.state.onboarding`, set by the redirect out of signup —
+   * a fact about the arrival rather than about the account, which is the right
+   * idea and the wrong mechanism. history.state survives a reload, so
+   * refreshing the profile page brought the dialog back, and so did any
+   * restored tab: the candidate was asked again for answers they had already
+   * given. The server now owns the question (candidates.onboarded_at) and a
+   * reload cannot resurrect it.
+   */
+  useLocation()
+  const [onboarding, setOnboarding] = useState(Boolean(account?.needsOnboarding))
+
+  /* The same fact, kept still. `onboarding` is cleared when the dialog closes,
+     and the form underneath must not re-lock at that moment. */
+  const [firstArrival] = useState(Boolean(account?.needsOnboarding))
 
   /**
    * `?thread=<recruiterId>` comes from the "you have a message" email. Landing
@@ -387,6 +402,18 @@ function Portal({ account, reload, onSignOut }) {
           capacityOptions={CAPACITY_OPTIONS}
           tagCap={account?.preferences?.tagCap ?? 10}
           onDone={async () => {
+            /*
+             * Stamped before the reload, so the reloaded account already says
+             * the question is answered. Reloading first would hand back
+             * needsOnboarding: true and re-open the dialog behind the one just
+             * closed.
+             *
+             * A failure here is swallowed: the answers are already saved by the
+             * dialog's own PATCH, and refusing to close over a bookkeeping call
+             * would trap somebody in a dialog they have finished with. The
+             * worst case is being asked once more.
+             */
+            await post('/api/candidate/me/onboarded', {}).catch(() => {})
             await reload()
             setOnboarding(false)
           }}
@@ -457,19 +484,24 @@ function Portal({ account, reload, onSignOut }) {
 
         <div className="account-main">
           {/*
-            Read-only on arrival, the same as every other sign-in.
+            Read-only on every sign-in but the first one.
 
-            It used to open unlocked on the way out of signup, on the reasoning
-            that somebody who has just been shown a profile built from their CV
-            should not have to find a pencil to correct it. That trades a
-            smaller problem for a larger one: the first thing they meet is a
-            live profile with every field editable and a cursor that lands
-            wherever they click, and there is no moment where they were shown
-            what it says before they were able to change it. Reading comes
-            first. The pencil is one click away and it is the same click it
-            will be tomorrow.
+            This has been both ways round. It opened unlocked out of signup;
+            that was reverted because a live form with a cursor landing wherever
+            you click gives nobody a moment to READ what a machine wrote about
+            them before they can change it. Correct about the reading, wrong
+            about the remedy: locking the page does not make anyone read it, it
+            just puts a pencil between them and the one thing they came here to
+            do, which is fix what the CV reader got wrong.
+
+            So the form opens, and the instruction does the work the lock was
+            standing in for — the line above the form says to check it and save
+            it, which is a sentence somebody reads, where a disabled fieldset is
+            a state they interpret. Only on this arrival: `arrival.onboarding`
+            is set by the navigation out of signup and by nothing else, so the
+            second visit and every visit after it opens locked as before.
           */}
-          <ProfileTab account={account} reload={reload} />
+          <ProfileTab account={account} reload={reload} reviewing={firstArrival} />
         </div>
       </div>
 
@@ -1076,7 +1108,6 @@ function ViewStats({ views, activity }) {
   const companies = views.revealedCompanies ?? 0
   /* Today, not the date of the last reveal: the sentence is a statement about
      the count as it stands right now, which is what "as of" means. */
-  const asOf = formatDate(new Date(), { day: '2-digit', month: 'short', year: 'numeric' })
 
   /* Both ways out of search, and they are not the same thing to the person
      they happened to: one they chose, the other happened to them. */
@@ -1101,9 +1132,19 @@ function ViewStats({ views, activity }) {
         */}
         <span className="stat-line">
           <span className="stat-value">{companies}</span>
+          {/*
+            The count, and nothing else.
+
+            "and hold your contact details, as of 13 Sept 2026" was two further
+            facts riding on the end of the first: what a reveal entails, and
+            when the figure was taken. Both are true and neither is what
+            somebody reads this line to learn — it wrapped onto three lines and
+            the number it exists to report was the easiest part to miss. What a
+            reveal means belongs in the explanation of a reveal, not restated
+            every time one is counted.
+          */}
           <span className="stat-label">
             {companies === 1 ? 'company has' : 'companies have'} revealed your profile
-            and hold your contact details, as of {asOf}
           </span>
         </span>
 
@@ -1170,9 +1211,13 @@ function hiddenText({ hidden, lapsed, orange, daysLeft, hiddenOn }) {
     + 'that any recruiter will contact you.'
 }
 
-function ProfileTab({ account, reload }) {
+function ProfileTab({ account, reload, reviewing = false }) {
   const { candidate, documents, preferences } = account
   const [status, setStatus] = useState({ state: 'idle' })
+
+  /* The instruction belongs to the arrival, not to the account, so it goes as
+     soon as they have saved once — and stays if they have not. */
+  const [reviewNotice, setReviewNotice] = useState(reviewing)
 
   async function save(data) {
     setStatus({ state: 'saving' })
@@ -1180,6 +1225,7 @@ function ProfileTab({ account, reload }) {
       await sendForm('/api/candidate/me', data, { method: 'PATCH', role: 'candidate' })
       await reload()
       setStatus({ state: 'saved' })
+      setReviewNotice(false)
     } catch (error) {
       setStatus({ state: 'error', message: error.message })
     }
@@ -1202,10 +1248,28 @@ function ProfileTab({ account, reload }) {
         notice={status.state === 'saved' ? 'Your details have been updated.' : ''}
         onDismiss={() => setStatus({ state: 'idle' })}
       />
+      {/*
+        What to do with the page, said once, on the one visit where it is not
+        obvious.
+
+        A profile read out of a CV is a first draft: the name may be in capitals,
+        the city may be the one on an old letterhead, and the summary was written
+        by a machine that had one document to go on. This is the moment to fix
+        that — the person is here, the CV is fresh in their mind, and every field
+        is already open. Saying so is what turns an open form into a task.
+      */}
+      {reviewNotice && (
+        <p className="panel panel-narrow notice-review">
+          This is your profile, as recruiters will see it. We filled it in from your
+          CV — read it through, change anything that is wrong, and press the tick to
+          save.
+        </p>
+      )}
       <CandidateForm
         mode="edit"
         photoFirst
         lockable
+        startUnlocked={reviewing}
         candidate={candidate}
         documents={documents}
         preferences={preferences ?? null}

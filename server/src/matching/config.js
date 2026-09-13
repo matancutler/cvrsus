@@ -56,6 +56,29 @@ export const MATCHING = {
    * cannot manufacture a perfect score.
    */
   credibleTopRaw: num('MATCH_CREDIBLE_TOP', 55),
+
+  /**
+   * What each level of geographic friction is worth, in absolute-fit points.
+   *
+   * Bounded on purpose, and small. The rule this implements is "geography is
+   * friction, not a fence": it separates candidates who are otherwise
+   * comparable and must never move a strong candidate below a weak local one.
+   * At these sizes the whole span from local to international is 12 points,
+   * which reorders a cluster and cannot overturn a real difference in fit.
+   *
+   * Positive for being easy to hire rather than negative for being far away, so
+   * a search with no location information scores exactly as it did before this
+   * existed — `uncertain` is worth nothing either way.
+   */
+  locationBonus: {
+    local: num('MATCH_LOC_LOCAL', 8),
+    commutable: num('MATCH_LOC_COMMUTABLE', 6),
+    remote_compatible: num('MATCH_LOC_REMOTE', 6),
+    same_region: num('MATCH_LOC_REGION', 4),
+    same_country_relocation: num('MATCH_LOC_COUNTRY', 2),
+    international_relocation: num('MATCH_LOC_INTERNATIONAL', -4),
+    uncertain: num('MATCH_LOC_UNCERTAIN', 0),
+  },
 }
 
 export const VERSIONS = {

@@ -922,6 +922,20 @@ export function pendingCheckin(candidateId, now = new Date()) {
  *    ON DELETE CASCADE on candidate_id, which — now that foreign keys are
  *    actually enforced — would take the row regardless. The three agree.
  */
+/**
+ * Records that the candidate has been shown the onboarding questions.
+ *
+ * COALESCE rather than a plain assignment: the first time is the one that
+ * matters, and a second call — a double-submit, a retried request — must not
+ * move the date. An account onboarded in March should not read as onboarded
+ * today because somebody reopened the dialog.
+ */
+export function markOnboarded(candidateId, { now = new Date() } = {}) {
+  db.prepare(
+    `UPDATE candidates SET onboarded_at = COALESCE(onboarded_at, ?) WHERE id = ?`,
+  ).run(now.toISOString(), candidateId)
+}
+
 export function deleteCandidateCompletely(candidateId) {
   const files = []
 

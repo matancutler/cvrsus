@@ -16,7 +16,7 @@ import db from '../db.js'
 import { MODEL, analyseMatches, isConfigured as aiConfigured } from '../ai.js'
 import { effectiveProfile } from '../profiles.js'
 import { scoreCandidate } from '../match.js'
-import { VERSIONS } from './config.js'
+import { MATCHING, VERSIONS } from './config.js'
 import { profileVersion } from './intelligence.js'
 
 /** The model identifier that participates in the cache key. */
@@ -145,6 +145,10 @@ export async function analyseBatch({ job, matchProfile, rows, signal }) {
         instruction: job.instruction ?? '',
         requiredSkills: (matchProfile.mustHaves ?? []).map((item) => item.requirement),
         preferredSkills: (matchProfile.preferred ?? []).map((item) => item.requirement),
+        /* Read out of the JD once, by the profile pass, rather than re-read
+           per candidate — 25 candidates is 25 chances to read it differently. */
+        location: matchProfile.logistics?.location ?? null,
+        workArrangement: matchProfile.logistics?.workArrangement ?? null,
       },
       candidates: misses.map((row) => ({
         candidate: { ...row.candidate, cv_text: row.cvText },
@@ -159,10 +163,25 @@ export async function analyseBatch({ job, matchProfile, rows, signal }) {
     const ai = aiResults.get(id)
     const fallback = fallbacks.get(id)
 
+    /*
+     * The geographic nudge, applied here rather than asked of the model.
+     *
+     * The model reports friction and the backend prices it — so the weighting
+     * is tunable per market without touching a prompt, and identical friction
+     * is always worth identical points. A model asked to "factor in location"
+     * spends a different amount on it every call.
+     *
+     * Clamped to the 0-100 the rest of the pipeline assumes.
+     */
+    const bonus = ai
+      ? (MATCHING.locationBonus[ai.location_fit?.level] ?? 0)
+      : 0
+    const placed = ai ? Math.max(0, Math.min(100, ai.score + bonus)) : 0
+
     const record = ai
       ? {
         candidateId: id,
-        absoluteFit: ai.score,
+        absoluteFit: placed,
         criteria: {
           fit: ai.fit,
           confidence: ai.confidence,
@@ -171,6 +190,12 @@ export async function analyseBatch({ job, matchProfile, rows, signal }) {
           transferable: ai.transferable,
           evidence: ai.evidence,
           probes: ai.probes,
+          /* Kept beside the criteria rather than folded into the score: both
+             are decision-relevant on their own, and the ranking applies its own
+             bounded adjustment for location rather than letting the model spend
+             points on it. */
+          locationFit: ai.location_fit ?? null,
+          seniorityAlignment: ai.seniority_alignment ?? null,
           items: fallback.criteria.items,
         },
         explanation: ai.reasoning,

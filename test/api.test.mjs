@@ -314,11 +314,30 @@ const signIn = async (joinKey, username, password) => (await json(await fetch(`$
  * leaver's account did not close it: the join key cannot be rotated and the
  * password was still computable from a name on LinkedIn.
  */
+/*
+ * Not derivable — which a substring search cannot establish.
+ *
+ * This asked whether the password contained "noa" or "levi", which was the
+ * right question when the password was `${username}123` and the wrong one now
+ * that it is 12 random bytes: a 16-character base64url string contains some
+ * given three letters by chance often enough to fail a suite that has nothing
+ * wrong with it. It did, on `-k6zOSfznoawRk9u` — "noa" sits inside "znoaw".
+ *
+ * What actually matters is that the password is not a FUNCTION of the username,
+ * so that is what is checked: the known formulas are refused, and two accounts
+ * made from the same name get different passwords, which no derivation can do.
+ */
+const derivations = ['noa.levi123', 'noa.levi', 'Noa.Levi123', 'noalevi123', 'noa123', 'levi123']
 check('the starting password is not derivable from the username',
-  !noaCreated.created.password.toLowerCase().includes('noa')
-  && !noaCreated.created.password.toLowerCase().includes('levi')
-  && noaCreated.created.password !== 'noa.levi123',
+  !derivations.includes(noaCreated.created.password),
   noaCreated.created.password)
+
+/* The positive half of the same claim: a derivation is a function of the name
+   and would return the same answer twice. */
+const { defaultPasswordFor } = await import('../server/src/accounts.js')
+const drawn = new Set(Array.from({ length: 20 }, () => defaultPasswordFor()))
+check('and two accounts never share a starting password', drawn.size === 20,
+  `${drawn.size} distinct out of 20`)
 check('and it is long enough to be worth guessing at',
   noaCreated.created.password.length >= 16,
   `${noaCreated.created.password.length} characters`)
@@ -1057,7 +1076,18 @@ const referenced = new Set()
 
 const uploadDir = new URL('../server/uploads/', import.meta.url)
 const { readdirSync, existsSync, readFileSync } = await import('node:fs')
-const onDisk = existsSync(uploadDir) ? readdirSync(uploadDir) : []
+/*
+ * Plain files only, which is the rule the sweep itself applies
+ * (server/src/index.js: `if (!entry.isFile()) continue`).
+ *
+ * Without it the quarantine directory `_swept` counts as an orphaned upload the
+ * moment anything has ever been quarantined — the suite then fails on its own
+ * side effects, reporting "_swept" as a stray file the server is about to
+ * delete, when the server explicitly skips it.
+ */
+const onDisk = existsSync(uploadDir)
+  ? readdirSync(uploadDir, { withFileTypes: true }).filter((e) => e.isFile()).map((e) => e.name)
+  : []
 const orphans = onDisk.filter((file) => !referenced.has(file))
 
 /*

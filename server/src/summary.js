@@ -364,20 +364,33 @@ export async function ensureSummary(candidateId, { cvText = null, signal } = {})
 
   if (!text) {
     /*
-     * Nobody wrote one, so one is drafted. The CV-drafted summary from the
-     * extraction is preferred over a second model call — it was made from the
-     * same CV moments ago and costs nothing to reuse.
+     * Nobody wrote one, so one is drafted.
+     *
+     * The extraction's summary is the candidate's own, lifted off their CV word
+     * for word, and it used to be served exactly as it came — "it costs nothing
+     * to reuse", which was true of the cost and wrong about the text. What a
+     * person writes about themselves is in the first person, opens with their
+     * name, and names their employer; this field is read by recruiters BEFORE
+     * they pay to learn any of those. So their words are still preferred over
+     * anything written for them — they are handed to the model as the thing to
+     * rewrite rather than as the finished answer.
      */
     const extraction = getExtraction(candidateId)
-    const drafted = String(extraction?.summary ?? '').trim()
+    const ownSummary = String(extraction?.summary ?? '').trim() || null
 
-    if (drafted) {
-      text = drafted
-      origin = 'cv'
-    } else if (cvText) {
-      const generated = await generateSummary(cvText, { signal }).catch(() => null)
+    if (cvText) {
+      const generated = await generateSummary(cvText, { ownSummary, signal }).catch(() => null)
       text = String(generated?.summary ?? '').trim()
-      origin = 'generated'
+      origin = generated?.used_own_summary ? 'cv' : 'generated'
+    }
+
+    /* No CV text to hand over, or no key, or the model was unreachable. Their
+       own words are still worth more than a sentence assembled from fields —
+       and this is what the old code did on every call, so it is a fallback
+       rather than a new risk. */
+    if (!text && ownSummary) {
+      text = ownSummary
+      origin = 'cv'
     }
 
     /*

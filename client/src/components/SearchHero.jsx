@@ -74,6 +74,17 @@ export default function SearchHero({
   maxCvs = 0,
   cvs = [],
   onCvs,
+  /*
+   * Whether a picture of a posting is one of the things the paperclip takes.
+   *
+   * On everywhere a recruiter is signed in, because a JD arrives as a
+   * screenshot at least as often as it arrives as a file. Off on the public
+   * demo: reading an image costs a vision call and that endpoint is reachable
+   * without an account, where the rate limit bounds one visitor rather than a
+   * thousand of them. The server enforces the same split; this only decides
+   * what the file dialog offers and what the box says it takes.
+   */
+  acceptsImages = true,
 }) {
   const textarea = useRef(null)
   const fileInput = useRef(null)
@@ -209,11 +220,30 @@ export default function SearchHero({
           rows={1}
           value={value}
           readOnly={submitted}
+          /*
+           * Let the text choose its own direction.
+           *
+           * "auto" sets direction from the first strong character the field
+           * contains, so a Hebrew or Arabic posting types and wraps right to
+           * left and an English one is untouched. Typing Hebrew into a
+           * left-to-right box puts the punctuation on the wrong end and breaks
+           * the line in the wrong place — it is legible, and it reads as though
+           * the product has never seen the language before.
+           *
+           * An attribute rather than a CSS rule because it is a property of the
+           * CONTENT, which changes as somebody types, not of the layout.
+           */
+          dir="auto"
           className={submitted ? 'input-locked' : undefined}
           placeholder={maxCvs > 0
             ? 'Paste the job description, or attach it as a PDF or Word file. '
               + `You can also upload up to ${maxCvs} CVs to try our Triage feature.`
-            : 'Paste the job description, or attach it as a PDF or Word file…'}
+            : acceptsImages
+              /* Naming the screenshot is the whole point: nobody tries a
+                 format the box did not offer, so an accepted one that goes
+                 unmentioned may as well be refused. */
+              ? 'Paste the job description, or attach a PDF, Word file or screenshot…'
+              : 'Paste the job description, or attach it as a PDF or Word file…'}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={(e) => {
             // Enter searches; Shift+Enter makes a new line.
@@ -270,7 +300,7 @@ export default function SearchHero({
               <input
                 ref={fileInput}
                 type="file"
-                accept=".pdf,.docx"
+                accept={acceptsImages ? '.pdf,.docx,.png,.jpg,.jpeg,.webp' : '.pdf,.docx'}
                 /* Only where the composer takes CVs. Everywhere else it is the
                    one job description it has always been. */
                 multiple={maxCvs > 0}
@@ -296,7 +326,9 @@ export default function SearchHero({
                 className="btn btn-quiet btn-small composer-attach"
                 disabled={attaching || busy}
                 onClick={() => fileInput.current?.click()}
-                title={heldLabel ?? 'Attach a job description'}
+                title={heldLabel ?? (acceptsImages
+                  ? 'Attach a job description — PDF, Word or a screenshot'
+                  : 'Attach a job description — PDF or Word')}
                 aria-label={heldLabel ? `${heldLabel}. Choose more files.` : 'Attach a job description'}
               >
                 <PaperClip />

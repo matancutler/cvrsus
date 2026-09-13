@@ -71,12 +71,61 @@ function guessTitle(text) {
 }
 
 /** The distinctive terms of a JD, most frequent first — used for loose overlap. */
+/*
+ * A word, in any alphabet.
+ *
+ * This used to split on /[^a-z0-9+#.-]+/, which treats every character outside
+ * ASCII as punctuation. A Hebrew job description therefore tokenised to NOTHING
+ * — no keywords, no title tokens, so no scoring components at all and a
+ * confident 0% for every candidate, which is what it did. The same held for any
+ * accented word in a French or Spanish CV.
+ *
+ * \p{L} and \p{N} are the same rule expressed about letters and digits rather
+ * than about one alphabet's byte range, so Hebrew, Arabic, Cyrillic, Greek and
+ * accented Latin all tokenise, and ASCII behaves exactly as it did. The kept
+ * punctuation is unchanged: + # . - are inside words that matter (C++, .NET,
+ * node.js, real-time).
+ */
+const WORD_SPLIT = /[^\p{L}\p{N}+#.\-]+/u
+
+/* A short word is meaningful in a language that writes without vowels: Hebrew
+   "בית", "מול", "אמת" are three characters and carry the sentence. The old
+   floor of three characters was tuned for English alone. */
+const MIN_TOKEN = 2
+
+/*
+ * Words too common to be evidence of anything, beyond the English set above.
+ *
+ * Hebrew function words, which would otherwise be the most frequent tokens in
+ * any Hebrew posting and would match every CV equally.
+ */
+const EXTRA_STOPWORDS = new Set([
+  'של', 'על', 'את', 'עם', 'אל', 'מן', 'גם', 'או', 'אך', 'כי', 'אם', 'לא', 'כן',
+  'זה', 'זו', 'הוא', 'היא', 'הם', 'הן', 'אני', 'אנחנו', 'אתה', 'יש', 'אין',
+  'היה', 'להיות', 'עבודה', 'משרה', 'תפקיד', 'כולל', 'תוך', 'לפי', 'בין', 'אחר',
+  'מאוד', 'יותר', 'כמו', 'רק', 'כל', 'בעל', 'בעלת', 'בתחום', 'וכן',
+])
+
+const isNoise = (token) => (
+  token.length < MIN_TOKEN
+  || STOPWORDS.has(token)
+  || EXTRA_STOPWORDS.has(token)
+  || /^[\d.\-+#]+$/u.test(token)
+)
+
+/** The content words of a phrase, which is what a requirement is made of. */
+export function contentTokens(text) {
+  return String(text ?? '')
+    .toLowerCase()
+    .split(WORD_SPLIT)
+    .map((raw) => raw.replace(/^[.\-]+|[.\-]+$/g, ''))
+    .filter((token) => !isNoise(token))
+}
+
 export function keywordsFrom(text, limit = 30) {
   const counts = new Map()
 
-  for (const raw of String(text ?? '').toLowerCase().split(/[^a-z0-9+#.\-]+/)) {
-    const token = raw.replace(/^[.\-]+|[.\-]+$/g, '')
-    if (token.length < 3 || STOPWORDS.has(token) || /^\d+$/.test(token)) continue
+  for (const token of contentTokens(text)) {
     counts.set(token, (counts.get(token) ?? 0) + 1)
   }
 
@@ -103,20 +152,158 @@ function haystackFor(candidate) {
  * Returns the 0-100 score plus a per-component breakdown, because a number on
  * its own is not something a recruiter can defend to a hiring manager.
  */
+/*
+ * Which alphabets a piece of text is written in.
+ *
+ * Needed because this scorer compares words literally, and words in different
+ * alphabets never match however related the meaning. A Hebrew job title against
+ * an English CV cannot score above zero — not because the candidate is wrong
+ * for the job, but because the question is unanswerable this way.
+ */
+function scriptsOf(text) {
+  const found = new Set()
+  const value = String(text ?? '')
+  if (/\p{Script=Latin}/u.test(value)) found.add('latin')
+  if (/\p{Script=Hebrew}/u.test(value)) found.add('hebrew')
+  if (/\p{Script=Arabic}/u.test(value)) found.add('arabic')
+  if (/\p{Script=Cyrillic}/u.test(value)) found.add('cyrillic')
+  if (/\p{Script=Greek}/u.test(value)) found.add('greek')
+  if (/\p{Script=Han}|\p{Script=Hiragana}|\p{Script=Katakana}|\p{Script=Hangul}/u.test(value)) {
+    found.add('cjk')
+  }
+  return found
+}
+
+/*
+ * Whether comparing these two texts word by word can tell us anything.
+ *
+ * If they share no alphabet the answer is no, and the component is left OUT
+ * rather than scored zero. That distinction is the whole of the "too harsh"
+ * complaint: a zero is a statement that the candidate fails the requirement,
+ * and it drags the weighted total down accordingly, when the truth is that this
+ * particular instrument cannot read this particular pair. Dropping the
+ * component renormalises the others over the weight that remains, so the score
+ * reflects what could actually be judged.
+ *
+ * Numbers and shared loan-words mean a little overlap is common, so a text with
+ * no letters at all (a list of years) is treated as comparable with anything.
+ */
+function comparable(phrase, haystack) {
+  const a = scriptsOf(phrase)
+  if (a.size === 0) return true
+  const b = scriptsOf(haystack)
+  if (b.size === 0) return true
+  for (const script of a) if (b.has(script)) return true
+  return false
+}
+
+/*
+ * Whether one word appears in the text, in any alphabet.
+ *
+ * The old boundary was (?<![a-z0-9]), which is not a boundary at all next to a
+ * Hebrew or accented letter — every character there is "not a-z0-9", so a token
+ * matched inside longer words and scored hits that were not there.
+ */
+function tokenInText(haystack, token) {
+  return new RegExp(
+    `(?<![\p{L}\p{N}])${escapeRegex(token)}(?![\p{L}\p{N}])`, 'iu',
+  ).test(haystack)
+}
+
+/*
+ * How much of a requirement the CV actually evidences, from 0 to 1.
+ *
+ * This is the fix for a 0% that should not have been. The model returns
+ * requirements as SENTENCES — "Ability to make real-time decisions based on
+ * transaction data" — and this was asking whether that sentence appeared in the
+ * CV word for word. No CV has ever contained such a string, so every
+ * requirement scored zero, every component scored zero, and a genuinely
+ * relevant candidate was shown a confident 0%.
+ *
+ * A requirement is therefore scored by how much of its content the CV supports.
+ * A named skill still matches exactly through the taxonomy, which is what keeps
+ * "Python" precise; anything longer is judged on its words, so a CV that talks
+ * about real-time decisions and transactions gets credit for a requirement
+ * about real-time transaction decisions, which is the whole point.
+ *
+ * Crude next to the reasoning pass, and deliberately so: this runs when the
+ * model is unavailable, and its job is to be roughly right rather than
+ * confidently wrong.
+ */
+function phraseCoverage(haystack, phrase) {
+  /* A taxonomy skill is matched as a skill, with its aliases — "JS" for
+     JavaScript, "Postgres" for PostgreSQL. Nothing below improves on that. */
+  if (textHasSkill(haystack, phrase)) return 1
+
+  /*
+   * The concepts the requirement NAMES, matched as concepts.
+   *
+   * A requirement is a sentence, and the sentence usually names two or three
+   * real skills: "Analytical thinking, attention to detail and decision-making
+   * ability" is three. Reading it word by word asks whether the CV happens to
+   * repeat those words; reading it as concepts asks whether the CV evidences
+   * the SKILLS, which is the actual question and is what lets "Postgres" in a
+   * CV answer a requirement for relational databases.
+   *
+   * Taken as the better of the two measures rather than replacing the word
+   * count: a requirement naming no taxonomy concept at all — a domain this
+   * vocabulary has never heard of — still scores on its words, and a CV that
+   * evidences two of three named concepts should not be dragged down because
+   * it phrases them differently.
+   */
+  const named = detectSkills(phrase)
+  const byConcept = named.length === 0
+    ? 0
+    : named.filter((skill) => textHasSkill(haystack, skill)).length / named.length
+
+  const tokens = contentTokens(phrase)
+  if (tokens.length === 0) return byConcept
+
+  const hits = tokens.filter((token) => tokenInText(haystack, token)).length
+
+  /*
+   * Every word of a long requirement is not needed to believe it. Four words of
+   * a seven-word sentence is real evidence, so coverage is measured against a
+   * majority rather than against the whole — otherwise long requirements are
+   * harder to satisfy than short ones purely by being wordier.
+   */
+  const enough = Math.max(1, Math.ceil(tokens.length * 0.6))
+  return Math.max(byConcept, Math.min(1, hits / enough))
+}
+
+/* Met well enough to call it met, for the requirement lists a recruiter reads.
+   Below this it is partial evidence and shows as a gap. */
+const MEETS_AT = 0.75
+
 export function scoreCandidate(candidate, criteria) {
   const haystack = haystackFor(candidate)
   const requiredSkills = (criteria.requiredSkills ?? []).map(canonicalize).filter(Boolean)
   const preferredSkills = (criteria.preferredSkills ?? []).map(canonicalize).filter(Boolean)
 
-  const matchedRequired = requiredSkills.filter((s) => textHasSkill(haystack, s))
-  const missingRequired = requiredSkills.filter((s) => !matchedRequired.includes(s))
-  const matchedPreferred = preferredSkills.filter((s) => textHasSkill(haystack, s))
-  const missingPreferred = preferredSkills.filter((s) => !matchedPreferred.includes(s))
+  /* Requirements written in an alphabet the CV does not use are set aside
+     rather than failed — see comparable() above. */
+  const judgeable = (list) => list.filter((s) => comparable(s, haystack))
 
-  const keywords = criteria.keywords ?? keywordsFrom(criteria.jobDescription ?? '')
-  const keywordHits = keywords.filter((k) => new RegExp(`(?<![a-z0-9])${escapeRegex(k)}`, 'i').test(haystack))
+  const requiredJudged = judgeable(requiredSkills)
+  const preferredJudged = judgeable(preferredSkills)
 
-  const titleTokens = tokenizeTitle(criteria.title)
+  const requiredCoverage = requiredJudged.map((s) => phraseCoverage(haystack, s))
+  const preferredCoverage = preferredJudged.map((s) => phraseCoverage(haystack, s))
+
+  const matchedRequired = requiredJudged.filter((_, i) => requiredCoverage[i] >= MEETS_AT)
+  const missingRequired = requiredJudged.filter((_, i) => requiredCoverage[i] < MEETS_AT)
+  const matchedPreferred = preferredJudged.filter((_, i) => preferredCoverage[i] >= MEETS_AT)
+  const missingPreferred = preferredJudged.filter((_, i) => preferredCoverage[i] < MEETS_AT)
+
+  /*
+   * `contextual` from the job profile arrives as phrases, not as words, so
+   * these are covered the same way rather than searched for literally.
+   */
+  const keywords = judgeable(criteria.keywords ?? keywordsFrom(criteria.jobDescription ?? ''))
+  const keywordCoverage = keywords.map((k) => phraseCoverage(haystack, k))
+  const keywordHits = keywords.filter((_, i) => keywordCoverage[i] >= MEETS_AT)
+
+  const titleTokens = comparable(criteria.title, haystack) ? tokenizeTitle(criteria.title) : []
   const candidateTitleText = [candidate.current_title, candidate.desired_role].filter(Boolean).join(' ')
   const titleHits = titleTokens.filter((t) => {
     const pattern = new RegExp(`(?<![a-z0-9])${escapeRegex(t)}`, 'i')
@@ -125,25 +312,33 @@ export function scoreCandidate(candidate, criteria) {
 
   const components = []
 
-  if (requiredSkills.length > 0) {
+  if (requiredJudged.length > 0) {
     components.push({
       key: 'required',
       label: 'Required skills',
       weight: WEIGHTS.required,
-      // Left as a plain fraction: this is the one component that measures the
-      // thing itself rather than a proxy for it.
-      value: matchedRequired.length / requiredSkills.length,
-      detail: `${matchedRequired.length} of ${requiredSkills.length} matched`,
+      /*
+       * The MEAN coverage, not the count that cleared the bar. Counting
+       * treats a requirement the CV half-evidences exactly like one it never
+       * mentions, and across a list of sentences that is the difference
+       * between a fair score and a zero.
+       */
+      value: mean(requiredCoverage),
+      detail: `${matchedRequired.length} of ${requiredJudged.length} matched`,
     })
   }
 
-  if (preferredSkills.length > 0) {
+  if (preferredJudged.length > 0) {
     components.push({
       key: 'preferred',
       label: 'Preferred skills',
       weight: WEIGHTS.preferred,
-      value: saturating(matchedPreferred.length, preferredSkills.length, 0.6),
-      detail: `${matchedPreferred.length} of ${preferredSkills.length} matched`,
+      /* Coverage already forgives the words a CV does not repeat — see the
+         0.6 allowance inside phraseCoverage. Discounting it a second time here
+         gave a pastry chef most of the marks for a payments role on the word
+         "service" alone. */
+      value: mean(preferredCoverage),
+      detail: `${matchedPreferred.length} of ${preferredJudged.length} matched`,
     })
   }
 
@@ -162,7 +357,7 @@ export function scoreCandidate(candidate, criteria) {
       key: 'keywords',
       label: 'JD keyword overlap',
       weight: WEIGHTS.keywords,
-      value: saturating(keywordHits.length, keywords.length, 0.35),
+      value: mean(keywordCoverage),
       detail: `${keywordHits.length} of ${keywords.length} terms present`,
     })
   }
@@ -198,6 +393,10 @@ export function scoreCandidate(candidate, criteria) {
  * like a keyword search. Matching `full` of the terms now earns the whole
  * component, and anything below scales smoothly up to it.
  */
+function mean(values) {
+  return values.length === 0 ? 0 : values.reduce((sum, v) => sum + v, 0) / values.length
+}
+
 function saturating(hits, total, full) {
   if (total === 0) return 0
   const target = Math.max(1, Math.ceil(total * full))
@@ -205,10 +404,9 @@ function saturating(hits, total, full) {
 }
 
 function tokenizeTitle(title) {
-  return String(title ?? '')
-    .toLowerCase()
-    .split(/[^a-z0-9+#]+/)
-    .filter((t) => t.length >= 2 && !TITLE_NOISE.has(t) && !STOPWORDS.has(t))
+  /* Same alphabet-agnostic rule as the keywords: a Hebrew job title used to
+     tokenise to nothing and silently remove the whole title component. */
+  return contentTokens(title).filter((t) => !TITLE_NOISE.has(t))
 }
 
 function escapeRegex(value) {

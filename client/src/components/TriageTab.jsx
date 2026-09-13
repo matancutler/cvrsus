@@ -267,6 +267,9 @@ function TriageBuilder({ id, onCreated, state, reload, onBalanceChanged, onBuy, 
   const [launching, setLaunching] = useState(false)
 
   const fileInput = useRef(null)
+  /* Its own ref: see the note on the second input below — a folder chooser and
+     a file chooser cannot be the same element. */
+  const folderInput = useRef(null)
   const jdInput = useRef(null)
 
   /**
@@ -601,7 +604,28 @@ async function filesFromDrop(dataTransfer) {
           multiple
           accept=".pdf,.docx"
           className="visually-hidden"
-          onChange={(event) => addFiles(event.target.files ?? [])}
+          onChange={(event) => { addFiles(event.target.files ?? []); event.target.value = '' }}
+        />
+
+        {/*
+          A second input, because `webkitdirectory` is a property of the PICKER
+          rather than of the pick: one input can open a file chooser or a folder
+          chooser, never both. Two inputs and two gestures is the only shape the
+          platform allows.
+
+          It takes no `accept`: a folder chooser ignores it, and the browser
+          hands over everything inside — images, .DS_Store, a stray spreadsheet.
+          addFiles already sorts the readable CVs from the rest and lists what it
+          refused, which is the same path a mixed multi-select takes.
+        */}
+        <input
+          ref={folderInput}
+          type="file"
+          multiple
+          webkitdirectory=""
+          directory=""
+          className="visually-hidden"
+          onChange={(event) => { addFiles(event.target.files ?? []); event.target.value = '' }}
         />
 
         <div
@@ -637,6 +661,28 @@ async function filesFromDrop(dataTransfer) {
           <strong>Drop the CVs or a folder here, or click to browse</strong>
           <span className="muted">PDF or DOCX. A whole folder can be dropped in</span>
         </div>
+
+        {/*
+          Outside the drop zone, because it is inside a role="button" that opens
+          the file picker — a button within a button, where the inner click has
+          to stop the outer one from also firing. Sitting under it, the two
+          choices read as two choices.
+
+          Dragging a folder was the only way to choose one, which works and is
+          not what anybody tries first: the zone says "click to browse", the
+          browser opens a FILE chooser, and a folder cannot be picked in it. The
+          gesture that worked was the one nobody was told about.
+        */}
+        <p className="triage-pick-folder">
+          <button
+            type="button"
+            className="btn btn-quiet btn-small"
+            onClick={() => folderInput.current?.click()}
+          >
+            Choose a folder instead
+          </button>
+          <span className="muted">Everything inside it is read, including subfolders</span>
+        </p>
 
         {upload && !upload.finished && (
           <div className="triage-upload-progress">
@@ -937,7 +983,7 @@ function TriageResults({ id, initial, onBalanceChanged, folders = [], setFolders
       )}
 
       {triage.interpretation && (
-        <p className="triage-interpretation">{triage.interpretation}</p>
+        <p className="triage-interpretation" dir="auto">{triage.interpretation}</p>
       )}
 
       {rows.length === 0 ? (

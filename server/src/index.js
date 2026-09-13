@@ -361,6 +361,7 @@ import {
   CAPACITY_OPTIONS,
   DOCUMENT_EXTENSIONS,
   DOCUMENT_SLOTS,
+  JD_EXTENSIONS,
   DOCUMENT_SLOT_KEYS,
   DOCUMENT_TYPES,
   EXTRACTED_SLOT_KEYS,
@@ -404,6 +405,7 @@ import {
   revealedCandidateIds,
   profileCompletion,
   recordScores,
+  markOnboarded,
   saveDocument,
   saveExtraction,
   setBlockedCompanies,
@@ -786,8 +788,10 @@ const upload = multer({
     // text and deleted straight afterwards — it is the recruiter's document,
     // not a candidate's, and nothing here needs to keep it.
     if (file.fieldname === 'jd') {
-      if (!DOCUMENT_EXTENSIONS.includes(ext)) {
-        return cb(new Error(`Unsupported file type "${ext}". Upload a PDF or DOCX file.`))
+      if (!JD_EXTENSIONS.includes(ext)) {
+        return cb(new Error(
+          `Unsupported file type "${ext}". Upload a PDF, Word file, or a picture of the posting.`,
+        ))
       }
       return cb(null, true)
     }
@@ -964,7 +968,10 @@ function assertUploadsAreWhatTheyClaim(req) {
   const checks = [
     ...(photo ? [{ file: photo, allowed: PHOTO_EXTENSIONS, label: 'photo' }] : []),
     ...(logo ? [{ file: logo, allowed: PHOTO_EXTENSIONS, label: 'logo' }] : []),
-    ...(jd ? [{ file: jd, allowed: DOCUMENT_EXTENSIONS, label: 'job description' }] : []),
+    /* Wider than the other fields by one category: a JD may be a screenshot.
+       Still sniffed, so a .pdf that is really something else is refused here
+       exactly as it was before. */
+    ...(jd ? [{ file: jd, allowed: JD_EXTENSIONS, label: 'job description' }] : []),
     ...(cv ? [{ file: cv, allowed: allowedFor('cv'), label: 'CV' }] : []),
     ...uploadedDocuments(req).map(({ file, slot }) => ({
       file,
@@ -2364,6 +2371,10 @@ function candidatePayload(candidateId) {
     // For the count beside the Messages tab, the way the recruiter bar has one.
     conversations: candidateThreadCount(candidateId),
     completion: profileCompletion(candidate, profile, documents),
+    /* Whether the questions a CV cannot answer still need asking. The client
+       used to decide this from how the page was navigated to, which a reload
+       re-created — see candidates.onboarded_at. */
+    needsOnboarding: !candidate.onboarded_at,
     activity: {
       ...activityStatus(candidate),
       /* When the profile goes if nothing changes — the date the reminders
@@ -2422,6 +2433,26 @@ function summariseIntelligence(candidateId) {
  * it takes an upload from anybody and spends a model call on it, and for a
  * while it was the one such route with neither guard on it.
  */
+/**
+ * The candidate has seen the onboarding questions.
+ *
+ * Separate from the PATCH that saves their answers because it is true whichever
+ * way the dialog was closed — confirmed, or dismissed with the cross leaving
+ * every default as it was. Both mean "asked", and asked is what must not
+ * happen twice.
+ *
+ * Idempotent: the first stamp is kept, so a second call cannot move the date
+ * and make a long-standing account look newly onboarded.
+ */
+app.post('/api/candidate/me/onboarded', candidateOnly, (req, res, next) => {
+  try {
+    markOnboarded(req.session.id)
+    res.json({ ok: true })
+  } catch (error) {
+    next(error)
+  }
+})
+
 app.post('/api/candidate/summary', limits.apply, upload.single('cv'), verifyUploads, async (req, res, next) => {
   try {
     let cvText = ''
@@ -5351,6 +5382,19 @@ app.post('/api/public/demo/jd-text', limits.demo, jdUpload, async (req, res, nex
   try {
     if (!req.file) throw new HttpError(400, 'Attach a PDF or DOCX file.')
 
+    /*
+     * Documents only, on the one JD route a stranger can reach.
+     *
+     * Reading a picture costs a vision call, and this endpoint is
+     * unauthenticated — rate limited per address, which bounds one visitor and
+     * not a thousand of them. The signed-in route takes images; here the demo
+     * does what it has always done, and says so rather than failing obscurely.
+     */
+    const ext = path.extname(req.file.originalname || '').toLowerCase()
+    if (!DOCUMENT_EXTENSIONS.includes(ext)) {
+      throw new HttpError(400, 'The demo reads PDF and Word files. Paste the text instead.')
+    }
+
     const text = await extractText(req.file.path, req.file.originalname)
     if (!text || text.trim().length < 40) {
       throw new HttpError(
@@ -5370,7 +5414,7 @@ app.post('/api/public/demo/jd-text', limits.demo, jdUpload, async (req, res, nex
 
 app.post('/api/hr/jd-text', recruiterOnly, jdUpload, async (req, res, next) => {
   try {
-    if (!req.file) throw new HttpError(400, 'Attach a PDF or DOCX file.')
+    if (!req.file) throw new HttpError(400, 'Attach a PDF, Word file, or a picture.')
 
     const text = await extractText(req.file.path, req.file.originalname)
     if (!text || text.trim().length < 40) {
@@ -7131,12 +7175,29 @@ app.use((error, req, res, _next) => {
    */
   const status = Number.isInteger(error.status) ? error.status : 500
 
+  /*
+   * Whether the message was WRITTEN, not whether the number is large.
+   *
+   * Keeping the message for anything under 500 was nearly right and wrong at
+   * one edge: 503 is a deliberate status with a deliberate sentence behind it —
+   * "Automatic summaries are not available right now. Please write yours in
+   * your own words." — and it was being replaced by "Something went wrong at
+   * our end", which tells the candidate nothing and invites them to retry
+   * something that will fail the same way until a key is configured.
+   *
+   * HttpError is the marker: raising one is an author deciding both the status
+   * and the words. Everything else — a TypeError, a SQLite constraint, a
+   * provider timeout — is a 500 whose text is nobody's idea of a message and
+   * stays in the log.
+   */
+  const deliberate = error instanceof HttpError
+
   if (status >= 500) {
     console.error(`  ${req.method} ${req.path} — ${error.stack ?? error.message}`)
   }
 
   res.status(status).json({
-    error: status >= 500
+    error: status >= 500 && !deliberate
       ? 'Something went wrong at our end. Please try again.'
       : error.message || 'Something went wrong.',
   })

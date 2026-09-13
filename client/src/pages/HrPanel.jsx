@@ -5286,7 +5286,7 @@ function SearchTab({ me, folders, setFolders, onControls }) {
         />
 
         {criteria && (
-          <div className="criteria-readout">
+          <div className="criteria-readout" dir="auto">
             {criteria.title && <span className="chip chip-neutral">{criteria.title}</span>}
             {criteria.requiredSkills.map((skill) => (
               <span key={skill} className="chip chip-required">{skill}</span>

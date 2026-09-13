@@ -7,6 +7,7 @@
  * reachable by anyone who can type a URL.
  */
 import fs from 'node:fs'
+import path from 'node:path'
 
 // ------------------------------------------------------------ file sniffing ---
 
@@ -116,6 +117,40 @@ export function assertFileContent(filePath, allowedExtensions, { label = 'file' 
     throw new UploadRejected(
       `That ${label} is really a ${found.ext.replace('.', '').toUpperCase()} file. `
       + `Accepted here: ${allowedExtensions.join(', ')}.`,
+    )
+  }
+
+  /*
+   * And the name has to agree with the bytes, not merely be on the same list.
+   *
+   * "The extension must agree with the content" is what this function has
+   * always claimed to do, and until now it only asked whether the CONTENT was
+   * allowed. For a CV both .pdf and .docx are, so a DOCX named cv.pdf satisfied
+   * every check above — and then extractText dispatches on the FILENAME, handed
+   * a zip to the PDF parser, and pdfjs threw something that is not an
+   * UploadRejected. The caller got a 500 and a stack trace in the log for what
+   * is an ordinary mistake: somebody renamed a file instead of exporting it.
+   *
+   * It read as refused for years because the error handler used to report every
+   * unhandled throw as a 400 — the same status this raises — so the security
+   * suite's "a DOCX renamed .pdf is refused" passed on a crash rather than on a
+   * refusal. Giving internal faults their own status is what made the
+   * difference visible.
+   *
+   * .jpg and .jpeg are one format under two names and the signature table
+   * answers .jpg for both, so they are compared as equals rather than by string.
+   */
+  const claimed = path.extname(filePath).toLowerCase()
+  const same = (a, b) => {
+    const canon = (e) => (e === '.jpeg' ? '.jpg' : e)
+    return canon(a) === canon(b)
+  }
+
+  if (claimed && !same(claimed, found.ext)) {
+    throw new UploadRejected(
+      `That ${label} is named ${claimed} but its contents are a `
+      + `${found.ext.replace('.', '').toUpperCase()} file. Save it as a real `
+      + `${claimed.replace('.', '').toUpperCase()} and upload it again.`,
     )
   }
 

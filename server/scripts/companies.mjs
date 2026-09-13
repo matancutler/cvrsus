@@ -179,11 +179,29 @@ else if (command === 'add') {
  * that decision is made.
  */
 else if (command === 'pending') {
+  /*
+   * One join rather than a subquery per column.
+   *
+   * Each detail used to run its own `LIMIT 1` lookup against the same table,
+   * which is two scans to read two fields off one row -- and, with nothing
+   * ordering them, two independent answers to "which admin?" that a company
+   * with a second flagged admin could see disagree. Picking the recruiter ONCE
+   * and reading every field off that row is cheaper and cannot produce an email
+   * belonging to one person beside a phone number belonging to another.
+   *
+   * `ORDER BY id` is the tie-break accounts.js already uses to decide who
+   * represents a company, so the operator sees the person the rest of the
+   * product treats as the account holder.
+   */
   const rows = db.prepare(`
-    SELECT c.id, c.name, c.created_at,
-           (SELECT r.email FROM recruiters r WHERE r.company_id = c.id AND r.is_org_admin = 1 LIMIT 1) AS email,
-           (SELECT r.website FROM recruiters r WHERE r.company_id = c.id AND r.is_org_admin = 1 LIMIT 1) AS website
-    FROM companies c WHERE c.approval_status = 'pending' ORDER BY c.created_at
+    SELECT c.id, c.name, c.created_at, r.email, r.phone, r.website
+    FROM companies c
+    LEFT JOIN recruiters r ON r.id = (
+      SELECT id FROM recruiters
+      WHERE company_id = c.id AND is_org_admin = 1
+      ORDER BY id LIMIT 1
+    )
+    WHERE c.approval_status = 'pending' ORDER BY c.created_at
   `).all()
 
   if (rows.length === 0) console.log('\n  Nothing waiting.\n')
@@ -191,7 +209,13 @@ else if (command === 'pending') {
     console.log('\n  Awaiting approval:\n')
     for (const row of rows) {
       console.log(`  ${String(row.id).padEnd(4)} ${row.name}`)
-      console.log(`       ${row.email ?? '(no email)'}  ·  ${row.website ?? '(no website)'}`)
+      /* Both proved contact details on one line, because approving a
+         stranger is checking they are reachable and the phone is the half
+         that is hardest to fake. Printed exactly as stored -- this is a
+         number to dial, so a tidier rendering would only be a different
+         number. */
+      console.log(`       ${row.email ?? '(no email)'}  ·  ${row.phone ?? '(no phone)'}`)
+      console.log(`       ${row.website ?? '(no website)'}`)
       console.log(`       registered ${row.created_at}\n`)
     }
     console.log('  Approve:  node server/scripts/companies.mjs approve <id>')
