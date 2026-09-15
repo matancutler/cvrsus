@@ -950,6 +950,30 @@ export const SCHEMA = `
      can be compared against the deep-analysis tranches. That comparison is the
      only thing that can validate the price, and it cannot be reconstructed
      afterwards if it is not written as it happens. Never served to a recruiter. */
+  /* -------------------------------------------------- model failures ---
+
+     Why a model call fell back, which nothing used to record.
+
+     Rolled up rather than appended: a quota that rejects every request in a
+     300-applicant Triage would otherwise write 300 near-identical rows, and
+     the thing worth knowing is "this failed 300 times since 14:02", not each
+     instance. The key is what distinguishes one problem from another.
+
+     Deliberately outside any transaction that matters — see reportFailure in
+     ai.js. Losing a telemetry write is acceptable; losing a candidate is not. */
+  CREATE TABLE IF NOT EXISTS ai_failures (
+    stage       TEXT NOT NULL,
+    status      INTEGER,
+    type        TEXT NOT NULL,
+    message     TEXT NOT NULL,
+    occurrences INTEGER NOT NULL DEFAULT 1,
+    first_seen  TEXT NOT NULL,
+    last_seen   TEXT NOT NULL,
+    PRIMARY KEY (stage, status, type, message)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_ai_failures_seen ON ai_failures(last_seen DESC);
+
   CREATE TABLE IF NOT EXISTS triage_cost_events (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     triage_id   INTEGER NOT NULL,

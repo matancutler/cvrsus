@@ -172,7 +172,7 @@ export async function extractProfileFields(cvText, { signal } = {}) {
       usage: response.usage,
     }
   } catch (error) {
-    console.warn(`  CV extraction fell back to the deterministic path: ${error.message}`)
+    reportFailure('cv-extraction', error)
     return { ...deterministicExtraction(cvText), source: 'deterministic', note: error.message }
   }
 }
@@ -318,9 +318,65 @@ export async function transcribeImage(base64, mediaType, { signal } = {}) {
      */
     return String(JSON.parse(block)?.text ?? '')
   } catch (error) {
-    console.warn(`  image transcription failed: ${error.message}`)
+    reportFailure('image-transcription', error)
     return null
   }
+}
+
+
+/* ------------------------------------------------------ when a call fails ---
+
+   Every function below falls back when the model is unreachable, and that is
+   the right behaviour: a recruiter who loses a shortlist because one request
+   timed out is worse off than one who gets a cruder ranking. But each fallback
+   was announced with a single console.warn and nothing else, so the product
+   could lose its entire reasoning layer and still look like it was working —
+   a plausible percentage, a small grey chip, no error, no count.
+
+   That is exactly what happened. Every row of a 26-applicant Triage was scored
+   by the keyword fallback, the reason was written to a log nobody reads, and
+   the only evidence was a chip in a screenshot. Three separate diagnoses were
+   attempted from the outside and all three were wrong, because the one fact
+   that would have settled it had been thrown away at the catch.
+
+   So the reason is now reported as well as logged. `ai.js` stays free of
+   database imports — it is wired to a sink at boot instead, which keeps this
+   module testable and lets the caller decide where failures are kept.
+*/
+
+let failureSink = () => {}
+
+/** Wired once at boot. See `recordAiFailure` in index.js. */
+export function onModelFailure(fn) {
+  failureSink = typeof fn === 'function' ? fn : () => {}
+}
+
+/**
+ * What actually went wrong, in the three fields worth keeping.
+ *
+ * The SDK throws typed errors carrying an HTTP status and an API error type;
+ * both matter and neither survives `error.message` alone. A 429 is a quota to
+ * raise, a 400 is a request this code is building wrongly, and a timeout is a
+ * model taking longer than the caller allowed — three different problems that
+ * read identically in a log line.
+ */
+function describeFailure(error) {
+  return {
+    status: Number.isInteger(error?.status) ? error.status : null,
+    type: error?.error?.error?.type ?? error?.name ?? 'unknown',
+    message: String(error?.message ?? error).slice(0, 400),
+  }
+}
+
+function reportFailure(stage, error) {
+  const detail = describeFailure(error)
+  console.warn(`  ${stage} fell back: ${detail.status ?? '-'} ${detail.type} — ${detail.message}`)
+  try {
+    failureSink({ stage, ...detail })
+  } catch {
+    /* Telemetry must never be the reason a candidate loses their place. */
+  }
+  return detail
 }
 
 // ------------------------------------------------------- contact details ---
@@ -501,7 +557,7 @@ export async function extractContactDetails(cvText, { signal } = {}) {
       city: found.city ?? fallback.city,
     }
   } catch (error) {
-    console.warn(`  CV contact read fell back to the deterministic path: ${error.message}`)
+    reportFailure('contact-details', error)
     return deterministicContact(cvText)
   }
 }
@@ -732,7 +788,7 @@ export async function abstractSummaryEmployers(summary, { signal } = {}) {
 
     return cleaned
   } catch (error) {
-    console.warn(`  summary abstraction failed: ${error.message}`)
+    reportFailure('summary-abstraction', error)
     return null
   }
 }
@@ -805,7 +861,7 @@ export async function generateSummary(cvText, { ownSummary = null, signal } = {}
       truncated: summary.length < raw.length,
     }
   } catch (error) {
-    console.warn(`  summary drafting failed: ${error.message}`)
+    reportFailure('summary-drafting', error)
     return null
   }
 }
@@ -846,12 +902,49 @@ const MATCH_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   required: [
-    'score', 'fit', 'reasoning', 'strengths', 'gaps', 'transferable',
+    'criteria', 'reasoning', 'strengths', 'gaps', 'transferable',
     'evidence', 'probes', 'confidence', 'location_fit', 'seniority_alignment',
   ],
   properties: {
-    score: { type: 'integer', minimum: 0, maximum: 100 },
-    fit: { type: 'string', enum: ['strong', 'good', 'possible', 'weak'] },
+    /*
+     * One verdict per requirement, and no overall number.
+     *
+     * `score: 0-100` used to be required here, with calibration bands in the
+     * prompt. A model judges "does this CV evidence this requirement" extremely
+     * well and holds a numeric rubric across thousands of independent calls
+     * extremely badly — nothing anchors the four-hundredth call to the twelfth,
+     * so the number drifted and the ranking drifted with it.
+     *
+     * The model now answers the question it is good at, once per requirement,
+     * and scoreAgainst() in matching/score.js does the arithmetic. Same inputs,
+     * same score, every time — and every point traceable to a named
+     * requirement and a quote.
+     */
+    criteria: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['requirement_id', 'status', 'quote', 'reason'],
+        properties: {
+          requirement_id: { type: 'string' },
+          /*
+           * Four, not six. Telling STRONG_EVIDENCE from CONFIRMED needs
+           * calibration data nobody has yet, and an enum finer than the
+           * evidence can support is false precision that scoring would then
+           * multiply.
+           */
+          status: {
+            type: 'string',
+            enum: ['meets', 'partial', 'no_evidence', 'contradicted'],
+          },
+          /* Verbatim from the CV, and verified in code. Empty only when the
+             status is no_evidence — there is nothing to quote for a silence. */
+          quote: { type: 'string' },
+          reason: { type: 'string' },
+        },
+      },
+    },
     reasoning: { type: 'string' },
     strengths: { type: 'array', items: { type: 'string' } },
     gaps: { type: 'array', items: { type: 'string' } },
@@ -945,16 +1038,41 @@ What this means in practice:
 - Do not penalise a short CV, a non-English CV, or an unusual career path in
   itself. Do not reward buzzwords.
 
-Calibrate so the numbers mean something across candidates:
-- 85-100 strong: clearly does this job today.
-- 65-84 good: does most of it, learns the rest quickly.
-- 40-64 possible: real overlap, real gaps; worth a conversation for a patient team.
-- 0-39 weak: a different kind of role.
-Use the whole range. If everyone scores 70 the ranking is useless.
+------------------------------------------------------------------------------
+criteria — the part that decides the ranking
 
-reasoning is two or three sentences a recruiter could repeat to a hiring manager,
-naming the concrete evidence that drove the number. strengths and gaps are short
-and specific — "owned the payments rewrite", not "good experience".
+DO NOT PRODUCE AN OVERALL SCORE. You are not asked for one and there is no field
+for it. Judge each requirement separately; the platform does the arithmetic.
+This is deliberate: you judge evidence far better than you hold a consistent
+numeric rubric across thousands of separate calls, and a drifting rubric is a
+drifting ranking.
+
+Return exactly one entry for every requirement you were given, using its id.
+Not a subset, not extras — every one, including those the CV says nothing about.
+
+- meets .......... the CV plainly evidences this. Quote the words that show it.
+- partial ........ real but incomplete evidence. Adjacent or transferable
+                   experience belongs here: audit and corporate finance is
+                   partial evidence for FP&A; two years against a five-year
+                   requirement is partial, not failure. Quote what you found.
+- no_evidence .... the CV does not mention it. Quote is empty.
+- contradicted ... the CV positively shows the opposite. This is rare and needs
+                   a quote proving it. "Not mentioned" is NEVER contradicted.
+
+THE DIFFERENCE BETWEEN no_evidence AND contradicted IS THE MOST IMPORTANT
+JUDGEMENT YOU MAKE HERE. A CV is a summary somebody wrote in an afternoon, not a
+sworn inventory. Silence about Kubernetes means the CV does not mention
+Kubernetes — it does not mean the candidate has never used it. Scoring treats
+no_evidence as unknown and excludes it, and treats contradicted as a genuine
+failure; confusing the two is how a good candidate gets buried by what their CV
+happened not to say.
+
+Your status must be earnable from the quote you give. If you cannot quote it,
+the honest answer is no_evidence.
+
+reasoning is two or three sentences a recruiter could repeat to a hiring
+manager, naming the concrete evidence. strengths and gaps are short and
+specific — "owned the payments rewrite", not "good experience".
 
 evidence is the part that has to be verifiable. For each significant claim, quote
 the words from the CV that support it, copied exactly, not paraphrased. If you
@@ -1048,10 +1166,63 @@ scope, and a senior engineer who owns a platform outright may be above a role
 advertised as senior. Being above the role is not a mark against the candidate
 and must not reduce the score — it is something the recruiter needs to know.`
 
+/*
+ * Everything that identifies the person, taken out of the text as well as the
+ * fields.
+ *
+ * The dossier omitted the structured name field and then appended twelve
+ * thousand characters of raw CV — which begins with the name, the email and the
+ * phone number on every CV ever written. The protection was stated in a comment
+ * and implemented nowhere: the model read the name on line one of every
+ * candidate it judged.
+ *
+ * Both halves are needed. The known values are redacted because they are known;
+ * the generic patterns catch the second address in a footer, a referee's
+ * number, a portfolio link — none of which are on the candidate record and all
+ * of which identify somebody.
+ */
+/** The characters a regular expression reads as syntax rather than as text. */
+const REGEX_SPECIAL = new Set('.*+?^${}()|[]/\\-')
+
+export function withoutIdentity(text, candidate) {
+  /*
+   * Patterns first, names second, and the order is load-bearing.
+   *
+   * Redacting the name first tears the email apart from the inside:
+   * "matanyacutler@gmail.com" becomes "[redacted]ya[redacted]@gmail.com", which
+   * no longer looks like an address to the pattern that would have removed it
+   * whole — so the domain survives and the redaction leaks the very thing it
+   * was for. Taking whole addresses, numbers and links out first leaves the
+   * name pass nothing to fragment.
+   */
+  let out = String(text ?? '')
+    .replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, '[redacted]')
+    .replace(/\b\+?\d[\d\s()-]{7,}\d\b/g, '[redacted]')
+    .replace(/\b(?:https?:\/\/|www\.)\S+/gi, '[redacted]')
+
+  const known = [
+    candidate?.first_name, candidate?.middle_name, candidate?.last_name,
+    candidate?.email, candidate?.phone,
+  ].filter((value) => String(value ?? '').trim().length > 2)
+
+  for (const value of known) {
+    /* Escaped character by character rather than with a character-class
+       regex, which is easy to get subtly wrong: a name may contain a dot, a
+       hyphen or an apostrophe, and a candidate called "A." would otherwise
+       become a pattern matching every character in the document. */
+    const pattern = [...String(value).trim()]
+      .map((character) => (REGEX_SPECIAL.has(character) ? `\\${character}` : character))
+      .join('')
+    out = out.replace(new RegExp(pattern, 'gi'), '[redacted]')
+  }
+
+  return out
+}
+
 /**
- * The dossier Claude scores. The candidate's name is deliberately withheld: it
- * carries no signal about fit and plenty about ethnicity and gender, and the
- * platform is pseudonymous to recruiters anyway.
+ * The dossier Claude scores, with the candidate's identity removed — it carries
+ * no signal about fit and plenty about ethnicity and gender, and the platform
+ * is pseudonymous to recruiters until a reveal is paid for.
  */
 function dossier({ candidate, profile }) {
   const history = (profile?.employment_history ?? []).slice(0, 12).map((job) => {
@@ -1087,7 +1258,7 @@ function dossier({ candidate, profile }) {
     education ? `\nEducation:\n${education}` : '',
     // The CV itself is the ground truth; the structured fields above are a
     // convenience, and may be thin if extraction has not run.
-    candidate.cv_text ? `\nCV text:\n${String(candidate.cv_text).slice(0, 12000)}` : '',
+    candidate.cv_text ? `\nCV text:\n${withoutIdentity(candidate.cv_text, candidate).slice(0, 12000)}` : '',
   ].filter(Boolean).join('\n')
 }
 
@@ -1100,10 +1271,22 @@ export async function analyseMatch({ jobDescription, criteria, candidate, profil
   const anthropic = getClient()
   if (!anthropic) return null
 
+  /*
+   * The requirements, each with the id the answer must come back under.
+   *
+   * Built by the caller (see requirementsFrom in matching/analysis.js) so that
+   * one job's requirement list is identical for every candidate judged against
+   * it — ids assigned per call would make the verdicts unjoinable and the cache
+   * key meaningless.
+   */
+  const requirements = Array.isArray(criteria?.requirements) ? criteria.requirements : []
+  const requirementLines = requirements
+    .map((r) => `${r.id} [${r.tier}] ${r.text}`)
+    .join('\n')
+
   const wanted = [
     criteria?.title ? `Title: ${criteria.title}` : '',
-    criteria?.requiredSkills?.length ? `Required: ${criteria.requiredSkills.join(', ')}` : '',
-    criteria?.preferredSkills?.length ? `Preferred: ${criteria.preferredSkills.join(', ')}` : '',
+    requirementLines ? `Requirements — return one verdict for EVERY id:\n${requirementLines}` : '',
     /* Stated rather than left to be found in the posting. location_fit is
        asked for on every call, and a model hunting for the city in a wall of
        prose gets it wrong in exactly the cases that matter — a JD naming a
@@ -1166,13 +1349,34 @@ export async function analyseMatch({ jobDescription, criteria, candidate, profil
       },
     }
   } catch (error) {
-    console.warn(`  Match analysis fell back to the deterministic score: ${error.message}`)
+    reportFailure('match-analysis', error)
     return null
   }
 }
 
 function normalizeMatch(raw) {
-  const score = Number(raw?.score)
+  /*
+   * The per-requirement verdicts, kept only where they are usable.
+   *
+   * A verdict with no id cannot be attached to a requirement, and an
+   * unrecognised status would be silently treated as unknown downstream — both
+   * are dropped here so the scorer sees a clean set and reports the gap as
+   * missing coverage rather than as a met requirement.
+   */
+  const criteria = Array.isArray(raw?.criteria)
+    ? raw.criteria
+      .filter((item) => (
+        item
+        && typeof item.requirement_id === 'string'
+        && ['meets', 'partial', 'no_evidence', 'contradicted'].includes(item.status)
+      ))
+      .map((item) => ({
+        requirement_id: item.requirement_id,
+        status: item.status,
+        quote: trimOrNull(item.quote) ?? '',
+        reason: trimOrNull(item.reason) ?? '',
+      }))
+    : []
 
   const evidence = Array.isArray(raw?.evidence)
     ? raw.evidence
@@ -1183,8 +1387,7 @@ function normalizeMatch(raw) {
     : []
 
   return {
-    score: Number.isFinite(score) ? Math.max(0, Math.min(100, Math.round(score))) : 0,
-    fit: ['strong', 'good', 'possible', 'weak'].includes(raw?.fit) ? raw.fit : 'possible',
+    criteria,
     reasoning: trimOrNull(raw?.reasoning) ?? '',
     strengths: uniqueStrings(raw?.strengths).slice(0, 8),
     gaps: uniqueStrings(raw?.gaps).slice(0, 8),
@@ -1333,8 +1536,42 @@ asymmetric:
 - contextual are themes and adjacent signals that help find relevant people but
   are not requirements at all.
 
+ONE CLAIM PER REQUIREMENT. This matters more than anything else here.
+
+A job description is written in sentences; a requirement has to be a question a
+CV can answer on its own. Job adverts habitually pack three demands into one
+line, and copying that line across as a single requirement makes it
+unanswerable — so it gets a guessed answer, and a candidate strong on two of the
+three scores the same as a candidate strong on none.
+
+Split every line that names more than one thing:
+
+  "Analytical thinking, attention to detail and decision-making ability"
+     -> analytical thinking
+     -> attention to detail
+     -> decision-making ability
+
+  "5+ years of backend development in Python or Go, ideally in fintech"
+     -> 5+ years of backend development     (must_have, measurable)
+     -> Python or Go                        (must_have — "or" is one choice, not two requirements)
+     -> fintech background                  (preferred — "ideally" makes it so)
+
+Note the difference between the two splits. "Analytical thinking AND attention to
+detail" is two things a candidate can have independently, so it is two
+requirements. "Python OR Go" is one requirement satisfied either way, so it stays
+one. Split on AND, never on OR.
+
+Do not fragment for its own sake. Two lines restating the same demand are one
+requirement, and a requirement so small it cannot be evidenced separately
+("communication", "Excel") belongs in contextual rather than as its own
+must_have. Aim for between six and twenty requirements: fewer means you have
+merged things that should be judged apart, and many more means you are splitting
+one idea into its words.
+
 Every hard_constraint, must_have and preferred item must carry a "quote": text
 copied verbatim from the job description. If you cannot quote it, do not list it.
+When one line becomes several requirements they may share that line as their
+quote — the quote proves the demand was made, not that it was made separately.
 
 interpretation: two or three sentences on what success in this role actually
 requires. Describe the work, not the advert.
@@ -1386,7 +1623,7 @@ export async function analyseJobDescription({ jobDescription, instruction, signa
 
     return { ...JSON.parse(text), source: 'claude', model_version: response.model }
   } catch (error) {
-    console.warn(`  JD analysis fell back to the deterministic path: ${error.message}`)
+    reportFailure('jd-analysis', error)
     return null
   }
 }

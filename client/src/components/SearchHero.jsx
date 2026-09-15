@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 
 import { sendForm } from '../api.js'
+import pastedImage from '../pastedImage.js'
 import { StatusNotice } from './Notice.jsx'
 
 /**
@@ -245,6 +246,16 @@ export default function SearchHero({
               ? 'Paste the job description, or attach a PDF, Word file or screenshot…'
               : 'Paste the job description, or attach it as a PDF or Word file…'}
           onChange={(e) => onChange(e.target.value)}
+          /* A screenshot on the clipboard is read rather than dropped — see
+             the note in TriageTab. Text paste falls through untouched, and the
+             public demo takes documents only, so it declines here as well. */
+          onPaste={(e) => {
+            if (!acceptsImages) return
+            const picture = pastedImage(e.clipboardData)
+            if (!picture) return
+            e.preventDefault()
+            attach([picture])
+          }}
           onKeyDown={(e) => {
             // Enter searches; Shift+Enter makes a new line.
             if (e.key === 'Enter' && !e.shiftKey) submit(e)

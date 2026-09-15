@@ -5,6 +5,7 @@ import Avatar from './Avatar.jsx'
 import FolderDialog from './FolderDialog.jsx'
 import Notice, { StatusNotice, useStandingNotice } from './Notice.jsx'
 import PopMenu from './PopMenu.jsx'
+import pastedImage from '../pastedImage.js'
 import scoreBand from '../scoreBand.js'
 
 /**
@@ -561,10 +562,14 @@ async function filesFromDrop(dataTransfer) {
             {/* The same paperclip the composer uses, on the line that names the
                 field rather than stranded under a tall textarea where it read
                 as belonging to whatever came next. */}
+            {/* Images as well as documents — the same list the composer on
+                the search page offers, and the same /api/hr/jd-text route
+                reads them. A posting arrives as a screenshot at least as often
+                as it arrives as a file. */}
             <input
               ref={jdInput}
               type="file"
-              accept=".pdf,.docx"
+              accept=".pdf,.docx,.png,.jpg,.jpeg,.webp"
               className="visually-hidden"
               onChange={(event) => attachJd(event.target.files?.[0])}
             />
@@ -572,8 +577,8 @@ async function filesFromDrop(dataTransfer) {
               type="button"
               className="icon-button attach-button"
               onClick={() => jdInput.current?.click()}
-              aria-label="Attach the job description as a file"
-              title="Attach the job description as a file"
+              aria-label="Attach the job description as a file or picture"
+              title="Attach a PDF, Word file or screenshot"
             >
               <PaperclipIcon />
             </button>
@@ -583,9 +588,25 @@ async function filesFromDrop(dataTransfer) {
             id="triage-jd"
             rows={8}
             value={jd}
-            placeholder="Paste the job description, or attach it as a PDF or Word file…"
+            dir="auto"
+            placeholder="Paste the job description, or attach a PDF, Word file or screenshot…"
             onChange={(event) => setJd(event.target.value)}
             onBlur={() => saveJd()}
+            /*
+             * A screenshot on the clipboard is read rather than dropped.
+             *
+             * Copying a posting and pressing Ctrl+V is the first thing anybody
+             * tries, and a textarea silently ignores an image — so the paste
+             * looked broken when nothing was broken, it simply had no handler.
+             * Text paste is untouched: pastedImage returns null for anything
+             * that is not an image, and the default runs.
+             */
+            onPaste={(event) => {
+              const picture = pastedImage(event.clipboardData)
+              if (!picture) return
+              event.preventDefault()
+              attachJd(picture)
+            }}
           />
         </div>
       </section>
@@ -1191,7 +1212,10 @@ function TriageResultCard({ row, triageId, onOpen, onFile, folder = null }) {
             {/* Where they are filed, in the slot the search card keeps for it. */}
             {folder && (
               <span className="chip chip-folder" title={`Saved in your ${folder.name} folder`}>
-                {folder.name}
+                {/* The name needs an element of its own: a bare text node in a
+                    flex container is an anonymous item, and text-overflow has
+                    nothing to apply to. */}
+                <span className="chip-clip">{folder.name}</span>
               </span>
             )}
             {row.reviewedAt && <span className="chip chip-neutral">Opened</span>}

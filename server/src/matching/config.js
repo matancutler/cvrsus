@@ -58,6 +58,17 @@ export const MATCHING = {
   credibleTopRaw: num('MATCH_CREDIBLE_TOP', 55),
 
   /**
+   * How much of a job's weight must be evidenced before the fit is shown as a
+   * number rather than as "needs review".
+   *
+   * Below this the arithmetic is fine and the meaning is not: 100% of the one
+   * requirement out of nine a CV happened to mention is not a strong candidate.
+   * The row is still shown — an unreadable CV is something to look at, not
+   * somebody to discard.
+   */
+  coverageFloor: num('MATCH_COVERAGE_FLOOR', 50),
+
+  /**
    * What each level of geographic friction is worth, in absolute-fit points.
    *
    * Bounded on purpose, and small. The rule this implements is "geography is
@@ -89,7 +100,10 @@ export const VERSIONS = {
   /** Stage B: how facts become multi-label intelligence. */
   intelligence: process.env.MATCH_V_INTELLIGENCE ?? '1',
   /** §10 — the absolute-fit and normalisation methodology. */
-  scoring: process.env.MATCH_V_SCORING ?? '1',
+  /* 2: fit computed in code from per-requirement verdicts, replacing the
+     model-invented 0-100. Bumped so cached analyses in the old shape are not
+     reused — the cache key includes this. */
+  scoring: process.env.MATCH_V_SCORING ?? '2',
 }
 
 /**

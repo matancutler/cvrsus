@@ -101,6 +101,43 @@ export async function sendPasswordReset({ to, name, companyName, link, expiresIn
  */
 export const APP_URL = (process.env.APP_URL ?? 'http://localhost:5175').replace(/\/+$/, '')
 
+/*
+ * Said out loud at boot, because getting this wrong is silent and expensive.
+ *
+ * Every link this file sends is built from APP_URL — sign-in, password reset,
+ * check-in yes/no, "you have a message". It is set once by hand at deploy and
+ * then never looked at again, and moving to a custom domain is a step in a
+ * runbook that is easy to skip: the app keeps working, because nothing it does
+ * depends on its own address. Only the RECIPIENT finds out, days later, when a
+ * link in an email goes somewhere that no longer answers.
+ *
+ * That is what happened here. The site moved to its own domain, APP_URL stayed
+ * on the platform hostname, and an administrator's password reset — a
+ * single-factor account-recovery credential, with a short expiry — pointed at a
+ * host that had been turned off. The reset was not broken; the address in it
+ * was.
+ *
+ * A warning rather than a refusal: a deployment mid-migration is legitimately
+ * in this state for a while, and refusing to boot would turn a cosmetic problem
+ * into an outage.
+ */
+if (process.env.NODE_ENV === 'production') {
+  const complaint = APP_URL.startsWith('http://localhost')
+    ? 'still points at localhost'
+    : /\.onrender\.com$/i.test(new URL(APP_URL).hostname)
+      ? 'still points at the Render hostname rather than your own domain'
+      : null
+
+  if (complaint) {
+    console.warn('')
+    console.warn(`  WARNING: APP_URL ${complaint} — ${APP_URL}`)
+    console.warn('  Every link in every email is built from it: password resets, sign-in')
+    console.warn('  links, check-in yes/no, message notifications. Recipients will be sent')
+    console.warn('  there. Set APP_URL to the address people actually reach the site on.')
+    console.warn('')
+  }
+}
+
 export function checkinLinks(token) {
   const base = `${APP_URL}/check-in/${encodeURIComponent(token)}`
   return { yes: `${base}?answer=yes`, no: `${base}?answer=no`, page: base }

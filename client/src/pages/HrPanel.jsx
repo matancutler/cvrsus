@@ -2976,10 +2976,6 @@ function MyProfileTab({ me, onSaved }) {
         <dl className="facts">
           <Fact label="Current password" value="••••••••" />
         </dl>
-        <p className="field-hint">
-          Stored as a one-way hash, so it cannot be displayed. Enter it below to set a new one.
-        </p>
-
         <div className="field">
           <label className="field-label" htmlFor="pw-current">Current password</label>
           <input id="pw-current" type="password" autoComplete="current-password"
@@ -5622,7 +5618,7 @@ function ResultCard({
                 out for anyone who needs it. */}
             {result.folder && (
               <span className="chip chip-folder" title={`Saved in your ${result.folder.name} folder`}>
-                {result.folder.name}
+                <span className="chip-clip">{result.folder.name}</span>
               </span>
             )}
             {/*

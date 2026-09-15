@@ -294,6 +294,7 @@ import {
   extractContactDetails,
   extractProfileFields,
   generateSummary,
+  onModelFailure,
   isConfigured as aiConfigured,
   SUMMARY_MAX_CHARS,
 } from './ai.js'
@@ -465,6 +466,24 @@ import { SKILLS, canonicalize, detectSkills } from './skills.js'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const app = express()
+
+/*
+ * Where a fallen-back model call goes.
+ *
+ * Wired here rather than inside ai.js so that module keeps no database import
+ * and stays drivable from a test with a stubbed fetch. UPSERT on the natural
+ * key so a repeated failure counts up instead of filling the table.
+ */
+onModelFailure(({ stage, status, type, message }) => {
+  const at = new Date().toISOString()
+  db.prepare(`
+    INSERT INTO ai_failures (stage, status, type, message, occurrences, first_seen, last_seen)
+    VALUES (?, ?, ?, ?, 1, ?, ?)
+    ON CONFLICT (stage, status, type, message) DO UPDATE SET
+      occurrences = occurrences + 1,
+      last_seen = excluded.last_seen
+  `).run(stage, status, type, message, at, at)
+})
 
 const PORT = Number(process.env.PORT) || 5175
 const SESSION_HOURS = Number(process.env.SESSION_HOURS) || 12

@@ -31,6 +31,8 @@ import db, { UPLOAD_DIR } from './db.js'
 import { extractText } from './extract.js'
 import { analyseJobDescription, analyseMatch, deterministicContact, isConfigured as aiConfigured, MODEL } from './ai.js'
 import { keywordsFrom, parseJobDescription, scoreCandidate } from './match.js'
+import { requirementsFrom } from './matching/analysis.js'
+import { needsReview, scoreAgainst } from './matching/score.js'
 import { VERSIONS } from './matching/config.js'
 import { TRIAGE, rawTriage, recount } from './triage.js'
 import { refundTriageCvs } from './wallet.js'
@@ -529,7 +531,13 @@ async function runDeep(triage, batch) {
   `).run(...ids)
 
   const profile = safeJson(triage.match_profile) ?? deterministicProfile(triage.raw_jd)
+
+  /* One list for the whole batch, so every applicant is judged against the
+     same requirements under the same ids. */
+  const requirements = requirementsFrom(profile)
+
   const criteria = {
+    requirements,
     title: profile.title ?? '',
     jobDescription: triage.raw_jd,
     requiredSkills: (profile.mustHaves ?? []).map((item) => item.requirement ?? item).filter(Boolean),
@@ -544,7 +552,7 @@ async function runDeep(triage, batch) {
 
   await inParallel(rows, TRIAGE.analysisConcurrency, async (row) => {
     try {
-      const record = await analyseApplicant({ triage, row, criteria })
+      const record = await analyseApplicant({ triage, row, criteria, requirements })
       inputTokens += record.usage?.inputTokens ?? 0
       outputTokens += record.usage?.outputTokens ?? 0
 
@@ -593,7 +601,7 @@ async function runDeep(triage, batch) {
  * their place in the ranking. Losing someone from the list entirely because a
  * request failed is the one outcome a triage product cannot have.
  */
-async function analyseApplicant({ triage, row, criteria }) {
+async function analyseApplicant({ triage, row, criteria, requirements }) {
   const fallback = scoreCandidate(
     { cv_text: row.extracted_text, skills: [] },
     criteria,
@@ -630,16 +638,41 @@ async function analyseApplicant({ triage, row, criteria }) {
     }
   }
 
+  /*
+   * The score is computed here from the verdicts, not read off the answer.
+   *
+   * A null fit means nothing about the job could be checked against this CV —
+   * an unreadable document, or a response with no usable verdicts. That takes
+   * the deterministic score rather than publishing a zero: "we could not tell"
+   * and "they do not match" are different claims, and only one is supportable.
+   */
+  const judged = scoreAgainst(requirements, ai.criteria)
+
+  if (judged.fit === null) {
+    return {
+      absoluteFit: fallback.score,
+      criteria: { items: criteriaItems(fallback), breakdown: fallback.breakdown ?? null },
+      explanation: null,
+      source: 'deterministic',
+      model: 'deterministic',
+      usage: ai.usage ?? null,
+    }
+  }
+
   return {
-    absoluteFit: ai.score,
+    absoluteFit: judged.fit,
     criteria: {
-      fit: ai.fit,
+      coverage: judged.coverage,
+      needsReview: needsReview(judged.coverage),
+      verdicts: judged.breakdown,
       confidence: ai.confidence,
       strengths: ai.strengths,
       gaps: ai.gaps,
       transferable: ai.transferable,
       evidence: ai.evidence,
       probes: ai.probes,
+      locationFit: ai.location_fit ?? null,
+      seniorityAlignment: ai.seniority_alignment ?? null,
       items: criteriaItems(fallback),
     },
     explanation: ai.reasoning,

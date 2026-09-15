@@ -2747,12 +2747,24 @@ input:focus, select:focus, textarea:focus, .chip-input:focus-within {
   background: var(--accent-soft);
   color: var(--accent);
   max-width: 6rem;
+}
+
+/*
+ * The clipping happens on the text, not on the chip.
+ *
+ * Overriding the chip itself to `display: inline-block` did truncate it, and
+ * broke the thing chips are for: .chip is an inline-flex box 22px tall that
+ * centres its own content, and an inline-block with a line-height is aligned by
+ * a different rule — so the folder chip sat off the line its neighbours share.
+ * Giving the NAME its own element keeps the chip a flex box and puts the
+ * ellipsis on a real flex item, which is the only thing text-overflow can act
+ * on. min-width: 0 lets that item shrink below its content, which flex items
+ * otherwise refuse to do.
+ */
+.chip-clip {
   overflow: hidden;
   text-overflow: ellipsis;
-  /* inline-flex from .chip does not give the TEXT a box to be clipped in, so
-     the ellipsis needs the chip itself to behave as one. */
-  display: inline-block;
-  line-height: 20px;
+  min-width: 0;
 }
 
 .badge {
@@ -4147,15 +4159,32 @@ input:focus, select:focus, textarea:focus, .chip-input:focus-within {
    Four rules stated as four lines that tick off while you type, rather than
    one sentence that only tells you which one you broke after you submit. */
 
+/*
+ * Two columns, always — so four rules are a 2x2 block rather than a strip.
+ *
+ * This was `auto-fit, minmax(178px, 1fr)`, which fits as many as the width
+ * allows: in a narrow dialog that is two, and under a full-width field it is
+ * all four on one line. The same checklist therefore changed shape depending on
+ * where it appeared, and at full width it read as a row of unrelated labels
+ * under the input rather than as a list about it.
+ *
+ * minmax(0, 1fr) rather than 1fr: a long translated label would otherwise set
+ * the column floor to its own width and push the pair out of the container.
+ */
 .rule-list {
   list-style: none;
   margin: 0;
   padding: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(178px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.15rem 0.9rem;
   font-size: 0.8rem;
   color: var(--text-muted);
+}
+
+/* Below this, two columns put three words on two lines each. One is better. */
+@media (max-width: 560px) {
+  .rule-list { grid-template-columns: 1fr; }
 }
 
 .rule-list li { display: flex; align-items: center; gap: 0.4rem; }

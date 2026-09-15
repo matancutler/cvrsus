@@ -17,6 +17,7 @@ import { MODEL, analyseMatches, isConfigured as aiConfigured } from '../ai.js'
 import { effectiveProfile } from '../profiles.js'
 import { scoreCandidate } from '../match.js'
 import { MATCHING, VERSIONS } from './config.js'
+import { needsReview, scoreAgainst } from './score.js'
 import { profileVersion } from './intelligence.js'
 
 /** The model identifier that participates in the cache key. */
@@ -71,6 +72,38 @@ export function writeCached({ candidateId, jobId, jdVersion, absoluteFit, criter
  * the assessment it was derived from, so §17's "do not store only the score"
  * holds.
  */
+/**
+ * The job's requirements, with the ids every verdict comes back under.
+ *
+ * Derived from the stored job profile, so the list is identical for every
+ * candidate judged against that job and for every re-run of the same job
+ * version. Ids assigned per candidate would make verdicts unjoinable across a
+ * batch and would change the meaning of a cached analysis.
+ *
+ * Hard constraints are deliberately absent: they gate eligibility rather than
+ * contribute to fit, and mixing the two lets a candidate "make up" for missing
+ * a legal requirement by being strong elsewhere.
+ */
+export function requirementsFrom(matchProfile) {
+  const rows = []
+  let n = 0
+
+  const take = (items, tier) => {
+    for (const item of items ?? []) {
+      const text = String(item?.requirement ?? item ?? '').trim()
+      if (!text) continue
+      n += 1
+      rows.push({ id: `R${n}`, text, tier })
+    }
+  }
+
+  take(matchProfile.mustHaves, 'must_have')
+  take(matchProfile.preferred, 'preferred')
+  take(matchProfile.contextual, 'contextual')
+
+  return rows
+}
+
 function deterministicFit({ candidate, matchProfile, cvText }) {
   const requiredSkills = (matchProfile.mustHaves ?? []).map((item) => item.requirement)
   const preferredSkills = (matchProfile.preferred ?? []).map((item) => item.requirement)
@@ -135,6 +168,8 @@ export async function analyseBatch({ job, matchProfile, rows, signal }) {
     }))
   }
 
+  const requirements = requirementsFrom(matchProfile)
+
   let aiResults = new Map()
   if (aiConfigured()) {
     aiResults = await analyseMatches({
@@ -143,6 +178,9 @@ export async function analyseBatch({ job, matchProfile, rows, signal }) {
         title: matchProfile.title ?? job.title ?? '',
         jobDescription: job.raw_jd,
         instruction: job.instruction ?? '',
+        requirements,
+        /* Still sent: the fallback scorer reads these, and it runs for every
+           candidate regardless of whether the model answers. */
         requiredSkills: (matchProfile.mustHaves ?? []).map((item) => item.requirement),
         preferredSkills: (matchProfile.preferred ?? []).map((item) => item.requirement),
         /* Read out of the JD once, by the profile pass, rather than re-read
@@ -176,14 +214,32 @@ export async function analyseBatch({ job, matchProfile, rows, signal }) {
     const bonus = ai
       ? (MATCHING.locationBonus[ai.location_fit?.level] ?? 0)
       : 0
-    const placed = ai ? Math.max(0, Math.min(100, ai.score + bonus)) : 0
 
-    const record = ai
+    /*
+     * The score, computed here from the model's verdicts rather than read off
+     * its answer. See matching/score.js for why.
+     *
+     * `fit` is null when nothing about the job could be checked against this
+     * CV — an unreadable document, or a model response that came back empty.
+     * That falls through to the deterministic score rather than publishing a
+     * zero, because "we could not tell" and "they do not match" are different
+     * claims and only one of them is supportable.
+     */
+    const judged = ai ? scoreAgainst(requirements, ai.criteria) : null
+    const placed = judged?.fit === null || judged === null
+      ? null
+      : Math.max(0, Math.min(100, judged.fit + bonus))
+
+    const record = ai && placed !== null
       ? {
         candidateId: id,
         absoluteFit: placed,
         criteria: {
-          fit: ai.fit,
+          /* How much of the job this score actually rests on. Shown beside the
+             number rather than folded into it. */
+          coverage: judged.coverage,
+          needsReview: needsReview(judged.coverage),
+          verdicts: judged.breakdown,
           confidence: ai.confidence,
           strengths: ai.strengths,
           gaps: ai.gaps,
