@@ -155,10 +155,12 @@ import {
   failedFiles,
   getTriage,
   launchReadiness,
+  latestDraft,
   listTriages,
   markReviewed,
   mustOwn,
   pipelineStates,
+  removeAllFiles,
   removeFile,
   results,
   setJobDescription,
@@ -246,6 +248,8 @@ import {
   triageFolderIndex,
   reopenThread,
   addComment,
+  commentedCandidates,
+  deleteComment,
   setTags,
   MAX_TAGS,
   TAG_COLOURS,
@@ -502,6 +506,23 @@ const CONSENT_VERSION = '2026-08-v2'
 // Falling back to a random per-boot secret means sessions do not survive a
 // restart, which is the safe failure mode when .env has not been set up.
 const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex')
+
+/*
+ * Said out loud, because the fallback above fails silently and completely.
+ *
+ * Without SESSION_SECRET every process invents its own, so every deploy, every
+ * restart and every wake from idle signs out everybody at once — and nothing
+ * looks broken except that people keep having to sign in. Fine on a laptop,
+ * where a restart is a restart. In production it reads as "the site keeps
+ * logging me out", which is exactly the complaint it produces.
+ */
+if (process.env.NODE_ENV === 'production' && !process.env.SESSION_SECRET) {
+  console.warn('')
+  console.warn('  WARNING: SESSION_SECRET is not set. A random one was generated for this')
+  console.warn('  process, so every restart, deploy or wake from idle will sign every user')
+  console.warn('  out. Set SESSION_SECRET to a long random value in the environment.')
+  console.warn('')
+}
 
 // Not a warning: the app is fully usable without it, just less good at matching.
 if (!aiConfigured()) {
@@ -1442,10 +1463,20 @@ app.post('/api/auth/sign-out', (req, res) => {
    * strand the shell on screen. releaseRecruiterSession checks whether this is
    * really the live session before ending it.
    */
-  const session = readSession(SESSION_SECRET, 'recruiter', req)
-  if (session) releaseRecruiterSession(session.id, session.sid)
+  /*
+   * Which session is ending. The page names its own role, so signing out of
+   * the recruiter workspace leaves a candidate session in the same browser
+   * alone — and the reverse. A request naming no role ends everything, as it
+   * always did.
+   */
+  const role = ['candidate', 'recruiter'].includes(req.body?.role) ? req.body.role : null
 
-  clearSessionCookies(res, req)
+  if (role === null || role === 'recruiter') {
+    const session = readSession(SESSION_SECRET, 'recruiter', req)
+    if (session) releaseRecruiterSession(session.id, session.sid)
+  }
+
+  clearSessionCookies(res, req, role)
   res.json({ ok: true })
 })
 
@@ -5035,12 +5066,57 @@ app.post('/api/hr/candidates/:id/reveal', recruiterOnly, refuseIfBlocked(), asyn
  * candidate's data, and being able to read "Dana spoke to them in June" before
  * deciding whether to spend a reveal is exactly when it is worth most.
  */
+/** The recruiter reading comments, as the permission check needs them. */
+function commentViewer(recruiterId) {
+  return { id: recruiterId, isAdmin: Boolean(getRecruiter(recruiterId)?.is_org_admin) }
+}
+
 app.get('/api/hr/candidates/:id/comments', recruiterOnly, refuseIfBlocked(), (req, res, next) => {
   try {
     const candidateId = Number(req.params.id)
     if (!getCandidate(candidateId)) throw new HttpError(404, 'Candidate not found.')
 
-    res.json({ comments: listComments({ companyId: companyIdFor(req.session.id), candidateId }) })
+    res.json({
+      comments: listComments({
+        companyId: companyIdFor(req.session.id), candidateId, viewer: commentViewer(req.session.id),
+      }),
+    })
+  } catch (error) {
+    next(error)
+  }
+})
+
+/**
+ * Which candidates this company has noted, and how many notes each.
+ *
+ * Read once by the page and shared by every comment icon, so a card can show
+ * that a note exists without a request per card. Company-scoped like the notes
+ * themselves; there is nothing here about a candidate beyond an id your own
+ * team already wrote about.
+ */
+app.get('/api/hr/comments/commented', recruiterOnly, (req, res, next) => {
+  try {
+    res.json({ commented: commentedCandidates(companyIdFor(req.session.id)) })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.delete('/api/hr/candidates/:id/comments/:commentId', recruiterOnly, (req, res, next) => {
+  try {
+    const result = deleteComment({
+      companyId: companyIdFor(req.session.id),
+      candidateId: Number(req.params.id),
+      commentId: Number(req.params.commentId),
+      viewer: commentViewer(req.session.id),
+    })
+
+    if (result.reason === 'missing') throw new HttpError(404, 'That comment no longer exists.')
+    if (result.reason === 'forbidden') {
+      throw new HttpError(403, 'Only the person who wrote a comment, or an admin, can delete it.')
+    }
+
+    res.json({ comments: result.comments })
   } catch (error) {
     next(error)
   }
@@ -5061,6 +5137,7 @@ app.post('/api/hr/candidates/:id/comments', recruiterOnly, refuseIfBlocked(), (r
       candidateId,
       recruiterId: req.session.id,
       body,
+      viewer: commentViewer(req.session.id),
     })
 
     res.status(201).json({ comments })
@@ -6243,6 +6320,29 @@ app.get('/api/hr/triages', recruiterOnly, (req, res, next) => {
 app.get('/api/hr/triages/new', recruiterOnly, (req, res, next) => {
   try {
     const companyId = companyIdFor(req.session.id)
+
+    /*
+     * An unfinished draft is reopened rather than replaced.
+     *
+     * Drafts are no longer shown in the history, so this is the only way back
+     * to one — and without it every press of New would start another row while
+     * the previous draft, and any CVs uploaded into it, sat invisible on the
+     * server. Returned in exactly the shape GET /api/hr/triage/:id uses, so the
+     * builder cannot tell a resumed draft from a reopened one.
+     */
+    const draft = latestDraft({ companyId, recruiterId: req.session.id })
+    if (draft) {
+      return res.json({
+        triage: draft,
+        files: draftFiles(draft.id),
+        failures: [],
+        states: pipelineStates(draft.id),
+        balance: triageBalance(companyId),
+        working: false,
+        readiness: launchReadiness({ triage: draft, capacity: capacityFor(companyId, req.session.id, draft) }),
+      })
+    }
+
     const triage = blankTriage()
 
     res.json({
@@ -6461,6 +6561,32 @@ app.post('/api/hr/triage/:id/files', recruiterOnly, triageUpload, async (req, re
   } catch (error) {
     // Anything still on disk from a rejected request is not ours to keep.
     for (const file of uploaded) await fs.promises.unlink(file.path).catch(() => {})
+    next(error)
+  }
+})
+
+/**
+ * Removes every file from a draft — the same rules as removing one: only the
+ * owning company, and only before the Triage has started, since a launched
+ * Triage has already been paid for against these exact files.
+ */
+app.delete('/api/hr/triage/:id/files', recruiterOnly, (req, res, next) => {
+  try {
+    const companyId = companyIdFor(req.session.id)
+    const { triage, error } = mustOwn({ companyId, id: req.params.id })
+    if (error) throw new HttpError(404, 'That Triage does not exist.')
+    if (triage.launched) throw new HttpError(409, 'This Triage has already started.')
+
+    const removed = removeAllFiles({ triageId: triage.id })
+
+    const updated = getTriage({ companyId, id: triage.id })
+    res.json({
+      removed,
+      triage: updated,
+      files: draftFiles(triage.id),
+      readiness: launchReadiness({ triage: updated, capacity: capacityFor(companyId, req.session.id, updated) }),
+    })
+  } catch (error) {
     next(error)
   }
 })

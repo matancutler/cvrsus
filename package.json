@@ -42,6 +42,7 @@
     "test:security": "node test/security-check.mjs",
     "test:landing": "node test/landing-check.mjs",
     "test:cookies": "node test/cookie-auth-check.mjs",
+    "test:session-refresh": "node test/session-refresh-check.mjs",
     "test:stats": "node test/stats-banner-check.mjs",
     "test:pricing": "node test/pricing-check.mjs",
     "test:legal": "node test/legal-check.mjs",
@@ -60,6 +61,9 @@
     "test:recruiter-profile": "node test/recruiter-profile-check.mjs",
     "test:recruiter-usage": "node test/recruiter-usage-check.mjs",
     "test:triage": "node test/triage-check.mjs",
+    "test:triage-draft-ux": "node test/triage-draft-ux-check.mjs",
+    "test:triage-history": "node test/triage-history-check.mjs",
+    "test:comments": "node test/comments-check.mjs",
     "test:triage-funnel": "node test/triage-funnel-check.mjs",
     "test:triage-capacity": "node test/triage-capacity-check.mjs"
   },

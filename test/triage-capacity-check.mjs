@@ -125,7 +125,11 @@ check('and none of them cost anything', capacity(org.company.id) === 0)
 
 const listed = await json(await fetch(`${BASE}/api/hr/triages`, { headers: H(org.token) }))
 check('the dashboard reports a CV balance, not a number of Triages',
-  listed.balance === 0 && listed.triages.length === 4 && listed.credits === undefined)
+  listed.balance === 0 && listed.credits === undefined)
+/* Four drafts, none started — so none of them is history. They used to be
+   listed, and an abandoned draft sat in the rail as "Untitled Triage". */
+check('and unlaunched drafts are not listed as history', listed.triages.length === 0,
+  `${listed.triages.length} listed`)
 
 // ------------------------------------------------------ only valid CVs ---
 

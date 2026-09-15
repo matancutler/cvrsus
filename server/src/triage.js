@@ -129,15 +129,71 @@ export function blankTriage() {
 }
 
 /** Every Triage this organization owns, newest first. */
+/**
+ * The Triages a recruiter has actually started — the history.
+ *
+ * Drafts used to be listed too, so opening New Triage and leaving without
+ * pressing Start put an "Untitled Triage" in the rail: a record of a job nobody
+ * committed to, indistinguishable at a glance from real ones. The history is now
+ * what was launched and paid for. An unfinished draft is not lost — pressing
+ * New reopens it (see latestDraft) — it just is not history.
+ */
 export function listTriages(companyId) {
   return db.prepare(`
     SELECT t.*,
            TRIM(COALESCE(r.first_name, '') || ' ' || COALESCE(r.last_name, '')) AS author
     FROM triages t
     LEFT JOIN recruiters r ON r.id = t.recruiter_id
-    WHERE t.company_id = ?
+    WHERE t.company_id = ? AND t.ledger_id IS NOT NULL
     ORDER BY t.created_at DESC
   `).all(companyId).map(triageView)
+}
+
+/*
+ * A draft with nothing in it: no title, no job description, no files. Written
+ * as SQL so the same definition is used to find one and to clear them away.
+ */
+const EMPTY_DRAFT = `
+  t.ledger_id IS NULL AND t.status = 'draft'
+  AND TRIM(COALESCE(t.title, '')) = '' AND TRIM(COALESCE(t.raw_jd, '')) = ''
+  AND NOT EXISTS (SELECT 1 FROM triage_applicants a WHERE a.triage_id = t.id)
+`
+
+/**
+ * This recruiter's unfinished draft, if they have one — what New reopens.
+ *
+ * Hiding drafts from the history would otherwise strand them: a recruiter who
+ * wrote a job description, uploaded two hundred CVs and clicked away to check
+ * something would come back to a blank builder with no route to their work, and
+ * the CVs would sit on the server with nothing pointing at them. Reopening the
+ * latest draft means nothing uncommitted is lost and nothing piles up — each
+ * recruiter has at most one draft in play.
+ *
+ * Per recruiter, not per company: a colleague's half-built Triage is not yours
+ * to resume.
+ *
+ * Empty drafts other than the one being reopened are deleted on the way: they
+ * carry nothing, and they are exactly the rows that used to become "Untitled
+ * Triage".
+ */
+export function latestDraft({ companyId, recruiterId }) {
+  const row = db.prepare(`
+    SELECT t.id FROM triages t
+    WHERE t.company_id = ? AND t.recruiter_id = ?
+      AND t.ledger_id IS NULL AND t.status = 'draft'
+    ORDER BY t.updated_at DESC, t.id DESC
+    LIMIT 1
+  `).get(companyId, recruiterId)
+
+  db.prepare(`
+    DELETE FROM triages
+    WHERE id IN (
+      SELECT t.id FROM triages t
+      WHERE t.company_id = ? AND t.recruiter_id = ? AND t.id != ? AND ${EMPTY_DRAFT}
+    )
+  `).run(companyId, recruiterId, row?.id ?? -1)
+
+  return row ? getTriage({ companyId, id: row.id }) : null
 }
 
 export function getTriage({ companyId, id }) {
@@ -301,6 +357,31 @@ export function removeFile({ triageId, applicantId }) {
   fs.promises.unlink(path.join(UPLOAD_DIR, row.stored_name)).catch(() => {})
   recount(triageId)
   return true
+}
+
+/**
+ * Every file in a draft, in one go.
+ *
+ * The alternative was one request per file from the page, and a draft holds up
+ * to 500 — so "remove all" would be minutes of requests that could stop halfway
+ * on a dropped connection and leave a pile nobody chose. One statement either
+ * clears the draft or does not.
+ *
+ * Rows first, then the files, for the same reason removeFile does it: a failed
+ * unlink leaves an orphan the startup sweep will collect, where the reverse
+ * order would leave a row pointing at nothing.
+ */
+export function removeAllFiles({ triageId }) {
+  const rows = db.prepare(
+    `SELECT stored_name FROM triage_applicants WHERE triage_id = ?`,
+  ).all(triageId)
+
+  db.prepare(`DELETE FROM triage_applicants WHERE triage_id = ?`).run(triageId)
+  for (const row of rows) {
+    if (row.stored_name) fs.promises.unlink(path.join(UPLOAD_DIR, row.stored_name)).catch(() => {})
+  }
+  recount(triageId)
+  return rows.length
 }
 
 /** Recomputes the denormalised counters from the rows they summarise. */

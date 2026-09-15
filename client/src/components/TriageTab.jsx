@@ -50,7 +50,7 @@ export default function TriageTab({
    * object rather than an id: "no Triage open" and "a new Triage open" are
    * different states and a bare null cannot hold both.
    */
-  const [open, setOpen] = useState(opens ? { id: opens.id } : null)
+  const [open, setOpen] = useState(opens ? { id: opens.id, at: opens.at } : null)
 
   /*
    * An instruction that arrived while this tab was already the one showing.
@@ -67,7 +67,7 @@ export default function TriageTab({
    * again to get back.
    */
   useEffect(() => {
-    if (opens) setOpen({ id: opens.id })
+    if (opens) setOpen({ id: opens.id, at: opens.at })
   }, [opens?.at])
 
   /*
@@ -84,6 +84,20 @@ export default function TriageTab({
    */
   return (
     <TriageWorkspace
+      /*
+       * A fresh workspace for every instruction from the rail.
+       *
+       * The workspace copies `id` into its own state once, on mount, so the
+       * builder can adopt the id of a draft it creates without being remounted
+       * mid-keystroke. That meant a new `id` prop was ignored: pressing New
+       * Triage while an existing Triage was open changed the prop to null and
+       * left the old Triage on screen, so the button looked dead.
+       *
+       * Keyed on the instruction (`at` is a timestamp per press), not on the
+       * workspace's internal id — so pressing New or another row remounts, while
+       * the builder creating its own draft does not.
+       */
+      key={open ? `${open.id ?? 'new'}:${open.at ?? 0}` : 'none'}
       id={open?.id ?? null}
       /* The live figure from the wallet, so a purchase made in the Billing
          dialog over this screen reaches it. Billing opens as an overlay and
@@ -197,7 +211,15 @@ function TriageWorkspace({
      knows it before this component's state does. */
   const load = useCallback(async (which = id) => {
     try {
-      setState(await get(which ? `/api/hr/triage/${which}` : '/api/hr/triages/new', 'recruiter'))
+      const data = await get(which ? `/api/hr/triage/${which}` : '/api/hr/triages/new', 'recruiter')
+      /*
+       * New Triage may come back with the recruiter's unfinished draft rather
+       * than a blank one — drafts are not listed in the history, so this is how
+       * they are reached. Adopt its id before rendering, or the builder's first
+       * keystroke would create a second draft beside the one it is showing.
+       */
+      if (!which && data?.triage?.id) setId(data.triage.id)
+      setState(data)
       setError('')
     } catch (err) {
       setError(err.message)
@@ -477,6 +499,25 @@ async function filesFromDrop(dataTransfer) {
     }
   }
 
+  /*
+   * Every file at once, after asking.
+   *
+   * Asked because it cannot be undone and the pile can be hundreds of CVs
+   * gathered from several folders — a mis-click here costs the recruiter the
+   * whole upload again. One request on the server, so it clears the draft
+   * completely or not at all.
+   */
+  async function removeAllFiles() {
+    const count = files.length
+    if (!window.confirm(`Remove all ${count} file${count === 1 ? '' : 's'} from this Triage?`)) return
+    try {
+      await del(`/api/hr/triage/${idRef.current}/files`, 'recruiter')
+      await reload(idRef.current)
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
   async function launch() {
     setLaunching(true)
     setError('')
@@ -716,12 +757,26 @@ async function filesFromDrop(dataTransfer) {
 
         {files.length > 0 && (
           <>
-            <p className="triage-file-summary">
-              <strong>{files.length}</strong> file{files.length === 1 ? '' : 's'} ready
-              {rejected.length > 0 && (
-                <> · <span className="triage-file-bad">{rejected.length} with problems</span></>
-              )}
-            </p>
+            <div className="triage-file-summary">
+              <p>
+                <strong>{files.length}</strong> file{files.length === 1 ? '' : 's'} ready
+                {rejected.length > 0 && (
+                  <> · <span className="triage-file-bad">{rejected.length} with problems</span></>
+                )}
+              </p>
+              {/* Right-aligned over the column of Remove buttons, so it reads as
+                  the same action for every row. Disabled mid-upload: clearing a
+                  draft that more files are still arriving into would leave the
+                  late ones behind looking like survivors. */}
+              <button
+                type="button"
+                className="btn btn-quiet btn-small triage-remove-all"
+                onClick={removeAllFiles}
+                disabled={Boolean(upload && !upload.finished)}
+              >
+                Remove all
+              </button>
+            </div>
 
             <ul className="triage-files">
               {files.map((file) => (
@@ -1245,9 +1300,16 @@ function TriageResultCard({ row, triageId, onOpen, onFile, folder = null }) {
           </div>
         </div>
 
-        {row.analysis.reasoning && (
-          <p className="reasoning-line triage-reasoning">{row.analysis.reasoning}</p>
-        )}
+        {/*
+          No reasoning on the card — it lives in the applicant dialog, which
+          opens on click and already shows it in full beside the strengths,
+          gaps and evidence.
+
+          Two lines of it ran under the score and collided with it, and on a
+          list of three hundred applicants the prose made every card twice as
+          tall while saying less than the dialog does. The card's job is to be
+          scanned: who, where, how strong. Why is one click away.
+        */}
       </div>
     </li>
   )

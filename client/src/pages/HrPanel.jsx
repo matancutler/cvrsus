@@ -52,7 +52,19 @@ export default function HrPanel() {
       setReady(true)
       return
     }
-    load().catch(() => signOutRequest()).finally(() => setReady(true))
+    /*
+     * Only a refusal ends the session — the rule the candidate portal already
+     * follows.
+     *
+     * This signed out on ANY failure: a 500, a dropped connection, a request
+     * that timed out while the server was waking up. Only a 401 means the
+     * cookie is dead. Everything else took a recruiter with a perfectly good
+     * session back to the sign-in card, and cleared the cookie so that the
+     * refresh they tried next could not recover it either.
+     */
+    load()
+      .catch((error) => { if (error?.status === 401) return signOutRequest('recruiter'); return undefined })
+      .finally(() => setReady(true))
   }, [load])
 
   /*
@@ -95,7 +107,7 @@ export default function HrPanel() {
     <Workspace
       me={me}
       onReload={load}
-      onSignOut={() => { signOutRequest().then(() => setMe(null)) }}
+      onSignOut={() => { signOutRequest('recruiter').then(() => setMe(null)) }}
     />
   )
 }

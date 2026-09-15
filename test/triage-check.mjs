@@ -270,18 +270,20 @@ check('the payload also carries a count of Triage workspaces',
 check('and it counts workspaces rather than capacity',
   walletAfter.wallet.triage.workspaces !== walletAfter.wallet.triage.balance
   && walletAfter.wallet.triage.workspaces
-    === db.prepare(`SELECT COUNT(*) AS n FROM triages WHERE company_id = ?`)
+    === db.prepare(`SELECT COUNT(*) AS n FROM triages WHERE company_id = ? AND ledger_id IS NOT NULL`)
       .get(org.company.id).n)
 
-/* A draft counts. It is a workspace the recruiter made, can reopen and can
-   delete, which is what the rail's number refers to. */
+/* A draft does NOT count. It used to — drafts were listed in the rail, so an
+   abandoned "Untitled Triage" nobody started sat in the history. The history is
+   now what was launched, and an unfinished draft is reopened through New rather
+   than shown, so the count follows the list. */
 const beforeDraft = walletAfter.wallet.triage.workspaces
 await json(await fetch(`${BASE}/api/hr/triage`, {
-  method: 'POST', headers: H(org.token), body: JSON.stringify({ title: 'A draft that counts' }),
+  method: 'POST', headers: H(org.token), body: JSON.stringify({ title: 'A draft that is not history' }),
 }))
 const withDraft = await json(await fetch(`${BASE}/api/recruiter/me`, { headers: H(org.token) }))
-check('an unlaunched draft counts towards it',
-  withDraft.wallet.triage.workspaces === beforeDraft + 1)
+check('an unlaunched draft does not count towards it',
+  withDraft.wallet.triage.workspaces === beforeDraft)
 check('while the capacity balance is untouched by making one',
   withDraft.wallet.triage.balance === walletAfter.wallet.triage.balance,
   'creating a workspace costs nothing; only submitting CVs does')

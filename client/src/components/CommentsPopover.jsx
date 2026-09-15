@@ -17,7 +17,8 @@ import { createPortal } from 'react-dom'
 import portalHost from '../portalHost.js'
 
 import { DATE_LOCALE } from '../dates.js'
-import { get, post } from '../api.js'
+import { del, get, post } from '../api.js'
+import { setCommentCount, useCommentCount } from '../commented.js'
 import { StatusNotice } from './Notice.jsx'
 
 export default function CommentsPopover({ candidateId, label = 'Comments', meId = null }) {
@@ -102,7 +103,12 @@ export default function CommentsPopover({ candidateId, label = 'Comments', meId 
   useEffect(() => {
     if (!open) return
     get(`/api/hr/candidates/${candidateId}/comments`, 'recruiter')
-      .then((data) => setComments(data.comments))
+      .then((data) => {
+        setComments(data.comments)
+        /* The list just read is the truth; the shared count may predate a
+           colleague's note or a deletion elsewhere. */
+        setCommentCount(candidateId, data.comments.length)
+      })
       .catch((err) => setError(err.message))
   }, [open, candidateId])
 
@@ -116,6 +122,7 @@ export default function CommentsPopover({ candidateId, label = 'Comments', meId 
     try {
       const data = await post(`/api/hr/candidates/${candidateId}/comments`, { body }, 'recruiter')
       setComments(data.comments)
+      setCommentCount(candidateId, data.comments.length)
       setDraft('')
       setWriting(false)
     } catch (err) {
@@ -125,7 +132,30 @@ export default function CommentsPopover({ candidateId, label = 'Comments', meId 
     }
   }
 
+  /*
+   * Deleting a note, after asking.
+   *
+   * Asked because a team's notes are a shared record — "Dana screened them in
+   * June" is exactly the kind of thing that is gone for everyone once removed.
+   * The button is only drawn where the server says this recruiter may delete
+   * (their own note, or any note for an admin); the server checks again.
+   */
+  async function remove(comment) {
+    if (!window.confirm('Delete this comment? Your team will no longer see it.')) return
+    setError('')
+    try {
+      const data = await del(`/api/hr/candidates/${candidateId}/comments/${comment.id}`, 'recruiter')
+      setComments(data.comments)
+      setCommentCount(candidateId, data.comments.length)
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
   const count = comments?.length ?? 0
+  /* From the shared count while the panel is shut, so the dot shows before the
+     notes themselves have been loaded. */
+  const known = useCommentCount(candidateId)
 
   return (
     <span className="comments-anchor">
@@ -133,12 +163,19 @@ export default function CommentsPopover({ candidateId, label = 'Comments', meId 
         ref={button}
         type="button"
         className={`icon-button comments-toggle${open ? ' comments-toggle-on' : ''}`}
-        aria-label={label}
+        aria-label={known > 0 ? `${label} (${known})` : label}
         aria-expanded={open}
-        title={label}
+        title={known > 0 ? `${known} comment${known === 1 ? '' : 's'}` : label}
         onClick={(event) => { event.stopPropagation(); setOpen((was) => !was) }}
       >
         <CommentIcon />
+        {/*
+          A dot, not a number: it answers "has my team said something about
+          this person" at a glance across a page of results, which is the whole
+          reason to show it on the card. The count is in the tooltip and the
+          panel for anyone who wants it.
+        */}
+        {known > 0 && <span className="comments-dot" aria-hidden="true" />}
       </button>
 
       {open && createPortal(
@@ -182,6 +219,17 @@ export default function CommentsPopover({ candidateId, label = 'Comments', meId 
                       dateStyle: 'medium', timeStyle: 'short',
                     })}
                   </time>
+                  {comment.canDelete && (
+                    <button
+                      type="button"
+                      className="comment-delete"
+                      aria-label={`Delete ${comment.recruiterId === meId ? 'your' : `${comment.author}'s`} comment`}
+                      title="Delete"
+                      onClick={() => remove(comment)}
+                    >
+                      Delete
+                    </button>
+                  )}
                 </p>
                 <p className="comment-body">{comment.body}</p>
               </article>

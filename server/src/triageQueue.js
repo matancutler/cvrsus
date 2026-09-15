@@ -567,6 +567,18 @@ async function runDeep(triage, batch) {
         record.model, VERSIONS.scoring, record.source, now(), row.id,
       )
       scored += 1
+
+      /*
+       * The count moves as each applicant lands, not when the batch does.
+       *
+       * It used to be recounted once, after every applicant in the batch had
+       * finished. Each row is saved the moment it is scored, so the list below
+       * filled in live while the header went on reading "0 of 26 fully
+       * analysed" — for as long as the slowest of twenty-five model calls took.
+       * One aggregate over a single Triage's rows is cheap; a counter that
+       * contradicts the list under it is not.
+       */
+      recount(triage.id)
     } catch (error) {
       /*
        * Failed on this one applicant only. Left as 'failed' rather than

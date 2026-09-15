@@ -220,7 +220,15 @@ export default function SearchHero({
           ref={textarea}
           rows={1}
           value={value}
-          readOnly={submitted}
+          /*
+           * Locked while a search is running, not only once it has finished.
+           *
+           * It was editable in between: the results being prepared were for the
+           * text as pasted, so anything typed during the wait described a search
+           * that was not being run — and the page would then show results under
+           * a job description they did not come from.
+           */
+          readOnly={submitted || busy}
           /*
            * Let the text choose its own direction.
            *
@@ -235,7 +243,7 @@ export default function SearchHero({
            * CONTENT, which changes as somebody types, not of the layout.
            */
           dir="auto"
-          className={submitted ? 'input-locked' : undefined}
+          className={submitted || busy ? 'input-locked' : undefined}
           placeholder={maxCvs > 0
             ? 'Paste the job description, or attach it as a PDF or Word file. '
               + `You can also upload up to ${maxCvs} CVs to try our Triage feature.`
@@ -250,7 +258,10 @@ export default function SearchHero({
              the note in TriageTab. Text paste falls through untouched, and the
              public demo takes documents only, so it declines here as well. */
           onPaste={(e) => {
-            if (!acceptsImages) return
+            /* readOnly stops typed and pasted TEXT, but this handler runs
+               regardless — so a screenshot pasted mid-search would still have
+               been read in and replaced the description being searched. */
+            if (!acceptsImages || busy || submitted) return
             const picture = pastedImage(e.clipboardData)
             if (!picture) return
             e.preventDefault()

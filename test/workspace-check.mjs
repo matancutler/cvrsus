@@ -479,24 +479,24 @@ check('the builder counts its steps out loud',
     .every((heading) => triageTab.includes(`<h3>${heading}</h3>`)))
 
 /*
- * And a folder is a way of handing over CVs — through the one control.
+ * And a folder is a way of handing over CVs — dropped, or chosen.
  *
  * Applications arrive in a directory, not as a selection, and
  * `dataTransfer.files` is empty when a folder is dropped, so the most natural
  * gesture on a dropzone did nothing at all. That is answered by walking the
  * entries.
  *
- * There was also a second button, "Choose a folder instead", because
- * `webkitdirectory` is a property of the PICKER and not of the pick — no single
- * file input can offer both. It is gone: two controls to choose between before
- * you know the difference is worse than one that reads a dropped folder whole.
+ * The "Choose a folder instead" button was removed once, on the argument that
+ * one control beats two. It came back: the dropzone says "click to browse", the
+ * click opens a FILE chooser, and a folder cannot be picked in one — so the only
+ * way to hand over a folder was a gesture nobody was told about. Recruiters
+ * asked to select a folder, and `webkitdirectory` is a property of the picker,
+ * so that needs its own input.
  */
-/* Matched against code, not prose: the comment above the dropzone explains why
-   the second control went, and names it. */
-check('there is one control, not a file button and a folder button',
-  !/triage-folder-pick/.test(triageTab)
-  && !/folderInput\.current/.test(triageTab)
-  && !/webkitdirectory=""/.test(triageTab))
+check('a folder can be chosen with its own picker',
+  /folderInput\.current\?\.click\(\)/.test(triageTab)
+  && /webkitdirectory=""/.test(triageTab))
+check('and dropping one still works', /filesFromDrop\(event\.dataTransfer\)/.test(triageTab))
 check('and the zone says a folder can be dropped on it',
   /Drop the CVs or a folder here/.test(triageTab)
   && /A whole folder can be dropped in/.test(triageTab))
@@ -1525,9 +1525,11 @@ check('and railSlice can be told which timestamp to read',
 check('a rail row opens that Triage, not the dashboard',
   /onOpen=\{\(id\) => \{ setTab\('triage'\); setTriageOpens\(\{ at: Date\.now\(\), id \}\) \}\}/.test(panel),
   'the tab first, then the instruction — an id means nothing until the tab is showing')
+/* The instruction's timestamp is carried as well as its id, because the
+   workspace is keyed on it — see the key on TriageWorkspace. */
 check('and the Triage tab acts on it',
-  /const \[open, setOpen\] = useState\(opens \? \{ id: opens\.id \} : null\)/.test(triageTab)
-  && /if \(opens\) setOpen\(\{ id: opens\.id \}\)/.test(triageTab))
+  /const \[open, setOpen\] = useState\(opens \? \{ id: opens\.id, at: opens\.at \} : null\)/.test(triageTab)
+  && /if \(opens\) setOpen\(\{ id: opens\.id, at: opens\.at \}\)/.test(triageTab))
 check('keyed on the timestamp, so pressing the same row twice works',
   /\}, \[opens\?\.at\]\)/.test(triageTab),
   'the same id twice is the same value, and an effect on it would not fire')

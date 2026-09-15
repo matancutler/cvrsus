@@ -842,7 +842,7 @@ export const setTags = db.transaction(({ companyId, candidateId, tags }) => {
  * signed with the old one. `— a former colleague` when the account is gone,
  * because the note still happened.
  */
-export function listComments({ companyId, candidateId }) {
+export function listComments({ companyId, candidateId, viewer = null }) {
   return db.prepare(`
     SELECT c.id, c.body, c.created_at, c.recruiter_id,
            TRIM(COALESCE(r.first_name, '') || ' ' || COALESCE(r.last_name, '')) AS author
@@ -856,16 +856,64 @@ export function listComments({ companyId, candidateId }) {
     at: row.created_at,
     recruiterId: row.recruiter_id,
     author: row.author?.trim() || 'a former colleague',
+    /* Decided here rather than in the page, so the button is only drawn for
+       somebody the delete route would actually let through. */
+    canDelete: Boolean(viewer && mayDeleteComment({ comment: row, viewer })),
   }))
 }
 
-export function addComment({ companyId, candidateId, recruiterId, body }) {
+export function addComment({ companyId, candidateId, recruiterId, body, viewer = null }) {
   db.prepare(`
     INSERT INTO candidate_comments (company_id, candidate_id, recruiter_id, body, created_at)
     VALUES (?, ?, ?, ?, ?)
   `).run(companyId, candidateId, recruiterId, body, new Date().toISOString())
 
-  return listComments({ companyId, candidateId })
+  return listComments({ companyId, candidateId, viewer })
+}
+
+/**
+ * Who may remove a note: the person who wrote it, or an organization admin.
+ *
+ * The author, because it is their note. An admin as well, because otherwise a
+ * note left by a colleague who has since left the company — or one that should
+ * never have been written about a candidate — could not be removed by anyone.
+ * Nobody else: a team's notes are shared, and a recruiter quietly deleting a
+ * colleague's record of a phone screen would defeat the reason they exist.
+ */
+function mayDeleteComment({ comment, viewer }) {
+  return comment.recruiter_id === viewer.id || Boolean(viewer.isAdmin)
+}
+
+/**
+ * Removes one note, if the viewer may. Scoped to the company and the candidate
+ * as well as the id, so an id guessed from another organization finds nothing.
+ */
+export function deleteComment({ companyId, candidateId, commentId, viewer }) {
+  const comment = db.prepare(`
+    SELECT id, recruiter_id FROM candidate_comments
+    WHERE id = ? AND company_id = ? AND candidate_id = ?
+  `).get(commentId, companyId, candidateId)
+
+  if (!comment) return { ok: false, reason: 'missing' }
+  if (!mayDeleteComment({ comment, viewer })) return { ok: false, reason: 'forbidden' }
+
+  db.prepare(`DELETE FROM candidate_comments WHERE id = ?`).run(comment.id)
+  return { ok: true, comments: listComments({ companyId, candidateId, viewer }) }
+}
+
+/**
+ * Every candidate this company has written a note about, with how many.
+ *
+ * What lets a result card show that a note exists without opening it. One query
+ * for the whole company rather than one request per card: a results page is
+ * twenty-five cards, and the comment panel only loads its contents when opened.
+ */
+export function commentedCandidates(companyId) {
+  return db.prepare(`
+    SELECT candidate_id AS candidateId, COUNT(*) AS count
+    FROM candidate_comments WHERE company_id = ?
+    GROUP BY candidate_id
+  `).all(companyId)
 }
 
 // -------------------------------------------------------------- messages ---

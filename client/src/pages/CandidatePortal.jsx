@@ -46,13 +46,13 @@ export default function CandidatePortal() {
      * rather than starting an account.
      */
     load()
-      .catch((error) => { if (error?.status === 401) return signOutRequest(); return undefined })
+      .catch((error) => { if (error?.status === 401) return signOutRequest('candidate'); return undefined })
       .finally(() => setReady(true))
   }, [load])
 
   async function signOut() {
     // Only the server can clear an httpOnly cookie, so this is a request now.
-    await signOutRequest()
+    await signOutRequest('candidate')
     setAccount(null)
   }
 
@@ -1340,7 +1340,7 @@ function DangerZone({ account }) {
       await del('/api/candidate/me', 'candidate', { acknowledged: true })
       /* Awaited: the line below navigates, and an unawaited sign-out races the
          navigation — sometimes clearing the dismissals, sometimes not. */
-      await signOutRequest()
+      await signOutRequest('candidate')
       // A full reload is the honest end state: there is no account left to render.
       window.location.assign('/')
     } catch (err) {

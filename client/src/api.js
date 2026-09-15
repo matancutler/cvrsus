@@ -10,6 +10,7 @@
 
 /** A readable flag the server sets alongside the session. Never a credential. */
 import { clearStandingNotices } from './components/Notice.jsx'
+import { rolesInHint } from './sessionHint.js'
 
 const HINT_COOKIE = 'cvrsus_session'
 const CSRF_COOKIE = 'cvrsus_csrf'
@@ -37,7 +38,10 @@ function readCookie(name) {
  * comes back 401, because the real credential is the cookie script cannot read.
  */
 export function hasSession(role) {
-  return readCookie(HINT_COOKIE) === role
+  /* A list, not a single role: signed in as a candidate and a recruiter in the
+     same browser is a normal state, and reading the hint as one value made
+     whichever role signed in second erase the first on refresh. */
+  return rolesInHint(readCookie(HINT_COOKIE)).includes(role)
 }
 
 /**
@@ -159,10 +163,24 @@ export function withToken(path) {
  * state rather than loading a page — so without this a standing warning stayed
  * silenced for whoever signed in next in the same tab.
  */
-export async function signOut() {
-  await fetch('/api/auth/sign-out', options({ method: 'POST' })).catch(() => {})
+export async function signOut(role = null) {
+  /* The role being left. Without it the server ends every session in this
+     browser — so signing out of the recruiter workspace, or failing to load it,
+     also signed the same person out of their candidate account. */
+  await fetch('/api/auth/sign-out', options({
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(role ? { role } : {}),
+  })).catch(() => {})
   clearStandingNotices()
+  /* Announced rather than calling each cache directly, so modules that hold
+     per-account state (comment counts, for one) can forget it without api.js
+     importing every one of them. */
+  window.dispatchEvent(new CustomEvent(SIGNED_OUT, { detail: { role } }))
 }
+
+/** Fired after a sign-out request, for anything holding per-account state. */
+export const SIGNED_OUT = 'cvrsus:signed-out'
 
 /** Downloads through an authenticated fetch, since <a href> cannot carry one. */
 export async function downloadFile(path, fileName) {

@@ -1167,16 +1167,17 @@ export function triagesLaunched(companyId) {
 }
 
 /**
- * How many Triage workspaces this organization has, drafts included.
+ * How many Triages this organization has in its history.
  *
- * Not the same question as triagesLaunched above, and the difference is the
- * point: that one counts the Triages that have been paid for, which is a
- * billing fact. This counts the rows a recruiter would see in the list, which
- * is a navigation fact — a draft is a workspace they made, can reopen and can
- * delete, so it is one of the things the word "Triage" in the rail refers to.
+ * It counted drafts too, because drafts used to be listed. They no longer are —
+ * the history is what was started, and an unfinished draft is reopened by New
+ * rather than shown as an "Untitled Triage" — so a count including them would
+ * name a number of rows the rail does not show. Kept as its own function rather
+ * than folded into triagesLaunched because it answers the navigation question;
+ * today the two answers happen to coincide.
  */
 export function triageWorkspaces(companyId) {
-  return db.prepare(`SELECT COUNT(*) AS n FROM triages WHERE company_id = ?`)
+  return db.prepare(`SELECT COUNT(*) AS n FROM triages WHERE company_id = ? AND ledger_id IS NOT NULL`)
     .get(companyId).n
 }
 

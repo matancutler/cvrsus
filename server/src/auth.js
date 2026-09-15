@@ -182,7 +182,9 @@ export function requireRole(secret, role, isCurrent = null) {
        * shell that 401s on everything — the session is over, so the page should
        * look like it.
        */
-      clearSessionCookies(res, req)
+      /* Only this role's cookie. A recruiter session taken over on another
+         device says nothing about the candidate account in this browser. */
+      clearSessionCookies(res, req, role)
       return res.status(401).json({ error: stale, reason: 'session-superseded' })
     }
 
@@ -276,19 +278,68 @@ function append(res, value) {
   res.setHeader('Set-Cookie', [...list, value])
 }
 
+/** How long a hint lives when it is rewritten without a fresh session behind it. */
+const HINT_HOURS = Number(process.env.SESSION_HOURS) || 12
+
+/**
+ * The roles this browser is signed into, as far as its cookies show.
+ *
+ * Read from the session cookies actually sent, not from the old hint, so a
+ * stale hint can never keep a role alive that has no session behind it.
+ */
+function rolesWithSessions(req) {
+  const cookies = parseCookies(req)
+  return Object.keys(SESSION_COOKIES).filter((role) => cookies[SESSION_COOKIES[role]])
+}
+
+/**
+ * Writes the hint as the list of roles signed in — or removes it when none are.
+ *
+ * It used to hold exactly one role, so signing in as a candidate overwrote a
+ * recruiter hint in the same browser, and refreshing the recruiter page then
+ * found "no session" and showed the sign-in card without asking the server.
+ * Anyone testing both sides of the product was signed out of one of them on
+ * every refresh.
+ *
+ * A single role is still written as just that role, so every browser holding
+ * the old value is already in the new format. Encoded because a comma is not a
+ * legal bare cookie character, whatever browsers tolerate.
+ */
+function writeHint(res, req, roles, maxAgeSeconds) {
+  const attributes = cookieAttributes(req, roles.length ? maxAgeSeconds : 0)
+    .filter((a) => a !== 'HttpOnly')
+  append(res, `${SESSION_HINT}=${roles.length ? encodeURIComponent(roles.join(',')) : ''}; ${attributes.join('; ')}`)
+}
+
 export function setSessionCookie(res, req, { role, token, hours }) {
   const maxAge = Math.round(hours * 60 * 60)
   append(res, `${SESSION_COOKIES[role]}=${encodeURIComponent(token)}; ${cookieAttributes(req, maxAge).join('; ')}`)
 
   // The hint is deliberately readable, so it omits HttpOnly.
-  const hint = cookieAttributes(req, maxAge).filter((a) => a !== 'HttpOnly')
-  append(res, `${SESSION_HINT}=${role}; ${hint.join('; ')}`)
+  const roles = [...new Set([...rolesWithSessions(req), role])]
+  writeHint(res, req, roles, maxAge)
 }
 
-export function clearSessionCookies(res, req) {
+/**
+ * Ends one role's session, or every role's when none is named.
+ *
+ * Signing out — and being signed out by a sign-in on another device — used to
+ * clear every role's cookie regardless of which was ending. So a recruiter
+ * whose page failed to load, or whose account was opened on a phone, also lost
+ * the candidate session in the same browser: one event, two sign-outs.
+ *
+ * Naming the role ends that session and leaves the other exactly as it was.
+ * Naming none keeps the old behaviour, which is still right for a sign-out that
+ * genuinely means "this browser is done".
+ */
+export function clearSessionCookies(res, req, role = null) {
   const expired = ['Path=/', 'HttpOnly', 'SameSite=Lax', ...(isSecure(req) ? ['Secure'] : []), 'Max-Age=0']
-  for (const name of Object.values(SESSION_COOKIES)) append(res, `${name}=; ${expired.join('; ')}`)
-  append(res, `${SESSION_HINT}=; ${expired.filter((a) => a !== 'HttpOnly').join('; ')}`)
+
+  const ending = role && SESSION_COOKIES[role] ? [role] : Object.keys(SESSION_COOKIES)
+  for (const name of ending) append(res, `${SESSION_COOKIES[name]}=; ${expired.join('; ')}`)
+
+  const remaining = rolesWithSessions(req).filter((r) => !ending.includes(r))
+  writeHint(res, req, remaining, Math.round(HINT_HOURS * 60 * 60))
 }
 
 /**
