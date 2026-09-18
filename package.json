@@ -38,6 +38,7 @@
     "ai:cost": "node server/scripts/ai-cost.mjs",
     "ai:eval": "node server/scripts/ai-eval.mjs",
     "triage:audit": "node server/scripts/triage-audit.mjs",
+    "data:test": "node server/scripts/test-data.mjs",
     "test:criterion-scoring": "node test/criterion-scoring-check.mjs",
     "test:ai-observability": "node test/ai-observability-check.mjs",
     "test:chip-alignment": "node test/chip-alignment-check.mjs",

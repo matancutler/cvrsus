@@ -470,8 +470,9 @@
       <li><a href="#recovery">Account recovery</a></li>
       <li><a href="#inbox">Contact inbox</a></li>
       <li><a href="#sweeps">Maintenance</a></li>
+      <li><a href="#ai">The AI layer</a></li>
       <li><a href="#tests">Tests</a></li>
-      <li><a href="#git">Git &amp; GitHub</a></li>
+      <li><a href="#git">Git, GitHub &amp; deploying</a></li>
     </ol>
 
     <div class="legend">
@@ -1159,6 +1160,140 @@ node server/scripts/contact.mjs show <span class="c">&lt;id&gt;</span></pre>
     </section>
 
     <!-- ----------------------------------------------------------- tests -- -->
+    <section id="ai">
+      <h2>The AI layer</h2>
+      <p class="section-note">
+        Every model call falls back to keyword matching when it fails, on purpose — a recruiter who
+        loses a shortlist to one timeout is worse off than one who gets a cruder ranking. The cost
+        of that design is that the product can lose its reasoning entirely and still look like it is
+        working, which is what the first two commands here exist to catch.
+      </p>
+
+      <div class="callout warn">
+        <p>
+          <strong>If spend is running away, set <code>AI_PAUSED=1</code> in Render and save.</strong>
+          Every model call switches off, scores come from keyword matching, and nothing breaks. It
+          takes effect on the next restart and needs no deploy. Unset it to bring the model back.
+        </p>
+      </div>
+
+      <h3>What each setting does</h3>
+
+      <div class="compare-wrap">
+        <table class="compare">
+          <thead>
+            <tr>
+              <th scope="col">Setting</th>
+              <th scope="col">Default</th>
+              <th scope="col">What it changes</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th scope="row"><code>AI_PAUSED</code></th>
+              <td>off</td>
+              <td>Turns every model call off. The emergency brake.</td>
+            </tr>
+            <tr>
+              <th scope="row"><code>MATCH_EFFORT</code></th>
+              <td>high</td>
+              <td>How hard the model thinks about each CV. Thinking is billed as output, so this is
+                the single largest lever on cost — <code>medium</code> is roughly a third of the
+                price. Do not change it without running <code>npm run ai:eval</code> first.</td>
+            </tr>
+            <tr>
+              <th scope="row"><code>MATCH_MODEL</code></th>
+              <td>claude-opus-5</td>
+              <td>Which model judges candidates. Part of the analysis cache key, so switching it
+                does not serve old answers under a new name — but it does mean every reopened
+                search re-analyses once.</td>
+            </tr>
+            <tr>
+              <th scope="row"><code>WRITER_MODEL</code></th>
+              <td>claude-sonnet-5</td>
+              <td>Writes the paragraph and interview questions when a recruiter opens a candidate.
+                A writing job, not a judgement, which is why it is the cheaper model.</td>
+            </tr>
+            <tr>
+              <th scope="row"><code>MATCH_DAILY_CAP</code></th>
+              <td>1500</td>
+              <td>Model-read analyses per company per rolling 24 hours. A circuit breaker, not a
+                budget: over it, scoring falls back to keyword matching.</td>
+            </tr>
+            <tr>
+              <th scope="row"><code>DEMO_DAILY_CAP</code></th>
+              <td>200</td>
+              <td>The same, globally, for the public demo — the one surface with no account behind
+                it and no limit on how many browsers exist.</td>
+            </tr>
+            <tr>
+              <th scope="row"><code>PUBLIC_DEMO_DEEP</code></th>
+              <td>8</td>
+              <td>How many candidates the demo reads deeply to show its six cards. It used to read
+                twenty-five.</td>
+            </tr>
+            <tr>
+              <th scope="row"><code>PUBLIC_DEMO_MODEL</code></th>
+              <td>claude-sonnet-5</td>
+              <td>The demo judges on the cheaper model. Strangers are not paying customers.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>What changed for Triage</h3>
+
+      <p>
+        A Triage score is now <strong>that candidate against the role, on its own</strong>. It used
+        to be scaled against the best CV in the pile, which meant a strong arrival quietly lowered
+        everybody else's number. Scores no longer move; positions still do, when a stronger CV lands
+        above someone. Opening an old Triage may therefore show different numbers than it did
+        before — lower is not worse.
+      </p>
+      <p>
+        CVs now arrive in <strong>deliveries</strong>. A session can take a second or third pile
+        while it is already running: each delivery is parsed and ranked on its own, and ranks
+        already given out never move. The queue also looks for work every few seconds
+        (<code>TRIAGE_WAKE_MS</code>), so analysis finishes whether or not a browser is open.
+      </p>
+      <p>
+        A recruiter still sees the first fifty analysed immediately and twenty-five more each time
+        they reach the end of a page. Nothing analyses a pile of three hundred CVs in full unless
+        the recruiter reads that far.
+      </p>
+
+      <h3>After a deploy that touches the AI</h3>
+
+      <ol class="runbook">
+        <li>
+          <div>
+            <h3>Run one search or Triage on the live site</h3>
+            <p>Anything that makes the product judge a CV.</p>
+          </div>
+        </li>
+        <li>
+          <div>
+            <h3>npm run ai:health</h3>
+            <p>
+              In Render → the <strong>cursus</strong> service → <strong>Shell</strong>. It should say
+              analyses used a model. If it says everything fell back, the model layer is failing
+              silently and the scores on screen are keyword matches.
+            </p>
+          </div>
+        </li>
+        <li>
+          <div>
+            <h3>npm run ai:cost --days 1</h3>
+            <p>
+              Dollars per CV, and how much of the reading came from the prompt cache. A cache share
+              near zero on a batch of twenty-five means caching is not working, which costs about
+              double.
+            </p>
+          </div>
+        </li>
+      </ol>
+    </section>
+
     <section id="tests">
       <h2>Tests</h2>
 
@@ -1240,6 +1375,22 @@ node server/scripts/contact.mjs show <span class="c">&lt;id&gt;</span></pre>
 
         <article class="cmd-card">
           <div class="cmd-head">
+            <span class="cmd">npm run data:test</span>
+            <span class="risk risk-write">Writes</span>
+          </div>
+          <p class="what">
+            Creates a test recruiter with capacity, a job description and a handful of sample
+            applicants, and leaves three more CVs in <code>sample-cvs/</code> to add by hand. Made-up
+            people, so nothing real is at stake.
+          </p>
+          <p class="when">
+            On a local server you want to click around in. Never against production — it registers a
+            company and spends capacity.
+          </p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
             <span class="cmd">npm run ai:eval <span class="flag">--configs baseline,opus-medium --dry</span></span>
             <span class="risk risk-wreck">Spends</span>
           </div>
@@ -1278,7 +1429,55 @@ node server/scripts/contact.mjs show <span class="c">&lt;id&gt;</span></pre>
 
     <!-- ------------------------------------------------------------- git -- -->
     <section id="git">
-      <h2>Git &amp; GitHub</h2>
+      <h2>Git, GitHub &amp; deploying</h2>
+
+      <div class="callout">
+        <p>
+          <strong>Render deploys the <code>main</code> branch and nothing else.</strong> Pushing to
+          any other branch saves your work to GitHub and changes the live site not at all — which is
+          the point of working on a branch. A push to <code>main</code> starts a deploy within about
+          a minute, and the site answers 502 for a minute or two while the old instance stops and
+          the new one starts. That gap is normal.
+        </p>
+        <p>
+          <code>git push -u origin main</code> pushes the branch called <code>main</code>. If you are
+          standing on another branch it sends nothing new, and nothing deploys. Check where you are
+          with <code>git branch --show-current</code>.
+        </p>
+      </div>
+
+      <div class="stack" style="margin-bottom:1rem">
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">git push origin <span class="arg">&lt;branch&gt;</span>:main</span>
+            <span class="risk risk-wreck">Deploys</span>
+          </div>
+          <p class="what">Puts a branch's work on the live site.</p>
+          <p class="when">
+            When the branch is finished and tested. Watch Render → <strong>Events</strong> for the
+            deploy, and check <code>/api/health</code> comes back at 200 afterwards.
+          </p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">git push origin <span class="arg">&lt;last-good-commit&gt;</span>:main --force-with-lease</span>
+            <span class="risk risk-wreck">Deploys</span>
+          </div>
+          <p class="what">Rolls the live site back to an earlier commit.</p>
+          <p class="when">
+            When a deploy broke something and you want the previous version back now. Render's
+            dashboard can also roll back to a previous deploy, which is the same thing with buttons.
+          </p>
+        </article>
+      </div>
+
+      <p class="section-note">
+        <strong>A deploy can change the live database.</strong> New columns and tables are created
+        on boot. They are only ever added, never dropped, so the previous version still runs against
+        the newer database — which is what makes a rollback safe.
+      </p>
+
       <p class="section-note">
         Committing is a local save point; pushing copies it to GitHub. Commit whenever you finish
         something coherent, push at the end of a session.
