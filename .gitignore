@@ -31,3 +31,7 @@ surroundings/
 # Database and upload backups. Local safety copies, sometimes tens of MB,
 # and they contain real candidate data — never in the repository.
 backups/
+
+# Real job ads and real CVs used to compare model settings. Never committed:
+# they are other people's documents, not test fixtures.
+eval/

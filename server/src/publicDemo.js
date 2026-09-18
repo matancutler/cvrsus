@@ -52,6 +52,31 @@ export const PUBLIC_DEMO = {
   /* How many masked cards a stranger sees. Enough to judge the pool, not
      enough to be worth harvesting. */
   maxResults: asInt(process.env.PUBLIC_DEMO_MAX_RESULTS, 6),
+  /*
+   * How many candidates the demo reads with the model.
+   *
+   * It used to run the recruiter's batch size — twenty-five deep analyses to
+   * choose the six cards it shows, at roughly four dollars a time, for anyone
+   * on the internet with a job description to paste. Retrieval has already
+   * ranked the pool before this point, so the six shown come from the top of
+   * it; analysing a couple more than are displayed leaves room for the minimum
+   * score to exclude one or two without emptying the page.
+   */
+  deepAnalyse: asInt(process.env.PUBLIC_DEMO_DEEP, 8),
+  /*
+   * The model the demo judges with.
+   *
+   * Sonnet rather than the Opus a recruiter's search uses, and the reasoning is
+   * not that strangers deserve worse: it is that this is the one surface with
+   * no account behind it, no limit on how many people can start one, and six
+   * masked cards as its entire output. A taster has to be good; it does not
+   * have to be the most expensive model available, and at a fifth of the price
+   * it can stay open to everyone.
+   *
+   * It travels into the analysis cache key with the answers it produces, so a
+   * demo never reads a recruiter's Opus assessment or writes over one.
+   */
+  model: process.env.PUBLIC_DEMO_MODEL ?? 'claude-sonnet-5',
   /* Below this a match is not worth showing. §9: do not fill the page with
      weak candidates — say there are not enough strong ones. */
   minScore: asInt(process.env.PUBLIC_DEMO_MIN_SCORE, 40),
@@ -201,6 +226,12 @@ export async function runPublicSearch({ jobDescription, clientHash = null, secre
     companyId: null,
     jobDescription,
     signal,
+    /* Named as the demo so its spend is visible in the ledger and so the global
+       daily ceiling applies to it — the one surface with no account behind it
+       and no limit on how many browsers the internet has. */
+    context: 'demo',
+    batchSize: PUBLIC_DEMO.deepAnalyse,
+    model: PUBLIC_DEMO.model,
   })
 
   const searchToken = crypto.randomBytes(24).toString('base64url')

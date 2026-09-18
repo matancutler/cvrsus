@@ -19,6 +19,7 @@ import { activityStatus, candidatesHiddenFrom } from '../profiles.js'
 import { preferenceIndex, preferencePermitsJob } from './preferences.js'
 import { MATCHING } from './config.js'
 import { analyseBatch, analysedUniverse, analysisModel } from './analysis.js'
+import { MATCH_MODEL } from '../ai.js'
 import { ensureJobMatchProfile, findOrCreateJob, jobConceptIds } from './jobProfile.js'
 import { normalizeUniverse } from './normalize.js'
 import { hardFilter, rankAndPool } from './retrieval.js'
@@ -37,6 +38,10 @@ import {
 export async function runSearch({
   recruiterId, companyId = null, chatId = null,
   jobDescription, instruction = null, title = null, refresh = false, signal,
+  /* Which surface is spending, how deep it may go, and which model judges. The
+     public demo passes all three: it shows six cards and used to analyse
+     twenty-five candidates on the most expensive model to choose them. */
+  context = 'search', batchSize = MATCHING.deepAnalysisBatch, model = MATCH_MODEL,
 }) {
   const { job, created } = findOrCreateJob({
     recruiterId, companyId, chatId, title, rawJd: jobDescription, instruction,
@@ -64,7 +69,7 @@ export async function runSearch({
   if (resumed) {
     const previous = await finishBatch({
       job, matchProfile, session: resumed, ids: [...displayedIds(resumed.id)],
-      batchIndex: 0, resumed: true, recruiterId, signal,
+      batchIndex: 0, resumed: true, recruiterId, signal, context, companyId, model,
     })
 
     /*
@@ -108,7 +113,7 @@ export async function runSearch({
     method,
     excluded,
     poolSize: pool.length,
-    batchSize: MATCHING.deepAnalysisBatch,
+    batchSize,
   })
 
   const batch = claimNextBatch(session.id, { batchIndex: 0 })
@@ -116,7 +121,7 @@ export async function runSearch({
   return finishBatch({
     job, matchProfile, session: getSession(session.id), ids: batch.ids,
     batchIndex: 0, exhausted: batch.exhausted, universeTotal: candidates.length,
-    eligibleTotal: eligible.length, recruiterId, signal,
+    eligibleTotal: eligible.length, recruiterId, signal, context, companyId, model,
   })
 }
 
@@ -126,7 +131,9 @@ export async function runSearch({
  * Idempotent: the cursor advanced when the batch was claimed, so a repeated
  * click analyses nobody twice and shows nobody twice.
  */
-export async function showMore({ sessionId, recruiterId, signal }) {
+export async function showMore({
+  sessionId, recruiterId, signal, context = 'search', companyId = null, model = MATCH_MODEL,
+}) {
   const session = getSession(sessionId)
   if (!session) return { error: 'not_found' }
   // Sessions carry a recruiter's private position in a search; another
@@ -144,13 +151,14 @@ export async function showMore({ sessionId, recruiterId, signal }) {
     // recruiter has simply reached the end of this retrieval.
     return finishBatch({
       job, matchProfile, session, ids: [], batchIndex: batch.batchIndex,
-      exhausted: true, recruiterId, signal,
+      exhausted: true, recruiterId, signal, context, companyId, model,
     })
   }
 
   return finishBatch({
     job, matchProfile, session, ids: batch.ids,
     batchIndex: batch.batchIndex, exhausted: batch.exhausted, recruiterId, signal,
+    context, companyId, model,
   })
 }
 
@@ -168,14 +176,15 @@ function jobFor(jobId) {
 async function finishBatch({
   job, matchProfile, session, ids, batchIndex, exhausted = false,
   universeTotal = null, eligibleTotal = null, resumed = false, recruiterId = null, signal,
+  context = 'search', companyId = null, model = MATCH_MODEL,
 }) {
   const rows = ids.length > 0 ? rowsFor(ids) : []
 
   const analysis = ids.length > 0
-    ? await analyseBatch({ job, matchProfile, rows, signal })
+    ? await analyseBatch({ job, matchProfile, rows, signal, context, companyId, model })
     : { results: new Map(), analysed: 0, reused: 0 }
 
-  const universe = analysedUniverse({ jobId: job.id, jdVersion: job.jd_version })
+  const universe = analysedUniverse({ jobId: job.id, jdVersion: job.jd_version, model })
   const scores = normalizeUniverse(universe)
 
   /*
@@ -230,7 +239,7 @@ async function finishBatch({
     reused: analysis.reused,
     scores,
     universe,
-    analysisModel: analysisModel(),
+    analysisModel: analysisModel(model),
     stats: {
       universeTotal,
       eligibleTotal,

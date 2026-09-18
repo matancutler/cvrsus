@@ -58,6 +58,19 @@ export const TRIAGE = {
   parseConcurrency: num('TRIAGE_PARSE_CONCURRENCY', 4),
   analysisConcurrency: num('TRIAGE_ANALYSIS_CONCURRENCY', 4),
   maxAttempts: num('TRIAGE_MAX_ATTEMPTS', 3),
+
+  /**
+   * How long the rest of a batch waits for the first analysis to warm the
+   * prompt cache.
+   *
+   * Every CV in a Triage is judged against the same instructions and the same
+   * job description, and a cached prefix costs a tenth of what sending it again
+   * costs — but it only exists once a request carrying it has begun. Letting
+   * one call get ahead is the difference between fifty cache writes and one.
+   * Nothing depends on the wait being long enough; losing the race costs
+   * exactly what this cost before caching.
+   */
+  warmupMs: num('TRIAGE_WARMUP_MS', 8000),
 }
 
 function num(name, fallback) {
@@ -608,8 +621,10 @@ function applicantView(row, score, rank) {
       gaps: criteria.gaps ?? [],
       transferable: criteria.transferable ?? [],
       evidence: criteria.evidence ?? [],
-      probes: criteria.probes ?? [],
       criteria: criteria.items ?? [],
+      /* Written when a recruiter opens the applicant, and stored beside the
+         verdicts once it has been. Absent until then. */
+      explain: criteria.explain ?? null,
       source: row.analysis_source,
     },
   }
@@ -661,6 +676,43 @@ export function applicantFile({ triageId, applicantId }) {
     SELECT id, file_name, stored_name, mime_type
     FROM triage_applicants WHERE id = ? AND triage_id = ?
   `).get(applicantId, triageId) ?? null
+}
+
+/**
+ * One applicant's stored analysis, for explaining it after the fact.
+ *
+ * Scoped to a Triage the caller has already been shown to own, like every other
+ * read in this file — an applicant id on its own is a number somebody could
+ * guess, and this returns the assessment of a real person's CV.
+ */
+export function applicantAnalysis({ triageId, applicantId }) {
+  const row = db.prepare(`
+    SELECT id, criteria, explanation, deep_status
+    FROM triage_applicants WHERE id = ? AND triage_id = ?
+  `).get(applicantId, triageId)
+
+  if (!row) return null
+
+  let criteria = null
+  try {
+    criteria = row.criteria ? JSON.parse(row.criteria) : null
+  } catch {
+    criteria = null
+  }
+
+  return { id: row.id, criteria, explanation: row.explanation, status: row.deep_status }
+}
+
+/** Stores the written explanation beside the verdicts it explains. */
+export function attachApplicantExplanation({ triageId, applicantId, explain }) {
+  const existing = applicantAnalysis({ triageId, applicantId })
+  if (!existing?.criteria) return false
+
+  const criteria = { ...existing.criteria, explain }
+  db.prepare(`UPDATE triage_applicants SET criteria = ? WHERE id = ? AND triage_id = ?`)
+    .run(JSON.stringify(criteria), applicantId, triageId)
+
+  return true
 }
 
 /** Marks an applicant as read, so the list can show where the recruiter got to. */

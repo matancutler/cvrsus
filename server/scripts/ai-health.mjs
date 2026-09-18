@@ -14,7 +14,7 @@
  *   node server/scripts/ai-health.mjs
  */
 import db from '../src/db.js'
-import { isConfigured as aiConfigured, MODEL } from '../src/ai.js'
+import { isConfigured as aiConfigured, isPaused, MATCH_EFFORT, MATCH_MODEL, spendLimitReason } from '../src/ai.js'
 import { isConfigured as embeddingsConfigured, EMBEDDING_MODEL } from '../src/embeddings.js'
 
 const pct = (part, total) => (total === 0 ? '—' : `${Math.round((part / total) * 100)}%`)
@@ -28,7 +28,12 @@ const rule = (label) => {
 /* ----------------------------------------------------------- configured -- */
 
 rule('Keys')
-console.log(`    ANTHROPIC_API_KEY  ${aiConfigured() ? `set — ${MODEL}` : 'NOT SET — every AI path falls back'}`)
+console.log(`    ANTHROPIC_API_KEY  ${process.env.ANTHROPIC_API_KEY ? 'set' : 'NOT SET — every AI path falls back'}`)
+console.log(`    judging            ${MATCH_MODEL}, effort ${MATCH_EFFORT}`)
+if (isPaused()) {
+  console.log('    AI_PAUSED          ON — every model call is switched off deliberately.')
+  console.log('                       Scores are keyword-based until it is unset.')
+}
 console.log(`    VOYAGE_API_KEY     ${embeddingsConfigured() ? `set — ${EMBEDDING_MODEL}` : 'NOT SET — semantic retrieval is off'}`)
 
 /* ------------------------------------------------- is the work being done -- */
@@ -86,6 +91,12 @@ for (const f of failures) {
   console.log(`    ${f.last_seen.slice(0, 16).replace('T', ' ')}  ${String(f.stage).padEnd(20)} ×${f.occurrences}`)
   console.log(`        ${f.status ?? '—'} ${f.type}`)
   console.log(`        ${f.message}`)
+  /* A 400 about "usage limits" and a 429 carrying enforced_spend_limit_reached
+     both mean the account has run out of money, and both read in a log like
+     something the code did wrong. Named here so nobody spends an afternoon
+     debugging a request that was built correctly. */
+  const capped = spendLimitReason(f)
+  if (capped) console.log(`        >> ${capped}`)
 }
 
 /* ---------------------------------------------------------- the verdict -- */
@@ -103,7 +114,7 @@ if (!aiConfigured()) {
   console.log('    The key is set and NOT ONE analysis used it. Read the failures above —')
   console.log('    every score this product has shown came from keyword matching.')
 } else {
-  console.log(`    ${aiTriage + aiSearch} of ${analysed} analyses used ${MODEL} (${pct(aiTriage + aiSearch, analysed)}).`)
+  console.log(`    ${aiTriage + aiSearch} of ${analysed} analyses used a model (${pct(aiTriage + aiSearch, analysed)}).`)
   if (aiTriage + aiSearch < analysed) console.log('    The remainder fell back — see above for why.')
 }
 console.log('')

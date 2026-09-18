@@ -29,10 +29,14 @@ import path from 'node:path'
 
 import db, { UPLOAD_DIR } from './db.js'
 import { extractText } from './extract.js'
-import { analyseJobDescription, analyseMatch, deterministicContact, isConfigured as aiConfigured, MODEL } from './ai.js'
+import {
+  analyseJobDescription, analyseMatch, deterministicContact,
+  isConfigured as aiConfigured, MATCH_MODEL, MODEL,
+} from './ai.js'
+import { recordCost, sumUsage } from './costs.js'
 import { keywordsFrom, parseJobDescription, scoreCandidate } from './match.js'
-import { requirementsFrom } from './matching/analysis.js'
-import { needsReview, scoreAgainst } from './matching/score.js'
+import { requirementsFrom, withinDailyCeiling } from './matching/analysis.js'
+import { deriveHighlights, needsReview, scoreAgainst } from './matching/score.js'
 import { VERSIONS } from './matching/config.js'
 import { TRIAGE, rawTriage, recount } from './triage.js'
 import { refundTriageCvs } from './wallet.js'
@@ -563,15 +567,20 @@ async function runDeep(triage, batch) {
   }
 
   const started = Date.now()
-  let inputTokens = 0
-  let outputTokens = 0
+  const usages = []
   let scored = 0
 
-  await inParallel(rows, TRIAGE.analysisConcurrency, async (row) => {
+  /* The circuit breaker, checked once for the batch. Over the ceiling every
+     applicant still gets a deterministic score and a place in the ranking — the
+     Triage completes, it is simply not model-read. */
+  const useAi = aiConfigured() && withinDailyCeiling({
+    context: 'triage', companyId: triage.company_id, wanted: rows.length,
+  })
+
+  const handle = async (row) => {
     try {
-      const record = await analyseApplicant({ triage, row, criteria, requirements })
-      inputTokens += record.usage?.inputTokens ?? 0
-      outputTokens += record.usage?.outputTokens ?? 0
+      const record = await analyseApplicant({ triage, row, criteria, requirements, useAi })
+      usages.push(record.usage)
 
       db.prepare(`
         UPDATE triage_applicants
@@ -607,17 +616,53 @@ async function runDeep(triage, batch) {
       db.prepare(`UPDATE triage_applicants SET deep_status = 'failed', deep_error = ? WHERE id = ?`)
         .run(String(error.message).slice(0, 300), row.id)
     }
-  })
+  }
+
+  /*
+   * One applicant goes first, so the rest read a cached prompt.
+   *
+   * The instructions, the schema and the job description are identical for
+   * every CV in a Triage, and a cached prefix only exists once a request
+   * carrying it has started being processed. Four workers starting together
+   * all miss it and all pay the write price. Nothing here is required for
+   * correctness — losing the race costs what it cost before caching.
+   */
+  const lead = rows.length > 0 ? handle(rows[0]) : Promise.resolve()
+  if (rows.length > 1) await Promise.race([lead, sleep(TRIAGE.warmupMs)])
+  await inParallel(rows.slice(1), TRIAGE.analysisConcurrency, handle)
+  await lead
 
   recount(triage.id)
   advanceFrontier(triage.id, batch.to_rank)
 
+  const totals = sumUsage(usages)
+
   cost({
     triageId: triage.id, batchId: batch.id, stage: `deep:${batch.kind}`,
-    model: aiConfigured() ? MODEL : 'deterministic',
+    model: useAi ? MATCH_MODEL : 'deterministic',
     applicants: scored, durationMs: Date.now() - started,
-    inputTokens: inputTokens || null, outputTokens: outputTokens || null,
+    /* The whole input, cached parts included, so this stays comparable with
+       what it recorded before caching existed. The ledger below keeps them
+       apart, because money needs them apart. */
+    inputTokens: (totals.inputTokens + totals.cacheWriteTokens + totals.cacheReadTokens) || null,
+    outputTokens: totals.outputTokens || null,
   })
+
+  if (totals.calls > 0) {
+    recordCost({
+      context: 'triage',
+      stage: `deep:${batch.kind}`,
+      model: MATCH_MODEL,
+      companyId: triage.company_id ?? null,
+      calls: totals.calls,
+      items: scored,
+      inputTokens: totals.inputTokens,
+      cacheWriteTokens: totals.cacheWriteTokens,
+      cacheReadTokens: totals.cacheReadTokens,
+      outputTokens: totals.outputTokens,
+      durationMs: Date.now() - started,
+    })
+  }
 
   settleStatus(triage.id)
 }
@@ -630,13 +675,13 @@ async function runDeep(triage, batch) {
  * their place in the ranking. Losing someone from the list entirely because a
  * request failed is the one outcome a triage product cannot have.
  */
-async function analyseApplicant({ triage, row, criteria, requirements }) {
+async function analyseApplicant({ triage, row, criteria, requirements, useAi = true }) {
   const fallback = scoreCandidate(
     { cv_text: row.extracted_text, skills: [] },
     criteria,
   )
 
-  const ai = aiConfigured()
+  const ai = useAi
     ? await analyseMatch({
       jobDescription: triage.raw_jd,
       criteria,
@@ -695,18 +740,18 @@ async function analyseApplicant({ triage, row, criteria, requirements }) {
       needsReview: needsReview(judged.coverage),
       verdicts: judged.breakdown,
       confidence: ai.confidence,
-      strengths: ai.strengths,
-      gaps: ai.gaps,
+      /* Computed from the verdicts, not asked of the model — see
+         deriveHighlights. Interview questions are no longer written here at
+         all; they are produced when a recruiter opens the applicant. */
+      ...deriveHighlights(judged.breakdown),
       transferable: ai.transferable,
-      evidence: ai.evidence,
-      probes: ai.probes,
       locationFit: ai.location_fit ?? null,
       seniorityAlignment: ai.seniority_alignment ?? null,
       items: criteriaItems(fallback),
     },
     explanation: ai.reasoning,
     source: 'claude',
-    model: ai.model_version ?? MODEL,
+    model: ai.model_version ?? MATCH_MODEL,
     usage: ai.usage ?? null,
   }
 }

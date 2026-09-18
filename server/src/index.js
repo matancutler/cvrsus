@@ -147,6 +147,8 @@ import {
   addFile,
   chargeableCvs,
   applicantFile,
+  applicantAnalysis,
+  attachApplicantExplanation,
   blankTriage,
   createDraft,
   deleteTriage,
@@ -290,7 +292,9 @@ import {
 } from './notify.js'
 import {
   MODEL,
+  WRITER_MODEL,
   analyseMatches,
+  explainVerdicts,
   /* Named directly rather than reached through extractContactDetails: the
      demo Triage never calls a model, so it wants the deterministic reader on
      purpose rather than as a fallback nobody chose. */
@@ -445,6 +449,8 @@ import {
   validatePreferences,
 } from './matching/preferences.js'
 import { runSearch, showMore } from './matching/pipeline.js'
+import { attachExplanation, readCached } from './matching/analysis.js'
+import { recordCost } from './costs.js'
 import { getSession } from './matching/session.js'
 import { getJob } from './matching/jobProfile.js'
 import { assertFileContent, rateLimit, sniffFile } from './security.js'
@@ -803,7 +809,7 @@ const upload = multer({
      */
     if (file.fieldname === 'photo' || file.fieldname === 'logo') {
       if (!PHOTO_EXTENSIONS.includes(ext)) {
-        return cb(new Error(`"${ext}" is not a supported image. Use a JPG, PNG or WebP.`))
+        return cb(new HttpError(400, `"${ext}" is not a supported image. Use a JPG, PNG or WebP.`))
       }
       return cb(null, true)
     }
@@ -819,7 +825,7 @@ const upload = multer({
      */
     if (file.fieldname === 'cvs') {
       if (!DOCUMENT_EXTENSIONS.includes(ext)) {
-        return cb(new Error(`"${ext}" is not a CV we can read. Upload PDF or DOCX files.`))
+        return cb(new HttpError(400, `"${ext}" is not a CV we can read. Upload PDF or DOCX files.`))
       }
       return cb(null, true)
     }
@@ -829,22 +835,34 @@ const upload = multer({
     // not a candidate's, and nothing here needs to keep it.
     if (file.fieldname === 'jd') {
       if (!JD_EXTENSIONS.includes(ext)) {
-        return cb(new Error(
+        return cb(new HttpError(
+          400,
           `Unsupported file type "${ext}". Upload a PDF, Word file, or a picture of the posting.`,
         ))
       }
       return cb(null, true)
     }
 
+    /*
+     * HttpError, not Error — the difference is the status the caller sees.
+     *
+     * The handler at the foot of this file treats an ordinary Error as a fault
+     * nobody chose, which is right: it answers 500 and keeps the text in the
+     * log. A refused file type is the opposite of that. It is a deliberate
+     * refusal with a sentence written for the person who attached the file, and
+     * it was reaching them as "Something went wrong at our end" — sending
+     * somebody away to retry a .txt CV that will never be accepted.
+     */
     if (!DOCUMENT_SLOT_KEYS.includes(file.fieldname)) {
-      return cb(new Error(`Unexpected upload field "${file.fieldname}".`))
+      return cb(new HttpError(400, `Unexpected upload field "${file.fieldname}".`))
     }
 
     // §7 — the CV still has to be readable as text; the supporting types also
     // take PNG and JPEG.
     const allowed = allowedFor(file.fieldname)
     if (!allowed.includes(ext)) {
-      return cb(new Error(
+      return cb(new HttpError(
+        400,
         `Unsupported file type "${ext}". Upload a ${allowed.map((e) => e.slice(1).toUpperCase()).join(', ')} file.`,
       ))
     }
@@ -1131,7 +1149,9 @@ app.post('/api/public/demo/search', limits.demo, async (req, res, next) => {
 
     track('demo_search_submitted', { actorType: 'anonymous', length: jobDescription.length })
 
-    const outcome = await runPublicSearch({ jobDescription, clientHash, secret: SESSION_SECRET })
+    const outcome = await runPublicSearch({
+      jobDescription, clientHash, secret: SESSION_SECRET, signal: abortOnClose(req, res),
+    })
 
     track('demo_search_completed', {
       actorType: 'anonymous', results: outcome.results.length, considered: outcome.considered,
@@ -5676,17 +5696,17 @@ app.post('/api/hr/match', recruiterOnly, async (req, res, next) => {
       if (analysis) {
         // Claude's judged fit replaces the keyword score as the raw stage-1
         // number. Still absolute: how well this person meets the requirements.
-        row.rawScore = analysis.score
-        row.scorer = 'claude'
+        /* The model stopped returning an overall score when scoring moved
+           into code — it judges requirements, and matching/score.js does the
+           arithmetic. This path has no requirement ids to score against, so the
+           keyword score it already computed stands and the scorer is named
+           honestly rather than claiming a judgement that was not made. */
+        row.scorer = 'keyword+claude-notes'
         row.analysis = {
-          fit: analysis.fit,
           confidence: analysis.confidence,
           reasoning: analysis.reasoning,
-          strengths: analysis.strengths,
-          gaps: analysis.gaps,
           transferable: analysis.transferable,
-          evidence: analysis.evidence,
-          probes: analysis.probes,
+          criteria: analysis.criteria,
         }
       }
       delete row.cvText
@@ -5800,12 +5820,18 @@ function matchRow({ candidate, score, analysis, context }) {
         reasoning: analysis.explanation,
         fit: analysis.criteria?.fit ?? null,
         confidence: analysis.criteria?.confidence ?? null,
+        /* Derived in code from the verdicts now, not written by the model — the
+           field names are unchanged because what they mean is unchanged. */
         strengths: analysis.criteria?.strengths ?? [],
         gaps: analysis.criteria?.gaps ?? [],
         transferable: analysis.criteria?.transferable ?? [],
         evidence: analysis.criteria?.evidence ?? [],
-        probes: analysis.criteria?.probes ?? [],
         criteria: analysis.criteria?.items ?? [],
+        /* The written part, when somebody has already opened this candidate.
+           Absent until then, and fetched by the dialog that needs it. */
+        explain: analysis.criteria?.explain ?? null,
+        /* What the dialog needs to ask for one. */
+        jobId: context.jobId ?? null,
         source: analysis.source,
       }
       : null,
@@ -5823,10 +5849,35 @@ function matchRow({ candidate, score, analysis, context }) {
  * existed. The caller is the only party that knows which saved search this
  * particular run is for.
  */
+/**
+ * Stops the work when the person who asked for it has gone.
+ *
+ * A search fans out twenty-five model calls and nothing was watching whether
+ * anybody still wanted them: closing the tab, hitting search again, or losing a
+ * phone signal left every one of them running to completion and being paid for.
+ * The abort travels down through the pipeline into the SDK, which cancels the
+ * requests in flight.
+ *
+ * Guarded on writableFinished because 'close' also fires on every ordinary
+ * response — aborting there would cancel nothing, but it would fire the
+ * listener on every successful request, which is a confusing thing to read in
+ * a profiler later.
+ */
+function abortOnClose(req, res) {
+  const controller = new AbortController()
+  res.on('close', () => {
+    if (!res.writableFinished) controller.abort()
+  })
+  return controller.signal
+}
+
 function searchResponse(outcome, recruiterId, chatId = null) {
   const companyId = companyIdFor(recruiterId)
 
   const context = {
+    /* Which job these rows were judged against — the dialog needs it to ask for
+       a written explanation of one of them. */
+    jobId: outcome.job.id,
     folders: folderIndex(recruiterId),
     unread: recruiterUnreadByCandidate(recruiterId),
     // Only the page being rendered, not the whole documents table.
@@ -5942,6 +5993,9 @@ app.post('/api/hr/search', recruiterOnly, async (req, res, next) => {
       // Run the pool again rather than resuming the stored ranking — see the
       // note on runSearch. Costs only the candidates nobody has read yet.
       refresh: req.body?.refresh === true,
+      /* Cancelled if the recruiter closes the tab or searches again — a page
+         of analyses nobody is waiting for is a page nobody should pay for. */
+      signal: abortOnClose(req, res),
     })
 
     track('search_run', {
@@ -5964,6 +6018,8 @@ app.post('/api/hr/search/:sessionId/more', recruiterOnly, async (req, res, next)
     const outcome = await showMore({
       sessionId: Number(req.params.sessionId),
       recruiterId: req.session.id,
+      companyId: companyIdFor(req.session.id),
+      signal: abortOnClose(req, res),
     })
 
     if (outcome.error === 'not_found') throw new HttpError(404, 'That search is no longer available.')
@@ -5975,6 +6031,112 @@ app.post('/api/hr/search/:sessionId/more', recruiterOnly, async (req, res, next)
     }
 
     res.json(searchResponse(outcome, req.session.id, chatId))
+  } catch (error) {
+    next(error)
+  }
+})
+
+/**
+ * The written explanation for one assessment, produced when somebody opens it.
+ *
+ * Interview questions and the summary paragraph used to be written for every
+ * candidate during the judging call, whether or not anyone ever opened them. A
+ * recruiter opens perhaps five of twenty-five results, so four fifths of that
+ * writing was paid for and thrown away.
+ *
+ * Written once and stored, so opening the same candidate twice costs nothing,
+ * and given the verdicts rather than the CV — it explains a decision that has
+ * already been made, which is why it can run on a cheaper model without putting
+ * the ranking at risk. See explainVerdicts.
+ */
+app.post('/api/hr/analysis/explain', recruiterOnly, async (req, res, next) => {
+  try {
+    const scope = String(req.body?.scope ?? '').trim()
+    const companyId = companyIdFor(req.session.id)
+
+    /* Both branches resolve the same three things: the verdicts to explain, the
+       role they were judged against, and a writer that stores the result where
+       that surface keeps it. */
+    let verdicts = null
+    let transferable = []
+    let coverage = null
+    let role = ''
+    let store = null
+    let existing = null
+
+    if (scope === 'search') {
+      const jobId = parseNumber(req.body?.jobId)
+      const candidateId = parseNumber(req.body?.candidateId)
+      if (!jobId || !candidateId) throw new HttpError(400, 'Tell us which assessment to explain.')
+
+      /* Ownership, before anything is read: a job id is a number somebody could
+         guess, and what hangs off it is an assessment of a real person's CV. */
+      const job = db.prepare(`SELECT * FROM jobs WHERE id = ?`).get(jobId)
+      if (!job || job.recruiter_id !== req.session.id) {
+        throw new HttpError(404, 'That search is no longer available.')
+      }
+
+      const cached = readCached({ candidateId, jobId, jdVersion: job.jd_version })
+      if (!cached) throw new HttpError(404, 'That assessment is no longer available.')
+
+      verdicts = cached.criteria?.verdicts ?? null
+      transferable = cached.criteria?.transferable ?? []
+      coverage = cached.criteria?.coverage ?? null
+      existing = cached.criteria?.explain ?? null
+      role = job.raw_jd ?? ''
+      store = (explain) => attachExplanation({ candidateId, jobId, jdVersion: job.jd_version, explain })
+    } else if (scope === 'triage') {
+      const { triage, error } = mustOwn({ companyId, id: req.body?.triageId })
+      if (error) throw new HttpError(404, 'That Triage does not exist.')
+
+      const applicantId = parseNumber(req.body?.applicantId)
+      const analysis = applicantAnalysis({ triageId: triage.id, applicantId })
+      if (!analysis?.criteria) throw new HttpError(404, 'That applicant has not been analysed yet.')
+
+      verdicts = analysis.criteria.verdicts ?? null
+      transferable = analysis.criteria.transferable ?? []
+      coverage = analysis.criteria.coverage ?? null
+      existing = analysis.criteria.explain ?? null
+      role = triage.raw_jd ?? ''
+      store = (explain) => attachApplicantExplanation({ triageId: triage.id, applicantId, explain })
+    } else {
+      throw new HttpError(400, 'Tell us which kind of assessment to explain.')
+    }
+
+    /* Already written. Nothing is spent twice on the same candidate. */
+    if (existing) return res.json({ explain: existing, reused: true })
+
+    /* A deterministic score has no verdicts to explain, and saying so is more
+       use than an empty panel. */
+    if (!Array.isArray(verdicts) || verdicts.length === 0) {
+      return res.json({ explain: null, reason: 'not-analysed' })
+    }
+
+    const started = Date.now()
+    const explain = await explainVerdicts({
+      role, verdicts, transferable, coverage, signal: abortOnClose(req, res),
+    })
+
+    if (!explain) return res.json({ explain: null, reason: 'unavailable' })
+
+    recordCost({
+      context: 'explain',
+      stage: scope,
+      model: WRITER_MODEL,
+      companyId,
+      calls: 1,
+      items: 1,
+      inputTokens: explain.usage?.inputTokens ?? 0,
+      cacheWriteTokens: explain.usage?.cacheWriteTokens ?? 0,
+      cacheReadTokens: explain.usage?.cacheReadTokens ?? 0,
+      outputTokens: explain.usage?.outputTokens ?? 0,
+      durationMs: Date.now() - started,
+    })
+
+    const written = { summary: explain.summary, probes: explain.probes }
+    store(written)
+
+    res.json({ explain: written, reused: false })
   } catch (error) {
     next(error)
   }

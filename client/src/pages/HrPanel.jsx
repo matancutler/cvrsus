@@ -16,6 +16,7 @@ import TagEditor, { TagStrip } from '../components/CandidateTags.jsx'
 import AddPhotoIcon from '../components/AddPhotoIcon.jsx'
 import Notice, { StatusNotice, useStandingNotice } from '../components/Notice.jsx'
 import scoreBand from '../scoreBand.js'
+import { useExplanation } from '../explain.js'
 import useDialogFocus from '../useDialogFocus.js'
 import useDismissOnOutside from '../useDismiss.js'
 import { RowTick, SelectButton, SelectionBar, useSelection } from '../components/ListSelect.jsx'
@@ -7539,6 +7540,21 @@ function ScoreReading({ result, candidate }) {
   const prefMissing = result.missingPreferred ?? []
   const analysis = result.analysis
 
+  /*
+   * The paragraph and the questions, written when this dialog opened.
+   *
+   * Asked for only where there is a model-read assessment to explain: a
+   * deterministically scored row has no verdicts, and a saved row from before
+   * the job was re-versioned has nothing to attach an explanation to. Both come
+   * back as nothing and simply draw no section.
+   */
+  const written = useExplanation(
+    analysis?.jobId && analysis?.source === 'claude'
+      ? { scope: 'search', jobId: analysis.jobId, candidateId: candidate?.id }
+      : null,
+    analysis?.explain ?? null,
+  )
+
   return (
     <>
       {/* Named when the reading was saved rather than just run: opened from a
@@ -7592,14 +7608,26 @@ function ScoreReading({ result, candidate }) {
             </div>
           )}
 
-          {analysis.probes?.length > 0 && (
+          {/* Written on demand — see useExplanation. The heading appears with
+              the section rather than before it, so a dialog that is still
+              waiting does not show an empty promise. */}
+          {written.summary && (
+            <div>
+              <h4 className="modal-subhead">The reading</h4>
+              <p>{written.summary}</p>
+            </div>
+          )}
+
+          {written.probes.length > 0 && (
             <div>
               <h4 className="modal-subhead">Worth asking</h4>
               <ul className="delete-list">
-                {analysis.probes.map((probe, index) => <li key={index}>{probe}</li>)}
+                {written.probes.map((probe, index) => <li key={index}>{probe}</li>)}
               </ul>
             </div>
           )}
+
+          {written.loading && <p className="muted">Writing the rest…</p>}
         </>
       )}
     </>

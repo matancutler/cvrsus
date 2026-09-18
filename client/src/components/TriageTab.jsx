@@ -7,6 +7,7 @@ import Notice, { StatusNotice, useStandingNotice } from './Notice.jsx'
 import PopMenu from './PopMenu.jsx'
 import pastedImage from '../pastedImage.js'
 import scoreBand from '../scoreBand.js'
+import { useExplanation } from '../explain.js'
 
 /**
  * Cursus Triage — the recruiter's own applicant pile, sorted.
@@ -1346,6 +1347,20 @@ function TriageApplicantDialog({ row, triageId, onClose }) {
   const { analysis } = row
   const [view, setView] = useState('profile')
 
+  /*
+   * The paragraph and the interview questions, written when this opened.
+   *
+   * Only where a model actually judged this applicant: a deterministically
+   * scored row has no verdicts to explain, and asking would spend money to be
+   * told so.
+   */
+  const written = useExplanation(
+    analysis?.source === 'claude'
+      ? { scope: 'triage', triageId, applicantId: row.id }
+      : null,
+    analysis?.explain ?? null,
+  )
+
   /* Score only when there is one. An applicant whose deep analysis failed still
      has a profile worth reading, and a Score tab over an empty panel is a tab
      that lies about what is behind it. */
@@ -1472,7 +1487,9 @@ function TriageApplicantDialog({ row, triageId, onClose }) {
               <TriageList title="Strengths" items={analysis.strengths} tone="hit" />
               <TriageList title="Gaps" items={analysis.gaps} tone="miss" />
               <TriageList title="Transferable" items={analysis.transferable} />
-              <TriageList title="Worth asking about" items={analysis.probes} />
+              {written.summary && <p className="triage-modal-reasoning">{written.summary}</p>}
+              <TriageList title="Worth asking about" items={written.probes} />
+              {written.loading && <p className="muted">Writing the rest…</p>}
 
               {analysis.evidence?.length > 0 && (
                 <section className="triage-evidence">
