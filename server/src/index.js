@@ -150,7 +150,10 @@ import {
   applicantAnalysis,
   attachApplicantExplanation,
   blankTriage,
+  closeDrop,
   createDraft,
+  currentDrop,
+  latestDrop,
   deleteTriage,
   draftBytes,
   draftFiles,
@@ -173,6 +176,7 @@ import {
   queueDepth,
   requestNextTranche,
   resumeQueue,
+  startQueueWaker,
   startProcessing,
 } from './triageQueue.js'
 import {
@@ -6669,6 +6673,10 @@ app.post('/api/hr/triage/:id/files', recruiterOnly, triageUpload, async (req, re
     const bytesHeld = draftBytes(triage.id)
     const results = [...preRejected]
 
+    /* Which delivery these files join. Before launch there is one and it is
+       still open, so every chunk of a 300-file upload lands in the same drop. */
+    const drop = currentDrop({ triageId: triage.id, recruiterId: req.session.id })
+
     /*
      * Nothing is awaited until every row is written.
      *
@@ -6699,7 +6707,7 @@ app.post('/api/hr/triage/:id/files', recruiterOnly, triageUpload, async (req, re
       }
 
       committed.add(file.path)
-      const outcome = addFile({ triageId: triage.id, file })
+      const outcome = addFile({ triageId: triage.id, file, dropId: drop.id })
       /* A duplicate was refused and its bytes were unlinked by addFile itself,
          so there is nothing left to protect. */
       if (outcome.duplicate) committed.delete(file.path)
@@ -6722,6 +6730,8 @@ app.post('/api/hr/triage/:id/files', recruiterOnly, triageUpload, async (req, re
     }
 
     await Promise.all(discardable.map((p) => fs.promises.unlink(p).catch(() => {})))
+
+    closeDrop(drop.id)
 
     /* Launched while this ran? Say so, rather than reporting an upload that
        arrived after the charge as though it had counted. */
@@ -6863,7 +6873,7 @@ app.post('/api/hr/triage/:id/launch', recruiterOnly, (req, res, next) => {
     }
 
     try {
-      startProcessing(triage.id)
+      startProcessing(triage.id, { dropId: latestDrop(triage.id)?.id ?? null })
     } catch (startError) {
       /*
        * `totalCvs`, not `cvs`.
@@ -6965,10 +6975,19 @@ app.get('/api/hr/triage/:id/results', recruiterOnly, (req, res, next) => {
       /* Said once, here, for the same reason Search says it: a score that moves
          when more people are analysed looks like instability unless the
          recruiter is told the scale moved rather than the candidate. */
+      /*
+       * Said once, here, because the promise has changed.
+       *
+       * This used to warn that scores move when more of the pile is analysed,
+       * which was true while the number was normalised against the best CV in
+       * the session. A rolling session shows each candidate's own fit instead,
+       * so the number a recruiter reads today is the number they will read in
+       * six weeks. Positions still move; scores do not.
+       */
       scoring: {
-        explanation: 'Scores are relative to every applicant analysed for this role so far. '
-          + 'Analysing more of the pile re-ranks the whole set, so an earlier score can move. '
-          + 'Applicants not yet analysed have no score; that is not a low one.',
+        explanation: 'Each score is that candidate against this role, on its own. '
+          + 'Adding more CVs never changes a score already given, though a stronger CV '
+          + 'can appear above them. Applicants not yet analysed have no score; that is not a low one.',
       },
     })
   } catch (error) {
@@ -7694,6 +7713,10 @@ app.listen(PORT, async () => {
   if (resumed.waiting > 0) {
     console.log(`  triage: ${resumed.waiting} batch(es) waiting${resumed.reclaimed ? `, ${resumed.reclaimed} reclaimed` : ''}`)
   }
+
+  /* And from now on, work that nobody pumped gets picked up anyway — a rolling
+     session must finish what it was given whether or not a browser is open. */
+  startQueueWaker()
 
   // Pricing §18.6 — organizations that predate the wallet. Idempotent, so it
   // runs on every boot and does nothing at all once it has caught up.

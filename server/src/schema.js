@@ -879,6 +879,9 @@ export const SCHEMA = `
        applicant and one payment for parsing and for analysis. */
     content_hash   TEXT,
     duplicate_of   INTEGER,
+    /* The delivery this CV arrived in. NULL only for rows written before
+       deliveries existed, which are adopted on the session's next upload. */
+    drop_id        INTEGER,
     extracted_text TEXT,
     /* What the CV says about the person, as far as it can be read. Held apart
        from the marketplace's extracted_profiles for the reason at the top of
@@ -918,6 +921,41 @@ export const SCHEMA = `
   CREATE UNIQUE INDEX IF NOT EXISTS idx_triage_applicant_hash
     ON triage_applicants(triage_id, content_hash) WHERE content_hash IS NOT NULL;
 
+  /*
+   * One delivery of CVs into a session.
+   *
+   * A one-time Triage had no need for this: the pile arrived, it was charged
+   * once and it was parsed once. A rolling session takes CVs on Tuesday and
+   * again on Friday, and almost every one-batch assumption in the pipeline
+   * unwinds from having something to name the second delivery.
+   *
+   * Three things need it. The queue's idempotency key includes the drop, so a
+   * second parse pass is a different unit of work rather than a duplicate of
+   * the first one and a silently-ignored insert. The preliminary ranking runs
+   * per drop and appends, so ranks already given out never move. And charging
+   * attaches to the drop rather than to the session, because a session is
+   * charged as many times as CVs arrive.
+   *
+   * seq is per session and starts at 1, so "drop 3" means something to a
+   * person reading a support ticket. Applicants uploaded before this table
+   * existed are adopted into a delivery of their own on the first upload
+   * afterwards — see ensureLaunchDrop.
+   */
+  CREATE TABLE IF NOT EXISTS triage_drops (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    triage_id     INTEGER NOT NULL,
+    seq           INTEGER NOT NULL,
+    /* Who added these CVs. Nullable like triages.recruiter_id, and for the
+       same reason: it is a label, not an ownership claim. */
+    recruiter_id  INTEGER,
+    /* How many rows this drop wrote, so the history can say "12 CVs on
+       3 March" without counting rows again. */
+    files         INTEGER NOT NULL DEFAULT 0,
+    created_at    TEXT NOT NULL
+  );
+
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_triage_drop_seq ON triage_drops(triage_id, seq);
+
   /* A unit of queued work.
 
      The idempotency key is the whole reason this table exists rather than a
@@ -928,6 +966,10 @@ export const SCHEMA = `
   CREATE TABLE IF NOT EXISTS triage_batches (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     triage_id   INTEGER NOT NULL,
+    /* Which delivery this work is for. Parse and preliminary are per drop;
+       deep analysis is per rank range and leaves this NULL, because ranks span
+       every drop the session has taken. */
+    drop_id     INTEGER,
     kind        TEXT NOT NULL CHECK (kind IN ('parse', 'preliminary', 'initial', 'rolling')),
     from_rank   INTEGER,
     to_rank     INTEGER,
@@ -1231,6 +1273,18 @@ export const ADDED_COLUMNS = {
   triages: [
     ['charged_cvs', 'INTEGER NOT NULL DEFAULT 0'],
     ['refunded_cvs', 'INTEGER NOT NULL DEFAULT 0'],
+  ],
+  /*
+   * This key did not exist until rolling sessions needed it, which is exactly
+   * the trap the comment above describes: triage_applicants has shipped, so a
+   * column added only to its CREATE TABLE would never appear on the live
+   * database and every read of it would come back undefined.
+   */
+  triage_applicants: [
+    ['drop_id', 'INTEGER'],
+  ],
+  triage_batches: [
+    ['drop_id', 'INTEGER'],
   ],
   companies: [
     /*

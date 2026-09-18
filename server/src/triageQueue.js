@@ -59,13 +59,23 @@ let stopped = false
  * never cause the same candidate batch to be charged or processed twice" is
  * this INSERT and its unique index, and nothing else.
  */
-export function enqueue({ triageId, kind, fromRank = null, toRank = null }) {
-  const idem = `${triageId}:${kind}:${fromRank ?? '-'}:${toRank ?? '-'}`
+export function enqueue({ triageId, kind, fromRank = null, toRank = null, dropId = null }) {
+  /*
+   * The delivery is part of the identity of the work.
+   *
+   * Without it the key for a parse pass was `<triage>:parse:-:-` — the same
+   * string for every delivery a session would ever take — so the second drop's
+   * parse batch hit the unique index, was silently ignored, and its CVs sat at
+   * 'pending' for ever while the session reported itself complete. That is the
+   * single hardest thing standing between this pipeline and a rolling one, and
+   * it is this line.
+   */
+  const idem = `${triageId}:${dropId ?? '-'}:${kind}:${fromRank ?? '-'}:${toRank ?? '-'}`
 
   const info = db.prepare(`
-    INSERT OR IGNORE INTO triage_batches (triage_id, kind, from_rank, to_rank, idem_key, created_at)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(triageId, kind, fromRank, toRank, idem, now())
+    INSERT OR IGNORE INTO triage_batches (triage_id, drop_id, kind, from_rank, to_rank, idem_key, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(triageId, dropId, kind, fromRank, toRank, idem, now())
 
   // changes === 0 means it already existed, which is a success: the work is
   // either queued, running or done, and in every case it is not owed twice.
@@ -206,7 +216,44 @@ async function runBatch(batch) {
 
     if (permanent) {
       console.error(`  triage ${batch.triage_id}: ${batch.kind} batch failed permanently — ${error.message}`)
-      if (batch.kind === 'parse' || batch.kind === 'preliminary') {
+
+      /*
+       * A failure in the FIRST delivery fails the session and hands back what
+       * it took. A failure in a later one does not.
+       *
+       * A session whose opening pile could not be read produced nothing and
+       * owes the recruiter everything. A session holding two hundred analysed
+       * CVs whose Friday drop of six could not be read has not failed —
+       * failing it there would throw away work that was done correctly and
+       * paid for.
+       *
+       * "First delivery" is asked of the session, not of the drop number: a
+       * session that predates deliveries carries its original pile at drop_id
+       * NULL, so the first drop row it ever gets is numbered 1 while being its
+       * second delivery.
+       */
+      const alreadyRanked = db.prepare(
+        `SELECT COUNT(*) AS n FROM triage_applicants WHERE triage_id = ? AND prelim_rank IS NOT NULL`,
+      ).get(batch.triage_id).n
+
+      if ((batch.kind === 'parse' || batch.kind === 'preliminary') && alreadyRanked > 0) {
+        /*
+         * The session carries on — but this delivery's CVs must not vanish.
+         *
+         * They are sitting at parse_status 'pending', and nothing reports a
+         * pending row: the failures list shows unreadable and failed ones, and
+         * the counters treat pending as work still to come. Marking them
+         * failed puts them where a recruiter can see them.
+         */
+        if (batch.drop_id) {
+          db.prepare(`
+            UPDATE triage_applicants SET parse_status = 'failed', parse_error = ?
+            WHERE triage_id = ? AND drop_id = ? AND parse_status = 'pending'
+          `).run(String(error.message).slice(0, 300), batch.triage_id, batch.drop_id)
+        }
+        recount(batch.triage_id)
+        settleStatus(batch.triage_id)
+      } else if (batch.kind === 'parse' || batch.kind === 'preliminary') {
         db.prepare(`UPDATE triages SET status = 'failed', error = ?, updated_at = ? WHERE id = ?`)
           .run(`Processing could not complete: ${error.message}`.slice(0, 300), now(), batch.triage_id)
 
@@ -262,10 +309,23 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
  * recruiter can do anything about.
  */
 async function runParse(triage, batch) {
-  const pending = db.prepare(`
-    SELECT id, file_name, stored_name FROM triage_applicants
-    WHERE triage_id = ? AND parse_status = 'pending' ORDER BY id
-  `).all(triage.id)
+  /*
+   * This delivery's files, not the session's.
+   *
+   * It used to read every pending row in the Triage, which was right when a
+   * session had one delivery and is wrong now: a drop that arrives while an
+   * earlier drop is still parsing would be swallowed by the earlier batch, and
+   * then its own batch would find nothing to do and declare itself done.
+   */
+  const pending = batch.drop_id === null || batch.drop_id === undefined
+    ? db.prepare(`
+      SELECT id, file_name, stored_name FROM triage_applicants
+      WHERE triage_id = ? AND parse_status = 'pending' AND drop_id IS NULL ORDER BY id
+    `).all(triage.id)
+    : db.prepare(`
+      SELECT id, file_name, stored_name FROM triage_applicants
+      WHERE triage_id = ? AND parse_status = 'pending' AND drop_id = ? ORDER BY id
+    `).all(triage.id, batch.drop_id)
 
   let read = 0
   await inParallel(pending, TRIAGE.parseConcurrency, async (row) => {
@@ -321,10 +381,27 @@ async function runParse(triage, batch) {
    * showing them a price — would trade a refund for several minutes of staring
    * at a spinner.
    */
-  const unreadable = db.prepare(`
-    SELECT COUNT(*) AS n FROM triage_applicants
-    WHERE triage_id = ? AND parse_status IN ('unreadable', 'failed')
-  `).get(triage.id).n
+  /*
+   * Only what was charged can be handed back.
+   *
+   * The charge covers the delivery the session was launched with, and
+   * refundTriageCvs works in whole-session totals clamped to that one charge.
+   * Counting a later delivery's unreadable files into the same total would hand
+   * back capacity the recruiter paid for CVs they can still read.
+   */
+  const chargedDrop = db.prepare(
+    `SELECT id FROM triage_drops WHERE triage_id = ? ORDER BY seq LIMIT 1`,
+  ).get(triage.id)?.id ?? null
+
+  const unreadable = chargedDrop === null
+    ? db.prepare(`
+      SELECT COUNT(*) AS n FROM triage_applicants
+      WHERE triage_id = ? AND parse_status IN ('unreadable', 'failed') AND drop_id IS NULL
+    `).get(triage.id).n
+    : db.prepare(`
+      SELECT COUNT(*) AS n FROM triage_applicants
+      WHERE triage_id = ? AND parse_status IN ('unreadable', 'failed') AND drop_id = ?
+    `).get(triage.id, chargedDrop).n
 
   if (unreadable > 0 && triage.company_id) {
     /* The TOTAL that should have gone back for this Triage, not a delta — this
@@ -341,7 +418,7 @@ async function runParse(triage, batch) {
 
   // Ranking cannot start until every file has been read: a preliminary order
   // built over half the pile would put the second half behind all of it.
-  enqueue({ triageId: triage.id, kind: 'preliminary' })
+  enqueue({ triageId: triage.id, kind: 'preliminary', dropId: batch.drop_id ?? null })
 }
 
 function markUnreadable(id, message, status = 'unreadable') {
@@ -373,9 +450,24 @@ function markUnreadable(id, message, status = 'unreadable') {
 async function runPreliminary(triage, batch) {
   const profile = await ensureMatchProfile(triage, batch)
 
+  /*
+   * Only the CVs that have never been ranked.
+   *
+   * The ranking used to be recomputed over the whole pile and written as a
+   * dense 1..N. With one delivery that is fine. With two it is a trap: deep
+   * analysis selects by rank range and the frontier is a cursor into that rank
+   * space, so renumbering underneath an advanced frontier would slide CVs past
+   * the cursor and they would never be analysed — and nothing would report it,
+   * because a batch that finds no rows advances the frontier and settles.
+   *
+   * So ranks are append-only. A CV keeps the rank it was given for the life of
+   * the session, and a new delivery is ranked among itself and placed after
+   * everything already there. What the recruiter sees is ordered by score, not
+   * by this, so a strong late arrival still lands at the top of the list.
+   */
   const applicants = db.prepare(`
     SELECT id, display_name, extracted_text, location FROM triage_applicants
-    WHERE triage_id = ? AND parse_status = 'parsed'
+    WHERE triage_id = ? AND parse_status = 'parsed' AND prelim_rank IS NULL
   `).all(triage.id)
 
   const criteria = {
@@ -399,11 +491,17 @@ async function runPreliminary(triage, batch) {
        tranches non-reproducible and any cost comparison meaningless. */
     .sort((a, b) => b.score - a.score || a.id - b.id)
 
+  /* Where this delivery starts in the rank space. Zero for the first one, and
+     the end of the previous delivery for every one after it. */
+  const offset = db.prepare(
+    `SELECT COALESCE(MAX(prelim_rank), 0) AS at FROM triage_applicants WHERE triage_id = ?`,
+  ).get(triage.id).at
+
   const write = db.prepare(
     `UPDATE triage_applicants SET prelim_score = ?, prelim_rank = ? WHERE id = ?`,
   )
   db.transaction(() => {
-    ranked.forEach((entry, index) => write.run(entry.score, index + 1, entry.id))
+    ranked.forEach((entry, index) => write.run(entry.score, offset + index + 1, entry.id))
     db.prepare(`UPDATE triages SET prelim_done_at = ?, updated_at = ? WHERE id = ?`)
       .run(now(), now(), triage.id)
   })()
@@ -413,7 +511,26 @@ async function runPreliminary(triage, batch) {
     applicants: ranked.length,
   })
 
-  if (ranked.length === 0) {
+  /*
+   * What happens next is decided from the session's rank space, not from what
+   * this particular run happened to rank.
+   *
+   * The difference matters when this batch runs a second time — a process that
+   * died mid-batch leaves it 'running', and resumeQueue puts it back in the
+   * queue. On the re-run every row already has a rank, so `ranked` is empty;
+   * deciding from that would return here without ever queueing the analysis,
+   * and the session would sit at "processing" with nothing behind it.
+   *
+   * Ranks are dense, so the count of ranked rows is also the highest rank.
+   */
+  const rankedTotal = db.prepare(
+    `SELECT COUNT(*) AS n FROM triage_applicants WHERE triage_id = ? AND prelim_rank IS NOT NULL`,
+  ).get(triage.id).n
+
+  if (rankedTotal === 0) {
+    /* Nothing in this session could be read at all. This is the only case that
+       fails the whole thing — a later delivery of six scans must not fail a
+       session holding two hundred analysed CVs. */
     db.prepare(`
       UPDATE triages SET status = 'failed', error = ?, updated_at = ? WHERE id = ?
     `).run(
@@ -422,10 +539,38 @@ async function runPreliminary(triage, batch) {
     return
   }
 
-  // Section 3.2 — the first fifty, immediately, without waiting to be asked.
+  /* Read again rather than trusting the row this batch started with: parsing
+     takes as long as it takes, and the previous delivery's analysis is very
+     likely still moving the cursor while it runs. */
+  const frontier = db.prepare(`SELECT analysis_frontier AS at FROM triages WHERE id = ?`)
+    .get(triage.id)?.at ?? 0
+
+  if (frontier >= rankedTotal) {
+    /* Everything ranked has been analysed already. Nothing is owed. */
+    settleStatus(triage.id)
+    return
+  }
+
+  /*
+   * New CVs are analysed straight away.
+   *
+   * An earlier version made a late delivery wait behind whatever the recruiter
+   * had not yet read, on the reasoning that it should not jump the queue. That
+   * is the wrong promise for a live shortlist: CVs added on Tuesday should be
+   * in the ranking on Tuesday, in their right place by score. So the range runs
+   * from the cursor to the end of what exists, in tranches, and the pump keeps
+   * going until there is nothing left.
+   *
+   * Starting at the frontier rather than at this delivery's first rank is
+   * deliberate: re-covering ranks that were already scored costs nothing —
+   * runDeep selects only rows that are pending, queued or failed — while
+   * starting above it would step over any band the cursor had overshot.
+   */
   enqueue({
-    triageId: triage.id, kind: 'initial',
-    fromRank: 1, toRank: Math.min(TRIAGE.initialDeep, ranked.length),
+    triageId: triage.id,
+    kind: offset === 0 ? 'initial' : 'rolling',
+    fromRank: frontier + 1,
+    toRank: Math.min(rankedTotal, frontier + TRIAGE.initialDeep),
   })
 }
 
@@ -546,10 +691,19 @@ async function runDeep(triage, batch) {
   }
 
   const ids = rows.map((row) => row.id)
-  db.prepare(`
+  const claim = db.prepare(`
     UPDATE triage_applicants SET deep_status = 'running'
     WHERE id IN (${ids.map(() => '?').join(',')})
-  `).run(...ids)
+  `)
+  /* Released if anything below throws before the work starts. Without it a
+     failed batch left its rows at 'running', and 'running' is not one of the
+     states the retry selects — so the retry found nothing to do, treated the
+     range as finished, moved the cursor past it and settled. The CVs were
+     parsed, ranked, claimed and never analysed. */
+  const release = db.prepare(`
+    UPDATE triage_applicants SET deep_status = 'pending'
+    WHERE id IN (${ids.map(() => '?').join(',')}) AND deep_status = 'running'
+  `)
 
   const profile = safeJson(triage.match_profile) ?? deterministicProfile(triage.raw_jd)
 
@@ -576,6 +730,10 @@ async function runDeep(triage, batch) {
   const useAi = aiConfigured() && withinDailyCeiling({
     context: 'triage', companyId: triage.company_id, wanted: rows.length,
   })
+
+  /* Claimed here, after everything that could throw while setting up. The rows
+     are only marked as being worked on once there is actually a worker. */
+  claim.run(...ids)
 
   const handle = async (row) => {
     try {
@@ -627,10 +785,18 @@ async function runDeep(triage, batch) {
    * all miss it and all pay the write price. Nothing here is required for
    * correctness — losing the race costs what it cost before caching.
    */
-  const lead = rows.length > 0 ? handle(rows[0]) : Promise.resolve()
-  if (rows.length > 1) await Promise.race([lead, sleep(TRIAGE.warmupMs)])
-  await inParallel(rows.slice(1), TRIAGE.analysisConcurrency, handle)
-  await lead
+  try {
+    const lead = rows.length > 0 ? handle(rows[0]) : Promise.resolve()
+    if (rows.length > 1) await Promise.race([lead, sleep(TRIAGE.warmupMs)])
+    await inParallel(rows.slice(1), TRIAGE.analysisConcurrency, handle)
+    await lead
+  } catch (error) {
+    /* Whatever is still claimed goes back in the queue before the batch fails,
+       so the retry can see it. handle() catches its own per-applicant errors,
+       so reaching here means something structural. */
+    release.run(...ids)
+    throw error
+  }
 
   recount(triage.id)
   advanceFrontier(triage.id, batch.to_rank)
@@ -785,11 +951,22 @@ function settleStatus(triageId) {
   const row = db.prepare(`
     SELECT
       (SELECT COUNT(*) FROM triage_applicants WHERE triage_id = ? AND deep_status = 'scored') AS scored,
+    /* Anything still waiting to be read. A session with a delivery mid-parse is
+       not complete, however much of the earlier pile has been analysed. */
+    (SELECT COUNT(*) FROM triage_applicants
+      WHERE triage_id = ? AND parse_status = 'pending') AS unread,
       (SELECT COUNT(*) FROM triage_applicants
         WHERE triage_id = ? AND parse_status = 'parsed' AND deep_status <> 'scored') AS outstanding
-  `).get(triageId, triageId)
+  `).get(triageId, triageId, triageId)
 
-  const status = row.scored === 0 ? 'processing' : (row.outstanding === 0 ? 'completed' : 'ready')
+  /*
+   * "Completed" means every CV in the session reached an end state, not merely
+   * that everything already read has been scored. A delivery still being
+   * parsed keeps the session at 'ready' — it has results worth reading, and
+   * more coming — which is what a rolling session looks like most of the time.
+   */
+  const settled = row.outstanding === 0 && row.unread === 0
+  const status = row.scored === 0 ? 'processing' : (settled ? 'completed' : 'ready')
 
   db.prepare(`
     UPDATE triages SET status = ?, completed_at = CASE WHEN ? = 'completed' THEN COALESCE(completed_at, ?) ELSE completed_at END, updated_at = ?
@@ -846,12 +1023,65 @@ export function requestNextTranche(triageId) {
   return { queued: result.queued, from, to, reason: result.queued ? 'queued' : 'already_queued' }
 }
 
-/** Starts the pipeline for a Triage that has just been paid for. */
-export function startProcessing(triageId) {
-  db.prepare(`UPDATE triages SET status = 'processing', updated_at = ? WHERE id = ?`)
-    .run(now(), triageId)
-  enqueue({ triageId, kind: 'parse' })
-  pump()
+/**
+ * Starts the pipeline for one delivery of CVs.
+ *
+ * Called at launch for the first delivery, and again for every later drop into
+ * an open session. The two are the same work — read the files, rank them,
+ * analyse what is owed — and the only thing that distinguishes them is the
+ * delivery the batch carries.
+ */
+export function startProcessing(triageId, { dropId = null, wake = true } = {}) {
+  /* Not over a failed session. Reviving one is a deliberate act with an error
+     message to clear and a recruiter to tell, and it belongs to the lifecycle
+     work rather than to a silent side effect of an upload. */
+  db.prepare(`
+    UPDATE triages SET status = 'processing', updated_at = ? WHERE id = ? AND status <> 'failed'
+  `).run(now(), triageId)
+  enqueue({ triageId, kind: 'parse', dropId })
+  /* `wake: false` enqueues without running anything here. Used where the work
+     belongs to another process — the server holds the pump, and two pumps on
+     one SQLite file race for the same batch. The waker below picks it up. */
+  if (wake) pump()
+}
+
+/**
+ * Looks for work nobody started.
+ *
+ * Until now every batch was enqueued by something that immediately pumped, so
+ * "queued" and "about to run" were the same state. Rolling sessions break that:
+ * a delivery can be written by one process and owed by another, a drop can
+ * arrive while the pump is busy with a different session, and the client is no
+ * longer the thing that drives analysis forward — a recruiter who adds CVs on
+ * Tuesday and does not come back until Friday should return to a finished
+ * ranking, not to a queue waiting for their scroll.
+ *
+ * Cheap enough to run often: one indexed count against triage_batches, and it
+ * does nothing at all unless something is actually waiting.
+ */
+export function startQueueWaker({ everyMs = TRIAGE.wakeMs } = {}) {
+  /* Floored, because a bad env value here is a hot loop against the database
+     rather than a slow queue. */
+  const period = Math.max(250, Number.isFinite(everyMs) ? everyMs : 5000)
+
+  const timer = setInterval(() => {
+    if (stopped) return
+    try {
+      const waiting = db.prepare(
+        `SELECT COUNT(*) AS n FROM triage_batches WHERE status = 'queued'`,
+      ).get().n
+      if (waiting > 0) pump()
+    } catch (error) {
+      /* A timer callback that throws takes the process with it. The queue is
+         allowed to have a bad minute; the server is not allowed to fall over
+         because of one. */
+      console.warn(`  triage waker: ${error.message}`)
+    }
+  }, period)
+
+  /* Never the reason the process stays alive. */
+  timer.unref?.()
+  return timer
 }
 
 /** Whether any work is outstanding, for the workspace's polling to stop on. */

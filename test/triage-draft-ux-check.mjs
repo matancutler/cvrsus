@@ -93,6 +93,7 @@ if (triageId) {
   for (const companyId of [owner.company.id, stranger.company.id]) {
     db.prepare('DELETE FROM triage_applicants WHERE triage_id IN (SELECT id FROM triages WHERE company_id = ?)').run(companyId)
     db.prepare('DELETE FROM triage_cost_events WHERE triage_id IN (SELECT id FROM triages WHERE company_id = ?)').run(companyId)
+    db.prepare('DELETE FROM triage_drops WHERE triage_id IN (SELECT id FROM triages WHERE company_id = ?)').run(companyId)
     db.prepare('DELETE FROM triages WHERE company_id = ?').run(companyId)
     const recruiters = db.prepare('SELECT id FROM recruiters WHERE company_id = ?').all(companyId).map((r) => r.id)
     if (recruiters.length) {

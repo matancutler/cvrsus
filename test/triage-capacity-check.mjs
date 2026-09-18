@@ -394,7 +394,7 @@ for (const company of [org.company.id, other.company.id]) {
     for (const a of db.prepare(`SELECT stored_name FROM triage_applicants WHERE triage_id = ?`).all(row.id)) {
       try { fs.unlinkSync(path.join(uploadDir, a.stored_name)) } catch { /* already gone */ }
     }
-    for (const table of ['triage_applicants', 'triage_batches', 'triage_cost_events']) {
+    for (const table of ['triage_applicants', 'triage_batches', 'triage_cost_events', 'triage_drops']) {
       db.prepare(`DELETE FROM ${table} WHERE triage_id = ?`).run(row.id)
     }
   }

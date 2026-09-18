@@ -301,6 +301,7 @@ for (const row of db.prepare(`SELECT id FROM triages WHERE company_id = ?`).all(
   db.prepare(`DELETE FROM triage_applicants WHERE triage_id = ?`).run(row.id)
   db.prepare(`DELETE FROM triage_batches WHERE triage_id = ?`).run(row.id)
   db.prepare(`DELETE FROM triage_cost_events WHERE triage_id = ?`).run(row.id)
+  db.prepare(`DELETE FROM triage_drops WHERE triage_id = ?`).run(row.id)
 }
 db.prepare(`DELETE FROM triages WHERE company_id = ?`).run(org.company.id)
 db.prepare(`DELETE FROM billing_ledger WHERE company_id = ?`).run(org.company.id)

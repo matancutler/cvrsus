@@ -126,6 +126,7 @@ const stored = db.prepare(`
 `).all(org.company.id).map((r) => r.stored_name).filter(Boolean)
 db.prepare('DELETE FROM triage_applicants WHERE triage_id IN (SELECT id FROM triages WHERE company_id = ?)').run(org.company.id)
 db.prepare('DELETE FROM triage_cost_events WHERE triage_id IN (SELECT id FROM triages WHERE company_id = ?)').run(org.company.id)
+db.prepare('DELETE FROM triage_drops WHERE triage_id IN (SELECT id FROM triages WHERE company_id = ?)').run(org.company.id)
 db.prepare('DELETE FROM triage_batches WHERE triage_id IN (SELECT id FROM triages WHERE company_id = ?)').run(org.company.id)
 db.prepare('DELETE FROM triages WHERE company_id = ?').run(org.company.id)
 for (const name of stored) {

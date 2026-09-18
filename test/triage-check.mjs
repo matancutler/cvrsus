@@ -371,9 +371,14 @@ check('the internal preliminary score is never serialised',
 check('each result explains itself', settled.results.every((row) => row.analysis))
 check('and carries its own CV back', settled.results.every((row) => row.fileName))
 
+/* The promise changed with rolling sessions (plan Q1): the number shown is the
+   candidate's own fit, so adding CVs never moves a score a recruiter has
+   already read. The payload has to say that rather than the opposite. */
 const scoringNote = settled.scoring?.explanation ?? ''
-check('the rescoring behaviour is stated rather than left to be noticed',
-  /re-rank|relative/i.test(scoringNote))
+check('the scoring note promises a score that does not move',
+  /never changes a score already given/i.test(scoringNote), scoringNote)
+check('and no longer warns about re-ranking, which no longer happens',
+  !/re-rank|relative to every applicant/i.test(scoringNote))
 
 // ------------------------------------------------------------------- the CV ---
 
@@ -479,6 +484,7 @@ for (const company of [org.company.id, other.company.id]) {
     db.prepare(`DELETE FROM triage_applicants WHERE triage_id = ?`).run(row.id)
     db.prepare(`DELETE FROM triage_batches WHERE triage_id = ?`).run(row.id)
     db.prepare(`DELETE FROM triage_cost_events WHERE triage_id = ?`).run(row.id)
+    db.prepare(`DELETE FROM triage_drops WHERE triage_id = ?`).run(row.id)
   }
   db.prepare(`DELETE FROM triages WHERE company_id = ?`).run(company)
   db.prepare(`DELETE FROM billing_ledger WHERE company_id = ?`).run(company)

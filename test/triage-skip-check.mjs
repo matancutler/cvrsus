@@ -288,6 +288,7 @@ for (const row of stored) {
 db.prepare(`DELETE FROM triage_applicants WHERE triage_id = ?`).run(id)
 db.prepare(`DELETE FROM triage_batches WHERE triage_id = ?`).run(id)
 db.prepare(`DELETE FROM triage_cost_events WHERE triage_id = ?`).run(id)
+db.prepare(`DELETE FROM triage_drops WHERE triage_id = ?`).run(id)
 db.prepare(`DELETE FROM triages WHERE id = ?`).run(id)
 
 const recruiters = db.prepare(`SELECT id FROM recruiters WHERE company_id = ?`).all(org.company.id)

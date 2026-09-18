@@ -211,6 +211,7 @@ for (const co of db.prepare(`SELECT id, name FROM companies`).all()) {
   }
   for (const t of db.prepare(`SELECT id FROM triages WHERE company_id = ?`).all(co.id)) {
     db.prepare(`DELETE FROM triage_applicants WHERE triage_id = ?`).run(t.id)
+    db.prepare(`DELETE FROM triage_drops WHERE triage_id = ?`).run(t.id)
   }
   db.prepare(`DELETE FROM triages WHERE company_id = ?`).run(co.id)
   for (const r of db.prepare(`SELECT id FROM recruiters WHERE company_id = ?`).all(co.id)) {

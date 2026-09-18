@@ -28,7 +28,6 @@ import path from 'node:path'
 
 import db, { UPLOAD_DIR } from './db.js'
 import { TRIAGE_MAX_FILES } from './pricing.js'
-import { normalizeUniverse } from './matching/normalize.js'
 
 /**
  * The funnel, as Section 3.3 specifies it.
@@ -71,6 +70,17 @@ export const TRIAGE = {
    * exactly what this cost before caching.
    */
   warmupMs: num('TRIAGE_WARMUP_MS', 8000),
+
+  /**
+   * How often the queue looks for work nobody started.
+   *
+   * Rolling sessions need this: a delivery can be written by one process and
+   * owed by another, and a recruiter who adds CVs on Tuesday should come back
+   * on Friday to a finished ranking rather than to a queue waiting for their
+   * scroll. Read through num() like every other tuneable here, so an empty or
+   * nonsense value falls back rather than becoming a hot loop.
+   */
+  wakeMs: num('TRIAGE_WAKE_MS', 5000),
 }
 
 function num(name, fallback) {
@@ -316,17 +326,17 @@ function readJson(value) {
  * two identical files arriving in the same instant race on the index and one of
  * them loses, which a read-then-write check here could not guarantee.
  */
-export function addFile({ triageId, file }) {
+export function addFile({ triageId, file, dropId = null }) {
   const hash = hashFile(file.path)
   const stamp = now()
 
   try {
     const info = db.prepare(`
       INSERT INTO triage_applicants (
-        triage_id, file_name, stored_name, file_size, mime_type, content_hash, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        triage_id, drop_id, file_name, stored_name, file_size, mime_type, content_hash, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      triageId, file.originalname, path.basename(file.path),
+      triageId, dropId, file.originalname, path.basename(file.path),
       file.size ?? null, file.mimetype ?? null, hash, stamp,
     )
 
@@ -352,6 +362,128 @@ export function addFile({ triageId, file }) {
       originalName: original?.file_name ?? null,
     }
   }
+}
+
+/**
+ * Opens a delivery — the thing a pile of CVs is added to.
+ *
+ * Every CV belongs to one. The first is opened when the session is created, so
+ * a launch is simply "drop 1 is ready"; later ones are opened when a recruiter
+ * adds more. The number is what makes the queue able to run twice: parse and
+ * preliminary are keyed by drop, so the second delivery is a different unit of
+ * work rather than a duplicate of the first that the database silently ignores.
+ */
+export function openDrop({ triageId, recruiterId = null }) {
+  const next = db.prepare(
+    `SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM triage_drops WHERE triage_id = ?`,
+  ).get(triageId).seq
+
+  const info = db.prepare(`
+    INSERT INTO triage_drops (triage_id, seq, recruiter_id, created_at) VALUES (?, ?, ?, ?)
+  `).run(triageId, next, recruiterId ?? null, now())
+
+  return { id: Number(info.lastInsertRowid), seq: next, triageId }
+}
+
+/**
+ * Gives a session that predates deliveries one for the CVs it already holds.
+ *
+ * Those rows carry drop_id NULL. Left that way a session could hold two kinds
+ * of row at once, and everything that works per delivery — parsing above all —
+ * would see one kind and not the other: a draft uploaded before this code and
+ * launched after it would have had its original CVs charged and then never
+ * read, while the session reported itself complete.
+ *
+ * So the old pile is adopted into a delivery of its own, numbered 1, before any
+ * new delivery is opened. The history then reads honestly — "36 CVs at the
+ * start, 12 more on Friday" — rather than folding the old pile into whatever
+ * arrived next.
+ */
+export function ensureLaunchDrop(triageId) {
+  const orphans = db.prepare(
+    `SELECT COUNT(*) AS n FROM triage_applicants WHERE triage_id = ? AND drop_id IS NULL`,
+  ).get(triageId).n
+
+  if (orphans === 0) return null
+
+  const drop = openDrop({ triageId })
+  db.prepare(`UPDATE triage_applicants SET drop_id = ? WHERE triage_id = ? AND drop_id IS NULL`)
+    .run(drop.id, triageId)
+  closeDrop(drop.id)
+
+  return drop
+}
+
+/**
+ * The delivery a new file joins: the newest one, or a fresh one if the session
+ * has none.
+ */
+export function currentDrop({ triageId, recruiterId = null }) {
+  /* Anything already here belongs to a delivery of its own first. */
+  ensureLaunchDrop(triageId)
+
+  const open = db.prepare(
+    `SELECT id, seq FROM triage_drops WHERE triage_id = ? ORDER BY seq DESC LIMIT 1`,
+  ).get(triageId)
+
+  return open ? { ...open, triageId } : openDrop({ triageId, recruiterId })
+}
+
+/** Records how many rows a delivery ended up holding. Display only. */
+export function closeDrop(dropId) {
+  db.prepare(`
+    UPDATE triage_drops SET files = (
+      SELECT COUNT(*) FROM triage_applicants WHERE drop_id = ?
+    ) WHERE id = ?
+  `).run(dropId, dropId)
+}
+
+/** The newest delivery, or null when a session has none. */
+export function latestDrop(triageId) {
+  return db.prepare(
+    `SELECT id, seq FROM triage_drops WHERE triage_id = ? ORDER BY seq DESC LIMIT 1`,
+  ).get(triageId) ?? null
+}
+
+/**
+ * Adds CVs to a session that is already running, as one delivery.
+ *
+ * This is the whole of rolling Triage on the server: open a delivery, write the
+ * rows, start the pipeline for it. Everything else — parsing only these files,
+ * ranking them after the ones already there, analysing them — follows from the
+ * drop the batches carry.
+ *
+ * It takes files that are already on disk, in the shape multer produces, so the
+ * route that calls it stays a thin wrapper around this.
+ */
+export function addCvsToSession({ triageId, recruiterId = null, files = [] }) {
+  /* A session that predates deliveries gets one for its existing CVs before
+     this one is opened, so the new files are never mixed in with them. */
+  ensureLaunchDrop(triageId)
+  const drop = openDrop({ triageId, recruiterId })
+  const results = []
+
+  for (const file of files) {
+    const outcome = addFile({ triageId, file, dropId: drop.id })
+    results.push(outcome.duplicate
+      ? { name: file.originalname, status: 'duplicate', reason: 'The same file is already in this session.' }
+      : { name: file.originalname, status: 'added', id: outcome.id })
+  }
+
+  closeDrop(drop.id)
+  return { drop, results, added: results.filter((row) => row.status === 'added').length }
+}
+
+/** Every delivery into a session, oldest first — the drop history. */
+export function listDrops(triageId) {
+  return db.prepare(`
+    SELECT d.id, d.seq, d.recruiter_id AS recruiterId, d.created_at AS at,
+           TRIM(COALESCE(r.first_name, '') || ' ' || COALESCE(r.last_name, '')) AS author,
+           (SELECT COUNT(*) FROM triage_applicants a WHERE a.drop_id = d.id) AS files
+    FROM triage_drops d
+    LEFT JOIN recruiters r ON r.id = d.recruiter_id
+    WHERE d.triage_id = ? ORDER BY d.seq
+  `).all(triageId)
 }
 
 function hashFile(filePath) {
@@ -559,25 +691,53 @@ export function launchReadiness({ triage, capacity }) {
  * the reason Section 4 forbids inventing a separate Triage percentage.
  */
 export function results({ triageId, offset = 0, limit = TRIAGE.pageSize }) {
-  const scored = db.prepare(`
-    SELECT * FROM triage_applicants
+  /*
+   * The score shown is the candidate's own fit, and nothing else.
+   *
+   * It used to be normalised across every applicant analysed so far —
+   * round(fit / best * ceiling) — which is defensible when the pile is the
+   * whole universe, and is not once a session stays open for weeks. The
+   * denominator was the best CV in the session, so a strong arrival in week
+   * four quietly lowered the number beside everybody a recruiter had already
+   * read and decided about. A shortlist whose numbers move overnight is a
+   * shortlist nobody trusts.
+   *
+   * absolute_fit is written once when the CV is scored and never touched
+   * again, so this number is stable for the life of the session by
+   * construction rather than by promise. Positions still move — a stronger CV
+   * lands above a weaker one — but nobody's number changes.
+   *
+   * The cost, stated because it is real: a Triage percentage no longer means
+   * exactly what a Search percentage means, since Search still normalises
+   * against its pool.
+   */
+  const total = db.prepare(`
+    SELECT COUNT(*) AS n FROM triage_applicants WHERE triage_id = ? AND deep_status = 'scored'
+  `).get(triageId).n
+
+  /*
+   * Named columns, ordered and paged by the database.
+   *
+   * This read used to be SELECT * over every scored applicant — including
+   * extracted_text, the whole CV, for every row — then sorted in JavaScript and
+   * sliced to twenty-five. At forty CVs nobody noticed. At eight hundred it is
+   * tens of megabytes on every poll, and the workspace polls every 2.5
+   * seconds. Rolling sessions are the thing that makes sessions get big.
+   */
+  const page = db.prepare(`
+    SELECT id, display_name, email, phone, location, file_name, file_size,
+           reviewed_at, absolute_fit, criteria, explanation, analysis_source, drop_id, created_at
+    FROM triage_applicants
     WHERE triage_id = ? AND deep_status = 'scored'
-  `).all(triageId)
-
-  const scores = normalizeUniverse(
-    scored.map((row) => ({ candidateId: row.id, absoluteFit: row.absolute_fit })),
-  )
-
-  const ordered = scored
-    .map((row) => ({ row, score: scores.get(row.id) ?? 0 }))
-    .sort((a, b) => b.score - a.score
-      || String(a.row.display_name ?? '').localeCompare(String(b.row.display_name ?? '')))
-
-  const page = ordered.slice(offset, offset + limit)
+    ORDER BY absolute_fit DESC, display_name ASC, id ASC
+    LIMIT ? OFFSET ?
+  `).all(triageId, limit, offset)
 
   return {
-    results: page.map(({ row, score }, index) => applicantView(row, score, offset + index + 1)),
-    total: ordered.length,
+    results: page.map((row, index) => applicantView(
+      row, Math.round(row.absolute_fit ?? 0), offset + index + 1,
+    )),
+    total,
     offset,
     /* How many the next page will hold, so the button can say a true number
        rather than promising 25 and delivering 6. Same reasoning as hasMore
@@ -587,7 +747,7 @@ export function results({ triageId, offset = 0, limit = TRIAGE.pageSize }) {
     /* Whether reaching the end of this page should ask for more work. The
        client does not decide that — it would have to know the tranche size, and
        then two places would define the funnel. */
-    hasMore: offset + page.length < ordered.length,
+    hasMore: offset + page.length < total,
   }
 }
 
@@ -748,6 +908,7 @@ export function deleteTriage({ companyId, id }) {
     db.prepare(`DELETE FROM triage_applicants WHERE triage_id = ?`).run(id)
     db.prepare(`DELETE FROM triage_batches WHERE triage_id = ?`).run(id)
     db.prepare(`DELETE FROM triage_cost_events WHERE triage_id = ?`).run(id)
+    db.prepare(`DELETE FROM triage_drops WHERE triage_id = ?`).run(id)
     db.prepare(`DELETE FROM triages WHERE id = ?`).run(id)
   })()
 
