@@ -1256,9 +1256,35 @@ function TriageResultCard({ row, triageId, onOpen, onFile, folder = null }) {
             <h3>
               <span className="result-name">{row.name}</span>
             </h3>
-            <p className="muted">
-              {[row.location, row.email, row.phone].filter(Boolean).join(' · ') || row.fileName}
-            </p>
+            {/*
+              One field to a line, each with its label.
+              These three ran together on a single line separated by dots, which
+              reads fine when all three are present and badly when they are not:
+              a card showing "Tel Aviv-Yafo · +972 53-388-1420" leaves the reader
+              working out whether the missing middle was an email or a second
+              phone number. A CV parser fills these in one at a time and misses
+              some on most documents, so the label is doing real work here.
+            */}
+            <dl className="result-contact">
+              {[
+                ['Location', row.location],
+                ['Email', row.email],
+                ['Phone', row.phone],
+              ].filter(([, value]) => value).map(([label, value]) => (
+                <div key={label}>
+                  <dt>{label}</dt>
+                  <dd>{value}</dd>
+                </div>
+              ))}
+              {/* Nothing was parsed out of the document at all — name the file,
+                  which is the only thing there is to say about it. */}
+              {!row.location && !row.email && !row.phone && (
+                <div>
+                  <dt>File</dt>
+                  <dd>{row.fileName}</dd>
+                </div>
+              )}
+            </dl>
           </div>
         </span>
 

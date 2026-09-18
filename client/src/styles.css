@@ -2551,6 +2551,39 @@ input:focus, select:focus, textarea:focus, .chip-input:focus-within {
 .result-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 
 .result-identity { min-width: 0; display: flex; flex-direction: column; gap: 0.15rem; }
+
+/*
+ * A Triage applicant's contact details, one labelled line each.
+ *
+ * A definition list rather than three paragraphs, because that is what this is:
+ * three labels and their values. The label column is not fixed — an email is
+ * far longer than its label and a fixed column would leave a gap on every card
+ * — so each row is its own flex line and the value takes what is left.
+ *
+ * The value truncates rather than wrapping. These sit in a card whose height
+ * the list relies on being uniform, and an address long enough to wrap would
+ * push one card taller than its neighbours; the whole value is in the dialog a
+ * press away.
+ */
+.result-contact { margin: 0.1rem 0 0; display: grid; gap: 0.1rem; font-size: 0.8125rem; }
+.result-contact > div { display: flex; align-items: baseline; gap: 0.35rem; min-width: 0; }
+.result-contact dt {
+  flex: none;
+  font-weight: var(--w-semi);
+  color: var(--ink-2);
+}
+.result-contact dt::after { content: ":"; }
+.result-contact dd {
+  margin: 0;
+  min-width: 0;
+  /* --ink-2, not --ink-3: an email address is content somebody reads and
+     copies, and --ink-3 is for captions and placeholders. The label is told
+     apart by its weight, which is the difference that was asked for. */
+  color: var(--ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .result-tags { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.15rem; }
 
 /*
@@ -9111,6 +9144,11 @@ html:has(.workspace-shell) { scrollbar-gutter: auto; }
 .tag {
   display: inline-flex;
   align-items: center;
+  /* Centred, not left-aligned. A chip is a label rather than a line of prose,
+     and any chip wider than its own text — a short tag beside a long one, or
+     the "+2" counter — read as though the word had slipped to one side. */
+  justify-content: center;
+  text-align: center;
   gap: 0.25rem;
   padding: 0.16rem 0.5rem;
   border: 1px solid transparent;
