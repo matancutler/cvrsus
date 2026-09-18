@@ -720,5 +720,72 @@ alone, but phases 1 and 2 have to be right or everything above them inherits the
 
 ---
 
+## 8. Build log
+
+Each phase is built on `rolling-triage`, tested, reviewed adversarially by readers who did not
+write it, and logged here. Nothing has been merged to `main` since the bug-fix release
+(`9ee130e`); production still runs Phase 1 only, and `TRIAGE_ADD_CVS` is off there regardless.
+
+### Phase 1 — the pipeline can run twice · done
+
+Drop identity (`triage_drops`, `drop_id` on applicants and batches, and the drop in the queue's
+idempotency key), append-only `prelim_rank`, a queue waker so analysis finishes without a browser,
+the results query rewritten to name its columns and page in SQL, and the stable `absolute_fit` from
+Q1. Both bugs in 4.3 fixed.
+
+**Review found four real defects**, all fixed with regression tests: the tranche was sized by
+parsed rows rather than by ranks, so the frontier could run past ranks that did not exist yet; a
+legacy draft taking a new file lost its original CVs; `runDeep` claimed rows before work that could
+throw; and a later delivery failing left its CVs in a state nothing reported.
+
+One claim I made to Gabriel and then corrected: I said the "Show the next 25" fault was costing
+paying customers that day. It is not — on a one-time Triage the overshoot self-heals, because the
+initial batch covers ranks 1–50 regardless. It becomes permanent loss only once a session takes a
+second delivery.
+
+### Phase 2 — charging per delivery · done
+
+`triage_drops` carries the charge (`ledger_id`, `charged_cvs`, `refunded_cvs`, `charged_at`) and the
+UPDATE that sets `ledger_id` is the claim, so a retried upload charges once. Session counters stay
+the sum of deliveries, which is why the usage screen, `triageCvsUsed` and the audit script needed no
+changes. `billing_ledger` gains `triage_id` and `triage_drop_id`. Refunds are per delivery.
+`POST /api/hr/triage/:id/cvs` behind `TRIAGE_ADD_CVS`, capacity checked before anything is written,
+`POST /api/hr/triage/:id/retry` free, Q15 by email, decision 4 reported in the results payload, and
+a low-balance warning at `TRIAGE_LOW_WATER` (50) instead of one email at exactly zero.
+
+Two migrations, both additive and idempotent: `adoptSessionCharge` hands a pre-deliveries session's
+charge to the delivery its CVs are adopted into, and `attributeTriageCharges` does the same at boot
+for sessions launched in the window between Phase 1 and Phase 2. Neither writes a ledger row — no
+money moves, the charge is recorded where it now belongs.
+
+**Found while building:** the global error handler sweeps every entry in `req.files`, which undid
+Phase 1's committed-file protection one layer out. Reachable today through the
+launched-while-uploading 409 on the draft upload route: the row survived, its file did not, and the
+loss surfaced days later as an unreadable CV.
+
+**Review found eight defects**, two of them losing real money (a legacy session refunding its whole
+charge for one unreadable file; a later delivery that failed permanently never being refunded).
+All fixed — see commit `2b883c6` for the full account.
+
+**Covered by reasoning rather than by a test:** the four queue-failure fixes (the opening-pile
+predicate, the refund for a failed later delivery, the queue leaving a failed session alone, and the
+stranded deep batch). Forcing a batch to throw structurally means breaking the model call itself,
+and a test that has to win a race in order to fail passes for the wrong reason most of the time.
+
+**Deferred to Phase 4, deliberately:** a CV filed into a folder and then superseded stays in the
+folder and in folder exports, carrying its score, while no longer appearing in the ranking — so
+there is no affordance to un-file it. The row is still reachable by id, so the dialog and the CV
+download work; what is missing is a way to see it from the session page. That belongs with the
+session page rewrite.
+
+**One decision for Gabriel, not taken here.** If the server dies between writing a delivery's rows
+and charging them, those CVs sit unpaid in a running session: nothing will queue them, and the
+session can never report itself complete. `npm run triage:audit` reports the count ("unpaid
+deliveries holding CVs"). Clearing them automatically at boot would mean deleting uploaded CVs
+without being asked, and charging them automatically would mean taking money without being asked, so
+neither is done. Today the local and production counts are zero.
+
+---
+
 *Written 18 September 2026 against the working tree. Cost figures are estimates from prompt sizes,
 not measurements — see `docs/ai-cost-review.html`. Production data was not inspected; see Q14.*
