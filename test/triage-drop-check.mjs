@@ -14,11 +14,11 @@
  * advanced frontier would slide CVs past the cursor that decides what gets
  * analysed, so they would sit unscored for ever with nothing to show it.
  *
- * The second delivery is written here rather than posted, because the route
- * that adds CVs to a running session does not exist yet: charging per delivery
- * is Phase 2, and a route that adds CVs to a paid session before the charging
- * exists is a route that analyses CVs for nothing. The server-side path this
- * drives — addCvsToSession — is exactly the one that route will call.
+ * The second delivery is written here rather than posted, on purpose. This
+ * suite is about the pipeline: every CV analysed exactly once, ranks that do
+ * not move, a queue that finds its own work. Driving addCvsToSession directly
+ * is the shortest path to that and keeps the assertions about the thing being
+ * tested. The money that route adds on top is test:triage-charge's job.
  *
  * It also proves the third thing Phase 1 promised: a score a recruiter has
  * already read does not move when new CVs land.
@@ -229,11 +229,16 @@ check('the frontier ends at the end of the pile', frontier === FIRST + SECOND, `
 section('Every CV is charged exactly once')
 
 /*
- * The first delivery was charged at launch. The second is NOT charged here, and
- * that is deliberate rather than a gap in the test: charging per delivery is
- * Phase 2, and until it lands the route that would let a recruiter add CVs is
- * closed. What this asserts is the part that matters either way — nothing was
- * charged twice, and nothing was charged for a delivery that never happened.
+ * The first delivery was charged at launch. The second is NOT charged here,
+ * and that is the invariant rather than a gap: charging belongs to the ROUTE,
+ * and this suite drives addCvsToSession directly. Writing rows is not the same
+ * act as paying for them, and anything that charged as a side effect of the
+ * write would charge the migration and the tests too.
+ *
+ * What the money actually does across two deliveries is test:triage-charge,
+ * which goes through the route and asserts against the balance and the ledger.
+ * What this asserts is the part that matters either way — nothing was charged
+ * twice, and nothing was charged for a delivery that never happened.
  */
 const consumeRows = db.prepare(`
   SELECT COUNT(*) AS n, COALESCE(SUM(delta), 0) AS delta FROM billing_ledger
@@ -242,7 +247,7 @@ const consumeRows = db.prepare(`
 
 check('one charge, for the delivery that was launched', consumeRows.n === 1, `${consumeRows.n} rows`)
 check('and it is the CV count, not a session fee', consumeRows.delta === -FIRST, `${consumeRows.delta}`)
-check('the second delivery is not charged yet — Phase 2 owns that',
+check('writing a delivery does not charge for it — the route does that',
   db.prepare(`SELECT charged_cvs AS n FROM triages WHERE id = ?`).get(id).n === FIRST)
 
 section('A score a recruiter has already read does not move')
