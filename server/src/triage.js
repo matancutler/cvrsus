@@ -97,6 +97,62 @@ export const TRIAGE = {
    * one delivery and a session with three are the same shape.
    */
   addCvs: flag('TRIAGE_ADD_CVS', process.env.NODE_ENV !== 'production'),
+
+  /**
+   * How long a closed session's CVs are kept, and how long any CV is kept.
+   *
+   * Q6, and both are settings because they are a decision rather than a
+   * technical fact — changing the promise should not need a deploy. Whichever
+   * comes first wins: a session left open for two years still lets go of the
+   * CVs somebody sent it in its first month.
+   *
+   * Zero on either switches that half of the rule off.
+   */
+  retainAfterCloseDays: num('TRIAGE_RETAIN_AFTER_CLOSE_DAYS', 90),
+  retainMaxDays: num('TRIAGE_RETAIN_MAX_DAYS', 365),
+
+  /**
+   * Whether the retention sweep is allowed to delete anything.
+   *
+   * Off. It runs on the daily timer, works out exactly what it would remove,
+   * writes that down, and stops. Deleting other people's CVs on a schedule is
+   * the single least reversible thing this product can do, and it should run
+   * in the open for a full cycle before it is trusted to act — which is what
+   * this setting is for, and why turning it on is deliberate.
+   */
+  retentionDeletes: flag('TRIAGE_RETENTION_DELETES', false),
+
+  /**
+   * How many sessions one organization may have open at once.
+   *
+   * An open session with no analysis running is free storage on our disk, and
+   * nothing else caps it. 25 is a number nobody legitimately working will
+   * meet and an abuser will; it is not a plan limit and should not be sold as
+   * one. Zero switches the cap off.
+   */
+  maxOpenSessions: num('TRIAGE_MAX_OPEN_SESSIONS', 25),
+}
+
+/** The three states a recruiter can put a session in. */
+export const LIFECYCLES = ['open', 'paused', 'closed']
+
+/**
+ * What state this session is in, including for rows that predate the column.
+ *
+ * NULL means "older than the lifecycle column", and the honest answer for
+ * those is readable from the row itself: a session that finished is closed, a
+ * session still working is open. That is Q10 — every Triage in production was
+ * launched, charged and finished under the one-time model, and they are
+ * closed sessions whether or not anybody has run a migration.
+ *
+ * Doing it this way rather than with DEFAULT 'open' is the difference between
+ * a deploy that changes nothing and a deploy that turns every finished 2026
+ * report into a live shortlist that can take uploads and charges.
+ */
+export function lifecycleOf(row) {
+  if (row?.lifecycle) return row.lifecycle
+  if (row?.status === 'completed' || row?.status === 'failed') return 'closed'
+  return 'open'
 }
 
 function num(name, fallback) {
@@ -129,9 +185,21 @@ const now = () => new Date().toISOString()
  */
 export function createDraft({ companyId, recruiterId, title = null }) {
   const stamp = now()
+  /*
+   * The lifecycle is written explicitly, and that matters more than it looks.
+   *
+   * NULL means "older than the lifecycle column", and lifecycleOf answers
+   * those from the row's own state — a finished session is closed. That is
+   * the right reading for a Triage from 2026 and the wrong one for a session
+   * created today, which finishes its first pile and is then very much open:
+   * left to the fallback, a session would close itself the moment the queue
+   * caught up, and refuse the next delivery. So every session written from
+   * here on says what it is.
+   */
   const info = db.prepare(`
-    INSERT INTO triages (company_id, recruiter_id, title, file_cap, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO triages (
+      company_id, recruiter_id, title, file_cap, lifecycle, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, 'open', ?, ?)
   `).run(companyId, recruiterId, trimOrNull(title), TRIAGE.maxFiles, stamp, stamp)
 
   return getTriage({ companyId, id: Number(info.lastInsertRowid) })
@@ -314,6 +382,14 @@ function triageView(row) {
          buffer beyond the shown page is analysed but deliberately not shown. */
       frontier: row.analysis_frontier,
     },
+    /* What the recruiter has decided, beside what the pipeline has done. */
+    lifecycle: lifecycleOf(row),
+    closedAt: row.closed_at ?? null,
+    /* When these CVs will be deleted, if the rule has started running for
+       this session. Said out loud rather than left to the policy page: it is
+       a promise made about other people's data and the recruiter is the one
+       who has to keep it. */
+    purgeAfter: row.purge_after ?? null,
     launchedAt: row.launched_at,
     completedAt: row.completed_at,
     /* What this workspace actually cost, net of anything handed back for files
@@ -550,6 +626,77 @@ export function addCvsToSession({ triageId, recruiterId = null, files = [] }) {
   return { drop, results, added: results.filter((row) => row.status === 'added').length }
 }
 
+/**
+ * Moves a session between open, paused and closed.
+ *
+ * Q7: any seat may pause and close. Deleting is the one that is restricted,
+ * and it is restricted elsewhere — these three are all reversible, and a
+ * colleague who closes a session somebody else is still reading has caused an
+ * inconvenience rather than a loss.
+ *
+ * Q16 decides what closing does to work in flight: analysis already paid for
+ * finishes. Nothing here touches the queue. Batches already enqueued run to
+ * completion, and what stops is new work — no more deliveries, and no more
+ * tranches when the recruiter scrolls. A session that stopped mid-analysis
+ * and threw away CVs the recruiter had bought would be a worse outcome than
+ * one that finishes and then sits still.
+ *
+ * Closing starts the retention clock and reopening clears it, because a
+ * reopened session is in use again and deleting its CVs on a date set by a
+ * decision that has since been reversed would be indefensible.
+ */
+export function setLifecycle({ triageId, to }) {
+  if (!LIFECYCLES.includes(to)) return { ok: false, reason: 'unknown_state' }
+
+  const row = db.prepare(
+    `SELECT id, status, lifecycle, closed_at FROM triages WHERE id = ?`,
+  ).get(triageId)
+  if (!row) return { ok: false, reason: 'not_found' }
+
+  const from = lifecycleOf(row)
+
+  /* A draft has nothing to pause or close — there is no work and no charge,
+     and the way to abandon one is to delete it. */
+  if (row.status === 'draft' && to !== 'open') {
+    return { ok: false, reason: 'not_started', from }
+  }
+
+  if (from === to) return { ok: true, changed: false, from, to }
+
+  const stamp = now()
+
+  if (to === 'closed') {
+    const days = TRIAGE.retainAfterCloseDays
+    const purge = days > 0
+      ? new Date(Date.now() + days * 86400000).toISOString()
+      : null
+
+    db.prepare(`
+      UPDATE triages SET lifecycle = 'closed', closed_at = ?, purge_after = ?, updated_at = ?
+      WHERE id = ?
+    `).run(stamp, purge, stamp, triageId)
+
+    return { ok: true, changed: true, from, to, purgeAfter: purge }
+  }
+
+  db.prepare(`
+    UPDATE triages SET lifecycle = ?, closed_at = NULL, purge_after = NULL, updated_at = ?
+    WHERE id = ?
+  `).run(to, stamp, triageId)
+
+  return { ok: true, changed: true, from, to, purgeAfter: null }
+}
+
+/** How many sessions this organization has open. The cap in 4.7 counts these. */
+export function openSessions(companyId) {
+  return db.prepare(`
+    SELECT COUNT(*) AS n FROM triages
+    WHERE company_id = ?
+      AND COALESCE(lifecycle,
+            CASE WHEN status IN ('completed', 'failed') THEN 'closed' ELSE 'open' END) = 'open'
+  `).get(companyId).n
+}
+
 /** Every delivery into a session, oldest first — the drop history. */
 export function listDrops(triageId) {
   return db.prepare(`
@@ -603,6 +750,73 @@ export function removeAllFiles({ triageId }) {
   }
   recount(triageId)
   return rows.length
+}
+
+/**
+ * Removes one CV from a session, whatever state that session is in.
+ *
+ * The draft-only `removeFile` above is a different thing: it takes a file out
+ * of a pile nobody has paid for yet. This one is the erasure route, and it
+ * works on a launched session because that is where the CVs actually are.
+ *
+ * What goes: the row, its bytes, the extracted text and the analysis (both
+ * live on the row), and its entries in any folder — those cascade, because
+ * folder_triage_items declares the foreign key and foreign keys are on.
+ *
+ * What stays: the charge. That CV was read and analysed, which is the work
+ * that was paid for, and deleting the record afterwards does not give the
+ * work back. It also matters that erasure is not a way to reclaim capacity —
+ * attaching a refund to a privacy right invites the wrong behaviour.
+ *
+ * The rank is left as a hole rather than renumbered. Renumbering would move
+ * ranks that other batches are mid-way through using, to fix an arithmetic
+ * problem that is better fixed by asking for the highest rank rather than the
+ * count of them — see requestNextTranche.
+ */
+export function removeApplicant({ triageId, applicantId }) {
+  const row = db.prepare(`
+    SELECT id, stored_name, email, parse_status FROM triage_applicants
+    WHERE id = ? AND triage_id = ?
+  `).get(applicantId, triageId)
+
+  if (!row) return null
+
+  db.prepare(`DELETE FROM triage_applicants WHERE id = ?`).run(row.id)
+  if (row.stored_name) {
+    fs.promises.unlink(path.join(UPLOAD_DIR, row.stored_name)).catch(() => {})
+  }
+
+  /*
+   * If this was the current CV for somebody who had sent more than one, the
+   * newest of the rest becomes current.
+   *
+   * Without it, deleting the newest version of a person's CV hides them
+   * entirely: the older ones are all marked 'duplicate', which is excluded
+   * from the results, from ranking and from analysis — so a recruiter who
+   * removed one CV would silently lose the candidate. The resolver in the
+   * queue would fix it on the next delivery; there may never be one.
+   */
+  if (row.parse_status === 'parsed' && row.email) {
+    const heir = db.prepare(`
+      SELECT id FROM triage_applicants
+      WHERE triage_id = ? AND email = ? AND parse_status = 'duplicate'
+      ORDER BY created_at DESC, id DESC LIMIT 1
+    `).get(triageId, row.email)
+
+    if (heir) {
+      db.prepare(`
+        UPDATE triage_applicants SET parse_status = 'parsed', duplicate_of = NULL WHERE id = ?
+      `).run(heir.id)
+    }
+  }
+
+  /* Anything that pointed at the deleted row as its newer version now points
+     at nothing. Cleared rather than repointed: the row it named is gone. */
+  db.prepare(`UPDATE triage_applicants SET duplicate_of = NULL WHERE duplicate_of = ?`)
+    .run(row.id)
+
+  recount(triageId)
+  return { id: row.id }
 }
 
 /** Recomputes the denormalised counters from the rows they summarise. */

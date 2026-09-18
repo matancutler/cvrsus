@@ -1222,10 +1222,15 @@ export function requestNextTranche(triageId) {
    * recruiter reading the first page while the rest of the pile is still being
    * read is exactly the case.
    *
-   * Ranks are dense, so the count of ranked rows is also the highest rank.
+   * The HIGHEST rank, not the count of ranked rows. Those were the same
+   * number while ranks were dense, and they stopped being the same the day a
+   * recruiter could delete one CV out of a session: the count drops, the
+   * highest rank does not, and the ladder would decide it had already reached
+   * the end of a pile it was one CV short of. Every other place that reasons
+   * about the frontier already asks for MAX for the same reason.
    */
   const total = db.prepare(`
-    SELECT COUNT(*) AS n FROM triage_applicants
+    SELECT COALESCE(MAX(prelim_rank), 0) AS n FROM triage_applicants
     WHERE triage_id = ? AND prelim_rank IS NOT NULL
   `).get(triageId).n
 

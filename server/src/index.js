@@ -162,6 +162,9 @@ import {
   failedFiles,
   getTriage,
   listDrops,
+  openSessions,
+  removeApplicant,
+  setLifecycle,
   launchReadiness,
   latestDraft,
   listTriages,
@@ -6862,6 +6865,15 @@ app.post('/api/hr/triage/:id/launch', recruiterOnly, (req, res, next) => {
       })
     }
 
+    if (TRIAGE.maxOpenSessions > 0) {
+      const open = openSessions(companyId)
+      if (open >= TRIAGE.maxOpenSessions) {
+        throw new HttpError(409,
+          `Your organization already has ${open} Triages open, which is the limit. `
+          + 'Close one you have finished with to start another.')
+      }
+    }
+
     const capacity = capacityFor(companyId, req.session.id, triage)
     const readiness = launchReadiness({ triage, capacity })
     if (!readiness.ready) {
@@ -7070,6 +7082,11 @@ app.post('/api/hr/triage/:id/cvs', recruiterOnly, triageUpload, async (req, res,
     if (triage.status === 'failed') {
       throw new HttpError(409, 'This Triage could not be processed. Start a new one for these CVs.')
     }
+    if (triage.lifecycle !== 'open') {
+      throw new HttpError(409, triage.lifecycle === 'paused'
+        ? 'This Triage is paused. Resume it to add more CVs.'
+        : 'This Triage is closed. Reopen it to add more CVs.')
+    }
 
     const preRejected = (req.rejectedUploads ?? []).map((entry) => ({
       name: entry.name, status: 'rejected', reason: entry.reason,
@@ -7273,6 +7290,12 @@ app.post('/api/hr/triage/:id/retry', recruiterOnly, (req, res, next) => {
     const { triage, error } = mustOwn({ companyId, id: req.params.id })
     if (error) throw new HttpError(404, 'That Triage does not exist.')
 
+    if (triage.lifecycle !== 'open') {
+      throw new HttpError(409, triage.lifecycle === 'paused'
+        ? 'This Triage is paused. Resume it to analyse anything further.'
+        : 'This Triage is closed. Reopen it to analyse anything further.')
+    }
+
     const requeued = requeueFailedAnalyses(triage.id)
 
     res.json({
@@ -7280,6 +7303,121 @@ app.post('/api/hr/triage/:id/retry', recruiterOnly, (req, res, next) => {
       triage: getTriage({ companyId, id: triage.id }),
       states: pipelineStates(triage.id),
       working: queueDepth(triage.id) > 0,
+    })
+  } catch (error) {
+    next(error)
+  }
+})
+
+/**
+ * Pause, resume, close or reopen a session.
+ *
+ * Q7: any seat may do all four. All of them are reversible, and a colleague
+ * who closes a session somebody else is still reading has caused an
+ * inconvenience, not a loss. Deleting is the restricted one, and it is
+ * restricted where it happens.
+ *
+ * Q16 decides what closing does to work in flight: analysis already paid for
+ * finishes. Nothing here touches the queue — batches already enqueued run to
+ * completion, and what stops is new work.
+ */
+app.post('/api/hr/triage/:id/lifecycle', recruiterOnly, (req, res, next) => {
+  try {
+    const companyId = companyIdFor(req.session.id)
+    const { triage, error } = mustOwn({ companyId, id: req.params.id })
+    if (error) throw new HttpError(404, 'That Triage does not exist.')
+
+    const to = String(req.body?.state ?? '').trim()
+
+    /*
+     * Reopening counts against the cap, because that is what the cap is for:
+     * closing twenty sessions and reopening them one at a time would
+     * otherwise walk straight past it.
+     */
+    if (to === 'open' && triage.lifecycle !== 'open' && TRIAGE.maxOpenSessions > 0) {
+      const open = openSessions(companyId)
+      if (open >= TRIAGE.maxOpenSessions) {
+        throw new HttpError(409,
+          `Your organization already has ${open} Triages open, which is the limit. `
+          + 'Close one you have finished with to reopen this.')
+      }
+    }
+
+    const moved = setLifecycle({ triageId: triage.id, to })
+
+    if (!moved.ok) {
+      if (moved.reason === 'unknown_state') {
+        throw new HttpError(400, 'That is not a state a Triage can be in.')
+      }
+      if (moved.reason === 'not_started') {
+        throw new HttpError(409, 'This Triage has not started yet. Delete it if you do not want it.')
+      }
+      throw new HttpError(404, 'That Triage does not exist.')
+    }
+
+    if (moved.changed) {
+      track('triage_lifecycle', {
+        actorType: 'recruiter', actorId: req.session.id,
+        triageId: triage.id, from: moved.from, to: moved.to,
+      })
+    }
+
+    res.json({
+      triage: getTriage({ companyId, id: triage.id }),
+      from: moved.from,
+      to: moved.to,
+      purgeAfter: moved.purgeAfter ?? null,
+    })
+  } catch (error) {
+    next(error)
+  }
+})
+
+/**
+ * Removes one CV from a session, at any point in its life.
+ *
+ * This is the route an erasure request needs. Until now the only way to take
+ * one person's CV out of a launched Triage was to delete the whole session —
+ * every other applicant with it — so the honest answer to "please delete my
+ * details" was that we could not, which sits badly beside a Terms that
+ * promises to assist as processor.
+ *
+ * Q7 restricts it: the author of the session or an organization
+ * administrator. Everything else about a session is any colleague's to do
+ * because everything else is reversible, and this is not.
+ *
+ * Nothing is refunded. The CV was read and analysed, which is the work that
+ * was paid for; deleting the record of it afterwards does not give that work
+ * back. A refund here would also make erasure a way to get capacity back,
+ * which is a bad thing to attach to a privacy right.
+ */
+app.delete('/api/hr/triage/:id/applicants/:applicantId', recruiterOnly, (req, res, next) => {
+  try {
+    const companyId = companyIdFor(req.session.id)
+    const { triage, error } = mustOwn({ companyId, id: req.params.id })
+    if (error) throw new HttpError(404, 'That Triage does not exist.')
+
+    const me = getRecruiter(req.session.id)
+    const mine = triage.recruiterId === req.session.id
+    if (!mine && !me?.is_org_admin) {
+      throw new HttpError(403,
+        'Only the person who created this Triage, or an administrator, can remove a CV from it.')
+    }
+
+    const removed = removeApplicant({
+      triageId: triage.id, applicantId: Number(req.params.applicantId),
+    })
+    if (!removed) throw new HttpError(404, 'That CV is not in this Triage.')
+
+    track('triage_applicant_deleted', {
+      actorType: 'recruiter', actorId: req.session.id,
+      triageId: triage.id, applicantId: Number(req.params.applicantId),
+    })
+
+    res.json({
+      removed: true,
+      triage: getTriage({ companyId, id: triage.id }),
+      states: pipelineStates(triage.id),
     })
   } catch (error) {
     next(error)
@@ -7304,8 +7442,18 @@ app.get('/api/hr/triage/:id/results', recruiterOnly, (req, res, next) => {
     const offset = Math.max(0, parseNumber(req.query.offset) ?? 0)
     const page = results({ triageId: triage.id, offset, limit: TRIAGE.pageSize })
 
+    /*
+     * New work only while the session is open.
+     *
+     * Not an error: a recruiter reading a closed session should still be able
+     * to page through what is there, and refusing the whole read because the
+     * side effect is not allowed would break history for no reason. The
+     * tranche simply is not asked for.
+     */
     let queued = null
-    if (req.query.advance === '1') queued = requestNextTranche(triage.id)
+    if (req.query.advance === '1' && triage.lifecycle === 'open') {
+      queued = requestNextTranche(triage.id)
+    }
 
     res.json({
       ...page,

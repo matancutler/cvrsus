@@ -829,6 +829,34 @@ export const SCHEMA = `
     profile_source    TEXT,
     status            TEXT NOT NULL DEFAULT 'draft'
                         CHECK (status IN ('draft', 'processing', 'ready', 'completed', 'failed')),
+    /*
+     * What the RECRUITER has decided about this session, beside what the
+     * pipeline has done to it.
+     *
+     * A second column rather than more values in status, because they answer
+     * different questions and both answers can be true at once: a paused
+     * session whose last batch failed is paused AND failed, and folding them
+     * would force the queue to pick one. SQLite also cannot alter a CHECK
+     * constraint, so widening status would mean rebuilding a live table for
+     * no gain.
+     *
+     * Nullable on purpose, and NULL is not a missing value — it means "this
+     * session predates the column", which is answerable from the row itself:
+     * a finished one is closed, a running one is open. See lifecycleOf. That
+     * is Q10's migration without a migration, so a session that finished in
+     * 2026 cannot come back as a live shortlist just because a column was
+     * added underneath it.
+     */
+    lifecycle         TEXT CHECK (lifecycle IN ('open', 'paused', 'closed')),
+    closed_at         TEXT,
+    /*
+     * When this session's CVs may be deleted, written when it closes.
+     *
+     * Stored rather than computed so the rule that applied on the day can be
+     * read back — changing the retention setting must not silently move the
+     * date on sessions already closed under the old one, in either direction.
+     */
+    purge_after       TEXT,
     /* Fixed at launch rather than read live, so raising the cap later cannot
        retroactively change what an already-paid Triage was allowed. */
     file_cap          INTEGER NOT NULL DEFAULT 500,
@@ -1300,6 +1328,13 @@ export const ADDED_COLUMNS = {
   triages: [
     ['charged_cvs', 'INTEGER NOT NULL DEFAULT 0'],
     ['refunded_cvs', 'INTEGER NOT NULL DEFAULT 0'],
+    /* No default. A NULL here means "older than this column", which
+       lifecycleOf reads from the row's own state; giving it DEFAULT 'open'
+       would turn every finished report in production into a live session the
+       moment this deploys. */
+    ['lifecycle', 'TEXT'],
+    ['closed_at', 'TEXT'],
+    ['purge_after', 'TEXT'],
     /* CVs set aside because the same person sent a newer one. Counted
        separately from parsed and from failed, because they are neither: they
        read perfectly, and they are not what the recruiter is being shown. */
