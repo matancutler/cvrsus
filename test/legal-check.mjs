@@ -376,4 +376,43 @@ for (const [path, title] of [['/terms', 'Terms of Service'], ['/privacy', 'Priva
 const health = await json(await fetch(`${BASE}/api/health`))
 check('the API is up behind them', health.ok === true)
 
+section('Proposed wording stays out of the live documents')
+
+/*
+ * Drafted replacement clauses for the rolling-Triage change live in
+ * proposedWording.jsx and are gated on import.meta.env.DEV, so they are
+ * readable in the test version and must never reach cvrsvs.com.
+ *
+ * Asserted against the BUILT bundle, not the source, because that is the
+ * thing that gets served — and because the first attempt at this guard
+ * failed exactly here: the branch was written as
+ * `Boolean(import.meta.env?.DEV)`, which Vite's substitution cannot fold, so
+ * every sentence shipped as dead strings anyone could read out of the
+ * JavaScript. Rendering nothing is not the same as not being there.
+ */
+const proposed = read('../client/src/legal/proposedWording.jsx')
+
+check('the draft exists to be read in the test version',
+  proposed.includes('PROPOSED WORDING'))
+check('and every part of it is gated on the development build',
+  (proposed.match(/if \(!import\.meta\.env\.DEV\) return null/g) ?? []).length
+  === (proposed.match(/^export function /gm) ?? []).length,
+  'each exported component guards itself')
+/* Comments stripped first: the file explains the mistake it used to make, and
+   a check that matched its own explanation would fail forever. */
+const proposedCode = proposed.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+check('through a check the bundler can fold away',
+  !/import\.meta\.env\?\.DEV|Boolean\(import\.meta\.env/.test(proposedCode),
+  'an optional chain here would ship the text to production')
+
+check('none of it is in the built bundle', !bundle.includes('PROPOSED WORDING'))
+check('nor is the clause it proposes',
+  !bundle.includes('ninety days after the Organization'))
+check('nor the Terms addition',
+  !bundle.includes('does not hold Triage documents as an archive'))
+
+check('and the wording it would replace is still what the live policy says',
+  bundle.includes('For as long as the Organization keeps the Triage workspace'),
+  'the live documents are unchanged until somebody decides otherwise')
+
 finish()

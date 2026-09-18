@@ -41,6 +41,14 @@ function Placeholder({ children }) {
   return <span className="legal-placeholder">[{children}]</span>
 }
 
+/*
+ * Wording drafted for the rolling-Triage change and NOT in force. It renders
+ * only in development — a production build resolves import.meta.env.DEV to
+ * false and the bundler drops it — so it is readable in the test version and
+ * cannot reach the live site. legal-check asserts that.
+ */
+import { ProposedTriageRetention, ProposedTriageTerms } from './proposedWording.jsx'
+
 export const DRAFT_NOTICE =
   'This is a draft pending legal review. The operator’s registered details and '
   + 'contact addresses are still marked as unfilled fields below.'
@@ -291,6 +299,8 @@ function TermsBody() {
           about the people in the pile, including any obligation to consider them fairly.
         </li>
       </ul>
+
+      <ProposedTriageTerms />
 
       <h2>5. Matching, Ranking and AI-Assisted Features</h2>
       <p>
@@ -1309,6 +1319,8 @@ function PrivacyBody() {
           respond directly where the law requires us to.
         </li>
       </ul>
+
+      <ProposedTriageRetention />
 
       <h2>7B. The Public Demonstration</h2>
       <p>

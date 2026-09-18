@@ -5592,6 +5592,39 @@ select:required:invalid option { color: var(--text); }
 .legal-callout p { margin: 0; }
 
 /*
+ * Wording that is drafted and not in force, shown only in the test version.
+ *
+ * Deliberately unlike everything around it. Somebody reading a legal page
+ * scrolls past callouts; this one has to be impossible to mistake for the
+ * document it sits inside, because the failure mode is a person quoting a
+ * clause that nobody has agreed to.
+ */
+.legal-proposal {
+  border: 2px dashed var(--danger, #a3352b);
+  background: transparent;
+}
+.legal-proposal > p:first-child {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--danger, #a3352b);
+}
+.legal-proposal p + p,
+.legal-proposal blockquote,
+.legal-proposal ul { margin-top: 0.75rem; }
+.legal-proposal blockquote {
+  margin-left: 0;
+  margin-right: 0;
+  padding: 0.75rem 1rem;
+  border-left: 3px solid var(--line, #d9d2cd);
+  background: var(--surface-2);
+}
+.legal-proposal blockquote p { margin: 0; }
+.legal-proposal ul { padding-left: 1.2rem; }
+.legal-proposal li { margin-bottom: 0.35rem; }
+
+/*
  * The all-capitals disclaimer and liability clauses.
  *
  * Capitals are what conspicuousness requirements ask for and are also the
