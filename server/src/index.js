@@ -440,6 +440,7 @@ import {
   EXTRACTED_FIELDS,
 } from './profiles.js'
 import { runCheckinSweep, runSeatExpirySweep } from './checkins.js'
+import { retentionSweep } from './retention.js'
 import {
   availabilityStates,
   availabilityToken,
@@ -8316,6 +8317,20 @@ app.listen(PORT, async () => {
   const demoTotal = Object.values(demoSwept).reduce((sum, n) => sum + n, 0)
   if (demoTotal > 0) console.log(`  swept ${demoTotal} anonymous demonstration row(s)`)
 
+  /*
+   * Triage retention, reporting only.
+   *
+   * It runs from the first boot so the log builds a record of what the rule
+   * would have done, for long enough that somebody has read it and agreed.
+   * TRIAGE_RETENTION_DELETES is what lets it act, and it is off — deleting
+   * other people's CVs on a schedule has no undo and no backup behind it.
+   */
+  try {
+    retentionSweep()
+  } catch (error) {
+    console.warn(`  retention sweep failed: ${error.message}`)
+  }
+
   // unref so the timer never holds the process open on its own.
   setInterval(() => {
     runCheckinSweep().catch((error) => {
@@ -8327,6 +8342,11 @@ app.listen(PORT, async () => {
       console.warn(`  seat expiry sweep failed: ${error.message}`)
     })
     sweepAnonymousDemoArtefacts()
+    try {
+      retentionSweep()
+    } catch (error) {
+      console.warn(`  retention sweep failed: ${error.message}`)
+    }
   }, CHECKIN_SWEEP_MS).unref()
 })
 

@@ -471,6 +471,7 @@
       <li><a href="#inbox">Contact inbox</a></li>
       <li><a href="#sweeps">Maintenance</a></li>
       <li><a href="#ai">The AI layer</a></li>
+      <li><a href="#retention">Keeping &amp; deleting CVs</a></li>
       <li><a href="#tests">Tests</a></li>
       <li><a href="#git">Git, GitHub &amp; deploying</a></li>
     </ol>
@@ -1159,6 +1160,117 @@ node server/scripts/contact.mjs show <span class="c">&lt;id&gt;</span></pre>
       </div>
     </section>
 
+    <!-- ------------------------------------------------------- retention -- -->
+    <section id="retention">
+      <h2>Keeping and deleting CVs</h2>
+      <p class="section-note">
+        Nothing in this product has ever deleted an applicant's CV. That was defensible while a
+        Triage was a one-off report finished in an afternoon; it is not defensible for a session
+        designed to stay open for weeks, because it means holding other people's CVs forever.
+      </p>
+
+      <div class="callout warn">
+        <p>
+          <strong>The sweep does not delete anything yet, on purpose.</strong> It runs daily,
+          works out exactly what the rule would remove, writes that in the log, and stops. Read
+          those logs for a full cycle before letting it act. There is no undo and no backup to
+          restore from.
+        </p>
+        <p>
+          Turning it on is <code>TRIAGE_RETENTION_DELETES=1</code> in Render and a restart.
+        </p>
+      </div>
+
+      <h3>The rule</h3>
+      <p>
+        A CV goes <strong>90 days after its session is closed</strong>, or <strong>12 months after
+        it was uploaded</strong>, whichever comes first. Both are settings —
+        <code>TRIAGE_RETAIN_AFTER_CLOSE_DAYS</code> and <code>TRIAGE_RETAIN_MAX_DAYS</code> — and
+        either can be set to 0 to switch that half off. The second one is the one that actually
+        binds: without it, a session left open keeps everything indefinitely.
+      </p>
+      <p>
+        The date is written on the session when it closes, so changing the setting later cannot
+        move the date on sessions already closed under the old rule, in either direction. What
+        goes is the CV, its file, its extracted text and its analysis. What stays is the session,
+        its counters and its billing line — the accounts still have to reconcile.
+      </p>
+
+      <div class="stack">
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">npm run triage:retention</span>
+            <span class="risk risk-read">Read</span>
+          </div>
+          <p class="what">
+            Every CV past its date, which session it belongs to, and which clock says so.
+          </p>
+          <p class="when">Any time. This is the list to read before trusting the sweep.</p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">node server/scripts/triage-retention.mjs <span class="flag">--triage &lt;id&gt; --run</span></span>
+            <span class="risk risk-wreck">Destroys</span>
+          </div>
+          <p class="what">Deletes the CVs past their date in that one session.</p>
+          <p class="when">
+            On test data first. <code>--run</code> over every session is refused unless you also
+            pass <code>--all</code>, because a missing flag should not be the difference between
+            seven made-up CVs and the whole disk.
+          </p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">npm run sweep:quarantine</span>
+            <span class="risk risk-read">Read</span>
+          </div>
+          <p class="what">
+            What is sitting in <code>uploads/_swept</code>, how much space it takes and how old it
+            is.
+          </p>
+          <p class="when">
+            When the disk is filling. The boot sweep never deletes an orphaned upload — it renames
+            it in there — and nothing has ever emptied the folder.
+          </p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">node server/scripts/sweep-quarantine.mjs <span class="flag">--older 90 --run</span></span>
+            <span class="risk risk-wreck">Destroys</span>
+          </div>
+          <p class="what">Deletes quarantined files older than that many days.</p>
+          <p class="when">
+            After reading the list. <code>--run</code> needs <code>--older</code>: a file
+            quarantined ten minutes ago is the one most likely to have been quarantined by
+            mistake, and a file the sweep misjudged is a real CV.
+          </p>
+        </article>
+      </div>
+
+      <h3>One CV, and the states a session can be in</h3>
+      <p>
+        A recruiter can now delete <strong>a single CV</strong> from a running session — the
+        author of the session or an organisation administrator. That is what an erasure request
+        needs; until now the only option was deleting the whole session. Nothing is refunded: the
+        CV was read, which is the work that was paid for.
+      </p>
+      <p>
+        A session is <strong>open</strong>, <strong>paused</strong> or <strong>closed</strong>.
+        Paused and closed take no new CVs and start no new analysis; both stay readable, and both
+        are reversible. Closing lets analysis already paid for finish. Any seat may pause, resume,
+        close or reopen; only the author or an administrator may delete.
+      </p>
+      <p>
+        Sessions that predate this read as what they are — a finished one is closed, one still
+        working is open — so nothing had to be migrated and no finished report came back as a live
+        shortlist. <code>TRIAGE_MAX_OPEN_SESSIONS</code> (25) caps how many an organisation may
+        have open at once; it is a runaway guard, not a plan limit.
+      </p>
+    </section>
+
     <!-- ----------------------------------------------------------- tests -- -->
     <section id="ai">
       <h2>The AI layer</h2>
@@ -1466,7 +1578,7 @@ node server/scripts/contact.mjs show <span class="c">&lt;id&gt;</span></pre>
         <span>test:usage</span><span>test:export</span><span>test:folders</span>
         <span>test:workspace</span><span>test:shared-folders</span><span>test:reveal</span>
         <span>test:triage</span><span>test:triage-funnel</span><span>test:triage-capacity</span>
-        <span>test:triage-charge</span><span>test:triage-skip</span>
+        <span>test:triage-charge</span><span>test:triage-lifecycle</span><span>test:triage-skip</span>
         <span>test:cost</span><span>test:explain</span><span>test:triage-drop</span>
         <span>test:name-case</span><span>test:jd-image</span><span>test:paste-image</span>
         <span>test:score-fairness</span><span>test:criterion-scoring</span><span>test:analysis-depth</span>

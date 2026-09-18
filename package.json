@@ -38,6 +38,8 @@
     "ai:cost": "node server/scripts/ai-cost.mjs",
     "ai:eval": "node server/scripts/ai-eval.mjs",
     "triage:audit": "node server/scripts/triage-audit.mjs",
+    "triage:retention": "node server/scripts/triage-retention.mjs",
+    "sweep:quarantine": "node server/scripts/sweep-quarantine.mjs",
     "data:test": "node server/scripts/test-data.mjs",
     "test:criterion-scoring": "node test/criterion-scoring-check.mjs",
     "test:ai-observability": "node test/ai-observability-check.mjs",
@@ -74,7 +76,8 @@
     "test:cost": "node test/ai-cost-check.mjs",
     "test:explain": "node test/explain-route-check.mjs",
     "test:triage-drop": "node test/triage-drop-check.mjs",
-    "test:triage-charge": "node test/triage-charge-check.mjs"
+    "test:triage-charge": "node test/triage-charge-check.mjs",
+    "test:triage-lifecycle": "node test/triage-lifecycle-check.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",
