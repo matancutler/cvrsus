@@ -42,7 +42,9 @@ import { requirementsFrom, withinDailyCeiling } from './matching/analysis.js'
 import { deriveHighlights, needsReview, scoreAgainst } from './matching/score.js'
 import { VERSIONS } from './matching/config.js'
 import { TRIAGE, rawTriage, recount } from './triage.js'
-import { refundTriageDrop, refundTriageSession } from './wallet.js'
+import {
+  refundTriageDrop, refundTriageSession, refundUnattributedTriage,
+} from './wallet.js'
 
 const now = () => new Date().toISOString()
 
@@ -207,6 +209,26 @@ async function runBatch(batch) {
       return
     }
 
+    /*
+     * A failed session is not worked on.
+     *
+     * Nothing used to check this, and it mattered once a session could hold
+     * more than one delivery: a second delivery's parse batch failing before
+     * the first had been ranked marked the whole session failed and refunded
+     * every CV in it — and then the first delivery's preliminary batch, which
+     * was already queued, ran anyway, ranked three hundred CVs and had them
+     * all analysed with the money already handed back.
+     *
+     * Marked failed rather than done, so the batch says what happened rather
+     * than claiming work it never did.
+     */
+    if (triage.status === 'failed') {
+      db.prepare(`
+        UPDATE triage_batches SET status = 'failed', error = ?, finished_at = ? WHERE id = ?
+      `).run('The Triage had already failed.', now(), batch.id)
+      return
+    }
+
     if (batch.kind === 'parse') await runParse(triage, batch)
     else if (batch.kind === 'preliminary') await runPreliminary(triage, batch)
     else await runDeep(triage, batch)
@@ -233,7 +255,8 @@ async function runBatch(batch) {
 
       /*
        * A failure in the FIRST delivery fails the session and hands back what
-       * it took. A failure in a later one does not.
+       * it took. A failure in a later one refunds that delivery and leaves
+       * the session alone.
        *
        * A session whose opening pile could not be read produced nothing and
        * owes the recruiter everything. A session holding two hundred analysed
@@ -241,33 +264,61 @@ async function runBatch(batch) {
        * failing it there would throw away work that was done correctly and
        * paid for.
        *
-       * "First delivery" is asked of the session, not of the drop number: a
-       * session that predates deliveries carries its original pile at drop_id
-       * NULL, so the first drop row it ever gets is numbered 1 while being its
-       * second delivery.
+       * "First delivery" is asked of the DELIVERY, not of how much has been
+       * ranked. It used to be "has anything been ranked yet", which is a
+       * proxy and was wrong in the ordinary case: a second delivery arriving
+       * while the first is still being read sees nothing ranked, so its own
+       * failure would fail the whole session and refund all three hundred
+       * CVs. A session that predates deliveries carries its pile at drop_id
+       * NULL and is asked separately.
        */
-      const alreadyRanked = db.prepare(
-        `SELECT COUNT(*) AS n FROM triage_applicants WHERE triage_id = ? AND prelim_rank IS NOT NULL`,
-      ).get(batch.triage_id).n
+      const firstDrop = db.prepare(
+        `SELECT id FROM triage_drops WHERE triage_id = ? ORDER BY seq LIMIT 1`,
+      ).get(batch.triage_id)?.id ?? null
 
-      if ((batch.kind === 'parse' || batch.kind === 'preliminary') && alreadyRanked > 0) {
+      const openingPile = batch.drop_id === null || batch.drop_id === firstDrop
+      const reading = batch.kind === 'parse' || batch.kind === 'preliminary'
+
+      if (reading && !openingPile) {
         /*
-         * The session carries on — but this delivery's CVs must not vanish.
+         * The session carries on — but this delivery's CVs must not vanish,
+         * and it must not stay charged.
          *
          * They are sitting at parse_status 'pending', and nothing reports a
          * pending row: the failures list shows unreadable and failed ones, and
          * the counters treat pending as work still to come. Marking them
          * failed puts them where a recruiter can see them.
          */
-        if (batch.drop_id) {
-          db.prepare(`
-            UPDATE triage_applicants SET parse_status = 'failed', parse_error = ?
-            WHERE triage_id = ? AND drop_id = ? AND parse_status = 'pending'
-          `).run(String(error.message).slice(0, 300), batch.triage_id, batch.drop_id)
+        db.prepare(`
+          UPDATE triage_applicants SET parse_status = 'failed', parse_error = ?
+          WHERE triage_id = ? AND drop_id = ? AND parse_status = 'pending'
+        `).run(String(error.message).slice(0, 300), batch.triage_id, batch.drop_id)
+
+        /*
+         * And the money for it goes back. Under the old model a later
+         * delivery was free, so this branch cost the recruiter nothing; now
+         * it is charged the moment it is accepted, and a delivery that could
+         * not be read is a delivery we took money for and did nothing with.
+         */
+        const delivery = db.prepare(
+          `SELECT charged_cvs AS charged FROM triage_drops WHERE id = ?`,
+        ).get(batch.drop_id)
+        const owner = rawTriage(batch.triage_id)
+
+        if (owner?.company_id && (delivery?.charged ?? 0) > 0) {
+          const back = refundTriageDrop({
+            companyId: owner.company_id, dropId: batch.drop_id,
+            totalCvs: delivery.charged,
+            note: 'CVs returned — this delivery could not be processed',
+          })
+          if (back.refunded > 0) {
+            console.log(`  triage ${batch.triage_id}: returned ${back.refunded} CV(s) for a delivery that failed`)
+          }
         }
+
         recount(batch.triage_id)
         settleStatus(batch.triage_id)
-      } else if (batch.kind === 'parse' || batch.kind === 'preliminary') {
+      } else if (reading) {
         db.prepare(`UPDATE triages SET status = 'failed', error = ?, updated_at = ? WHERE id = ?`)
           .run(`Processing could not complete: ${error.message}`.slice(0, 300), now(), batch.triage_id)
 
@@ -291,6 +342,42 @@ async function runBatch(batch) {
             console.log(`  triage ${batch.triage_id}: returned ${back.refunded} CV(s) after a failure`)
           }
         }
+      } else {
+        /*
+         * A deep batch that gave up. Two things have to happen or the CVs in
+         * it are lost with nothing in the product able to name them.
+         *
+         * runDeep releases its rows back to 'pending' when it throws, so they
+         * end up parsed, ranked, and in a state the retry route does not
+         * select — it looks for 'failed'. The recruiter presses Retry, is told
+         * nothing was re-queued, and the CVs they paid for are never analysed.
+         * So they are marked failed: that is what happened, it is what the
+         * failures list reports, and it is what Retry looks for.
+         *
+         * And the ladder has to get past them. The frontier never advanced,
+         * so every later scroll recomputes this same range, builds the same
+         * idempotency key, and is silently ignored — the recruiter can never
+         * reach rank 76 because 51–75 is permanently "already queued". Moving
+         * the frontier to the end of this band unblocks everything above it
+         * and costs nothing: the band's own rows are recoverable by Retry,
+         * which asks for ranks explicitly.
+         */
+        const stranded = db.prepare(`
+          UPDATE triage_applicants SET deep_status = 'failed', deep_error = ?
+          WHERE triage_id = ? AND prelim_rank BETWEEN ? AND ?
+            AND parse_status = 'parsed' AND deep_status IN ('pending', 'running')
+        `).run(
+          String(error.message).slice(0, 300), batch.triage_id,
+          batch.from_rank ?? 0, batch.to_rank ?? 0,
+        )
+
+        if (stranded.changes > 0) {
+          console.error(`  triage ${batch.triage_id}: ${stranded.changes} CV(s) left unanalysed — retry can pick them up`)
+        }
+
+        advanceFrontier(batch.triage_id, batch.to_rank ?? 0)
+        recount(batch.triage_id)
+        settleStatus(batch.triage_id)
       }
     } else {
       await sleep(backoffMs(batch.attempts))
@@ -426,8 +513,12 @@ async function runParse(triage, batch) {
         companyId: triage.company_id, dropId: batch.drop_id, totalCvs: unreadable,
         note: `CV${unreadable === 1 ? '' : 's'} returned — the file could not be read`,
       })
-      : refundTriageSession({
-        companyId: triage.company_id, triageId: triage.id,
+      /* The target total, not the whole charge. refundTriageSession takes no
+         total — it means "everything back" — so calling it here handed a
+         legacy session its entire charge for one scanned photograph, and
+         analysed the other thirty-five CVs for nothing. */
+      : refundUnattributedTriage({
+        companyId: triage.company_id, triageId: triage.id, totalCvs: unreadable,
         note: `CV${unreadable === 1 ? '' : 's'} returned — the file could not be read`,
       })
 
@@ -493,12 +584,36 @@ function resolveDuplicatePeople(triageId) {
   let superseded = 0
 
   for (const group of groups.values()) {
-    if (group.length < 2) continue
-
-    /* Ordered oldest first above, so the last one is the newest CV this
-       person has sent. Ties on the timestamp fall to the higher id, which is
-       the later insert. */
+    /*
+     * Ordered oldest first above, so the last one is the newest CV this
+     * person has sent — across deliveries, which is the case this exists for.
+     *
+     * Within ONE delivery it is upload order, and that is the honest limit of
+     * it: two CVs from the same person in a single drag-and-drop carry no
+     * evidence of which is more recent, and the file that happens to be
+     * serialised last wins. Reading a date out of the CV text to break the
+     * tie would be guessing dressed as a fact.
+     */
     const current = group[group.length - 1]
+
+    /*
+     * The restore runs BEFORE the length guard, not after it.
+     *
+     * It sat below `if (group.length < 2) continue`, which is the one case
+     * that can ever need it: the only way the current row goes stale is the
+     * group shrinking, and a group that shrinks to one row is exactly the
+     * group this skips. So the safety net was unreachable, and a CV left
+     * alone under that email would have stayed 'duplicate' for ever —
+     * excluded from the results, never re-ranked, never analysed, and not in
+     * the failures list either.
+     */
+    if (current.parse_status === 'duplicate') {
+      db.prepare(`
+        UPDATE triage_applicants SET parse_status = 'parsed', duplicate_of = NULL WHERE id = ?
+      `).run(current.id)
+    }
+
+    if (group.length < 2) continue
 
     for (const row of group) {
       if (row.id === current.id) continue
@@ -509,20 +624,14 @@ function resolveDuplicatePeople(triageId) {
       `).run(current.id, row.id)
       superseded += 1
     }
-
-    /* The newest row is current even if an earlier pass had put it aside —
-       which cannot happen today, because the newest is always chosen, but the
-       invariant is worth stating in code rather than in a comment alone. */
-    if (current.parse_status === 'duplicate') {
-      db.prepare(`
-        UPDATE triage_applicants SET parse_status = 'parsed', duplicate_of = NULL WHERE id = ?
-      `).run(current.id)
-    }
   }
+
+  /* Recounted whichever way it went: a restore changes the counters too, and
+     it is cheap enough not to be worth deciding about. */
+  recount(triageId)
 
   if (superseded > 0) {
     console.log(`  triage ${triageId}: ${superseded} CV(s) superseded by a newer one from the same person`)
-    recount(triageId)
   }
 
   return superseded

@@ -312,9 +312,17 @@ check('and the Triage records both figures',
  * the function itself is invoked twice with the same report, which is exactly
  * what a reclaimed batch after a crash would do.
  */
-const { refundTriageCvs } = await import('../server/src/wallet.js')
+const { refundTriageDrop } = await import('../server/src/wallet.js')
+/* Against the delivery, which is where the charge lives now. The session-wide
+   distributor this used to call is gone: it computed each delivery's target
+   from what was charged while ignoring what that delivery had already been
+   refunded, so a session with one drop already settled paid the same total
+   out twice. */
+const scanDrop = db.prepare(
+  `SELECT id FROM triage_drops WHERE triage_id = ? ORDER BY seq LIMIT 1`,
+).get(scanId).id
 for (let i = 0; i < 3; i += 1) {
-  refundTriageCvs({ companyId: org.company.id, triageId: scanId, totalCvs: 1 })
+  refundTriageDrop({ companyId: org.company.id, dropId: scanDrop, totalCvs: 1 })
 }
 check('repeating the sweep refunds nothing further',
   db.prepare(`SELECT refunded_cvs FROM triages WHERE id = ?`).get(scanId).refunded_cvs === 1)

@@ -6906,49 +6906,78 @@ app.post('/api/hr/triage/:id/launch', recruiterOnly, (req, res, next) => {
       /*
        * `totalCvs`, not `cvs`.
        *
-       * refundTriageCvs takes a TARGET TOTAL — how many of the charged CVs
-       * should stand refunded once it returns — which is what makes it safe to
-       * call twice. It was being handed `cvs:`, a name it does not destructure,
-       * so totalCvs was undefined, the guard at the top returned {refunded: 0}
-       * and this whole branch was a no-op: the company stayed debited, the
-       * seat's usage stayed inflated, and the Triage stayed marked as paid for
-       * while nothing ran.
+       * The refund used to take a TARGET TOTAL here and was being handed
+       * `cvs:`, a name it does not destructure — so totalCvs was undefined,
+       * the guard at the top returned {refunded: 0} and this whole branch was
+       * a no-op: the company stayed debited, the seat's usage stayed inflated,
+       * and the Triage stayed marked as paid for while nothing ran.
+       *
+       * refundTriageSession takes no total at all, which is the point: "hand
+       * back everything this session was ever charged" is the only thing this
+       * branch ever means, and a parameter it could get wrong was the bug.
        */
-      refundTriageSession({
-        companyId, triageId: triage.id,
-        note: 'CVs returned: the Triage could not be started',
-      })
-
       /*
-       * And it is a draft again — every part of that, not one.
+       * All three writes together, and the original error either way.
        *
-       * `launched` is derived from ledger_id (triage.js), so leaving it set
-       * would show a refunded Triage as running with no queue behind it. But
-       * startProcessing has already written status = 'processing', and
-       * clearing only the ledger left the row in a state the product has no
-       * name for: un-launched and processing at once. The builder would open
-       * on it, the queue would never touch it, and settleStatus refuses to
-       * move anything it did not start.
+       * They were three transactions in a row, and the order between them is
+       * load-bearing: the reset zeroes charged_cvs, so a crash after it and
+       * before the refund would make the refund compute nothing owed and
+       * silently keep the money, while a crash between the two resets would
+       * leave a paid delivery under an un-launched session — after which the
+       * next launch finds nothing unpaid, charges nothing, and processes the
+       * whole pile for free.
        *
-       * The charge counters go back to zero with it — the refund above has
-       * already returned everything that was taken — and the error is cleared,
-       * because this Triage is editable again and a stale message from a failed
-       * start is not what the recruiter should meet on their next attempt.
+       * And if the refund itself throws, the recruiter must still be told
+       * their Triage did not start. It used to throw the refund's error
+       * instead, which says nothing about what they asked for and hides the
+       * real failure. So the rollback's own error is logged and swallowed,
+       * and startError is thrown unconditionally below.
        */
-      db.prepare(`
-        UPDATE triages SET ledger_id = NULL, status = 'draft', error = NULL,
-                           charged_cvs = 0, refunded_cvs = 0, updated_at = ?
-        WHERE id = ?
-      `).run(new Date().toISOString(), triage.id)
+      try {
+        db.transaction(() => {
+          refundTriageSession({
+            companyId, triageId: triage.id,
+            note: 'CVs returned: the Triage could not be started',
+          })
 
-      /* The deliveries go back to unpaid with it. Leaving a drop marked paid
-         over a session that has been un-launched would make the next launch
-         skip it — the CVs would be analysed and nobody would be charged. */
-      db.prepare(`
-        UPDATE triage_drops SET ledger_id = NULL, charged_cvs = 0, refunded_cvs = 0,
-                                charged_at = NULL
-        WHERE triage_id = ?
-      `).run(triage.id)
+          /*
+           * And it is a draft again — every part of that, not one.
+           *
+           * `launched` is derived from ledger_id (triage.js), so leaving it
+           * set would show a refunded Triage as running with no queue behind
+           * it. But startProcessing has already written status =
+           * 'processing', and clearing only the ledger left the row in a
+           * state the product has no name for: un-launched and processing at
+           * once. The builder would open on it, the queue would never touch
+           * it, and settleStatus refuses to move anything it did not start.
+           *
+           * The charge counters go back to zero with it — the refund above
+           * has already returned everything that was taken — and the error is
+           * cleared, because this Triage is editable again and a stale
+           * message from a failed start is not what the recruiter should meet
+           * on their next attempt.
+           */
+          db.prepare(`
+            UPDATE triages SET ledger_id = NULL, status = 'draft', error = NULL,
+                               charged_cvs = 0, refunded_cvs = 0, updated_at = ?
+            WHERE id = ?
+          `).run(new Date().toISOString(), triage.id)
+
+          /* The deliveries go back to unpaid with it. Leaving a drop marked
+             paid over a session that has been un-launched would make the next
+             launch skip it — the CVs would be analysed and nobody charged. */
+          db.prepare(`
+            UPDATE triage_drops SET ledger_id = NULL, charged_cvs = 0, refunded_cvs = 0,
+                                    charged_at = NULL
+            WHERE triage_id = ?
+          `).run(triage.id)
+        })()
+      } catch (rollbackError) {
+        /* Logged and swallowed. The recruiter's problem is that their Triage
+           did not start; a secondary failure while undoing it is ours, and
+           reporting it instead would hide the one they can act on. */
+        console.error(`  triage ${triage.id}: could not undo a failed launch — ${rollbackError.message}`)
+      }
 
       throw startError
     }
@@ -7004,6 +7033,21 @@ app.post('/api/hr/triage/:id/cvs', recruiterOnly, triageUpload, async (req, res,
   /* Same contract as the draft upload route: a file a row already names is
      not ours to sweep. See the long note there. */
   const committed = new Set()
+
+  /*
+   * The delivery this request created, and whether it was paid for.
+   *
+   * Held out here so the catch can see them. The failure arms below remove an
+   * unchargeable delivery explicitly, but they only cover the charge
+   * REFUSING; consumeTriageDrop re-throws anything it does not recognise, and
+   * there are writes inside it — the low-balance warning, the analytics row —
+   * that can throw. A throw there left the rows alive, unpaid, with no parse
+   * batch behind them: they inflated the session's total for ever, nothing
+   * would ever queue them, and settleStatus could never call the session
+   * complete again because it counts pending rows as work still to come.
+   */
+  let delivery = null
+  let paid = false
 
   try {
     /* Off in production until the cost of a CV has been measured. A route
@@ -7104,7 +7148,7 @@ app.post('/api/hr/triage/:id/cvs', recruiterOnly, triageUpload, async (req, res,
       throw new HttpError(400, results[0]?.reason ?? 'None of those files could be added.')
     }
 
-    const delivery = addCvsToSession({
+    delivery = addCvsToSession({
       triageId: triage.id, recruiterId: req.session.id, files: keep,
     })
     results.push(...delivery.results)
@@ -7149,6 +7193,7 @@ app.post('/api/hr/triage/:id/cvs', recruiterOnly, triageUpload, async (req, res,
       )
     }
 
+    paid = true
     startProcessing(triage.id, { dropId: delivery.drop.id })
 
     track('triage_cvs_added', {
@@ -7168,8 +7213,19 @@ app.post('/api/hr/triage/:id/cvs', recruiterOnly, triageUpload, async (req, res,
       states: pipelineStates(triage.id),
     })
   } catch (error) {
+    /*
+     * An unpaid delivery does not survive this request.
+     *
+     * Paid ones do: the charge is committed and the work is either queued or
+     * about to be picked up by the waker, so removing it would be destroying
+     * something the recruiter has bought. Unpaid ones are removed whole —
+     * rows, files and the drop — which is the same thing the explicit
+     * refusals above do, extended to the throws they do not name.
+     */
+    if (delivery && !paid) dropDelivery(delivery.drop.id)
+
     for (const file of uploaded) {
-      if (committed.has(file.path)) continue
+      if (committed.has(file.path) && paid) continue
       await fs.promises.unlink(file.path).catch(() => {})
     }
     /* This route has already decided which bytes a surviving row points at,
@@ -7270,7 +7326,11 @@ app.get('/api/hr/triage/:id/results', recruiterOnly, (req, res, next) => {
        */
       adding: {
         enabled: TRIAGE.addCvs,
-        room: Math.max(0, triage.fileCap - triage.counts.total),
+        /* Superseded CVs do not hold a place. They can never be shown or
+           analysed, and counting them against the session ceiling means a
+           recruiter re-forwarding the same mailbox across deliveries burns
+           room on CVs the product has already decided not to use. */
+        room: Math.max(0, triage.fileCap - (triage.counts.total - (triage.counts.superseded ?? 0))),
         balance: triageBalance(companyId),
         allowance: triageAllowanceRemaining(req.session.id) === Infinity
           ? null : triageAllowanceRemaining(req.session.id),

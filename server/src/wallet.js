@@ -1199,24 +1199,42 @@ export function chargeTriageDrops({ companyId, triageId, recruiterId }) {
 
   const paid = []
 
-  for (const drop of unpaid) {
-    const charge = consumeTriageDrop({
-      companyId, triageId, dropId: drop.id, recruiterId, cvs: drop.cvs,
-    })
-
-    if (!charge.ok) {
-      /* Undo whatever THIS call managed to take. Charges made before it are
-         not ours to unwind — they belong to an earlier launch. */
-      for (const done of paid) {
-        refundTriageDrop({
-          companyId, dropId: done.dropId, totalCvs: done.cvs,
-          note: 'CVs returned: the Triage could not be started',
+  /*
+   * One transaction around the whole loop, not a refund afterwards.
+   *
+   * Undoing a charge with a REFUND was nearly right and wrong in a way that
+   * bricks the session: a refund returns the capacity and writes the line,
+   * but it leaves triage_drops.ledger_id set and leaves the
+   * `triages.ledger_id = COALESCE(...)` that the first charge wrote. So after
+   * a failed multi-delivery launch the session read as launched — the route
+   * had answered 402 and started nothing, every retry took the
+   * already-launched early return, and the delivery that had been refunded
+   * could never be charged again while still being perfectly processable.
+   *
+   * A transaction unwinds the writes themselves. better-sqlite3 nests these
+   * as savepoints, so consumeTriageDrop keeps its own atomicity inside and a
+   * throw here rolls the whole launch back to where it started.
+   */
+  try {
+    db.transaction(() => {
+      for (const drop of unpaid) {
+        const charge = consumeTriageDrop({
+          companyId, triageId, dropId: drop.id, recruiterId, cvs: drop.cvs,
         })
-      }
-      return { ...charge, ok: false, cvs: 0, drops: [] }
-    }
 
-    if (charge.charged) paid.push({ dropId: charge.dropId, cvs: charge.cvs })
+        if (!charge.ok) {
+          const failure = new Error('charge_refused')
+          failure.charge = charge
+          throw failure
+        }
+
+        if (charge.charged) paid.push({ dropId: charge.dropId, cvs: charge.cvs })
+      }
+    })()
+  } catch (error) {
+    paid.length = 0
+    if (error.charge) return { ...error.charge, ok: false, cvs: 0, drops: [] }
+    throw error
   }
 
   /* What the session has been charged in TOTAL, not what this call took: the
@@ -1330,7 +1348,7 @@ export function refundTriageSession({ companyId, triageId, note = 'CVs that coul
 
   if (drops.length === 0) {
     const row = db.prepare(`SELECT charged_cvs FROM triages WHERE id = ?`).get(triageId)
-    return refundLegacyTriage({ companyId, triageId, totalCvs: row?.charged_cvs ?? 0, note })
+    return refundUnattributedTriage({ companyId, triageId, totalCvs: row?.charged_cvs ?? 0, note })
   }
 
   let refunded = 0
@@ -1344,42 +1362,6 @@ export function refundTriageSession({ companyId, triageId, note = 'CVs that coul
 }
 
 /**
- * The session-level refund, kept because "this much should stand refunded for
- * this Triage" is still a question worth being able to ask.
- *
- * It is now a distributor: the target total is spent against the deliveries
- * oldest first, each clamped to its own charge. That keeps the whole thing
- * idempotent — a repeat run computes the same per-drop targets and pays the
- * same nothing.
- */
-export function refundTriageCvs({ companyId, triageId, totalCvs, note = 'CVs that could not be read' }) {
-  if (!Number.isInteger(totalCvs) || totalCvs <= 0) {
-    return { refunded: 0, balance: triageBalance(companyId) }
-  }
-
-  const drops = db.prepare(`
-    SELECT id, charged_cvs FROM triage_drops
-    WHERE triage_id = ? AND ledger_id IS NOT NULL ORDER BY seq
-  `).all(triageId)
-
-  /* A session charged before deliveries existed carries its charge on the
-     triages row and has no drop to hang it on. */
-  if (drops.length === 0) return refundLegacyTriage({ companyId, triageId, totalCvs, note })
-
-  let remaining = totalCvs
-  let refunded = 0
-
-  for (const drop of drops) {
-    if (remaining <= 0) break
-    const target = Math.min(remaining, drop.charged_cvs)
-    refunded += refundTriageDrop({ companyId, dropId: drop.id, totalCvs: target, note }).refunded
-    remaining -= target
-  }
-
-  return { refunded, balance: triageBalance(companyId) }
-}
-
-/**
  * The pre-deliveries refund path, for sessions whose charge lives on the
  * triages row and nowhere else.
  *
@@ -1387,8 +1369,18 @@ export function refundTriageCvs({ companyId, triageId, totalCvs, note = 'CVs tha
  * a ledger row, a charge and possibly an unreadable file, and rewriting its
  * history into a delivery it never had would be a worse record than the one it
  * has. New sessions never reach this.
+ *
+ * `totalCvs` is a TARGET TOTAL, exactly as refundTriageDrop's is, and callers
+ * must pass what is owed rather than what was charged. There used to be a
+ * `refundTriageCvs` that distributed a session-wide total across deliveries
+ * oldest first; it is gone. It computed each delivery's target from
+ * charged_cvs while ignoring what that delivery had already been refunded, so
+ * a session with one drop already fully refunded by the unreadable sweep paid
+ * the same total out twice — and nothing in the server called it. A refund
+ * helper nobody uses and whose contract is subtly wrong is precisely how the
+ * `cvs:`/`totalCvs:` silent no-op got written in the first place.
  */
-function refundLegacyTriage({ companyId, triageId, totalCvs, note }) {
+export function refundUnattributedTriage({ companyId, triageId, totalCvs, note = 'CVs that could not be read' }) {
   if (!Number.isInteger(totalCvs) || totalCvs <= 0) {
     return { refunded: 0, balance: triageBalance(companyId) }
   }

@@ -409,8 +409,12 @@ const routeSource = fs.readFileSync(
   fileURLToPath(new URL('../server/src/index.js', import.meta.url)), 'utf8',
 )
 
+/* The two upload catches, found by the decision they both make — "is this
+   file one a row already names" — and read as far as their next(error). The
+   add-CVs route qualifies that test with `&& paid`, so the match stops at
+   `committed.has(file.path)` rather than at any one spelling of the guard. */
 const uploadCatches = [...routeSource.matchAll(
-  /if \(committed\.has\(file\.path\)\) continue[\s\S]{0,900}?next\(error\)/g,
+  /committed\.has\(file\.path\)[\s\S]{0,1200}?next\(error\)/g,
 )].map((match) => match[0])
 
 check('both upload routes protect the files their rows name', uploadCatches.length === 2,
@@ -418,6 +422,57 @@ check('both upload routes protect the files their rows name', uploadCatches.leng
 check('and hand the error handler nothing left to sweep',
   uploadCatches.length === 2 && uploadCatches.every((block) => /req\.files = \[\]/.test(block)),
   uploadCatches.filter((block) => !/req\.files = \[\]/.test(block)).length + ' unprotected')
+
+section('A superseded CV is not a failure, and does not hold a place')
+
+/*
+ * Every one of these was wrong before the review. A superseded CV read
+ * perfectly and was then set aside, which is neither "parsed and waiting" nor
+ * "could not be read" — and lumping it in with either produced a screen that
+ * contradicted itself.
+ */
+const view = await json(await fetch(`${BASE}/api/hr/triage/${id}`, { headers: H(org.token) }))
+
+check('it is counted as superseded', view.triage.counts.superseded === 1,
+  `${view.triage.counts.superseded}`)
+check('the analysed count never exceeds the usable one',
+  view.triage.counts.analysed <= view.triage.counts.usable,
+  `${view.triage.counts.analysed} of ${view.triage.counts.usable}`)
+/* Read now, not from the snapshot taken several deliveries ago: the header
+   and the list have to agree at the same instant, which is the whole point. */
+const listNow = await json(await fetch(`${BASE}/api/hr/triage/${id}/results`, { headers: H(org.token) }))
+check('and it matches what the results page shows',
+  view.triage.counts.analysed === listNow.total,
+  `header ${view.triage.counts.analysed}, list ${listNow.total}`)
+
+check('the pipeline gives it its own state', view.states.superseded === 1,
+  JSON.stringify(view.states))
+check('and does not call it a failure', view.states.failed === 0,
+  `${view.states.failed} failed`)
+
+check('it is not in the list of files that could not be read',
+  !view.failures.some((row) => row.id === versions[0].id),
+  view.failures.map((row) => `#${row.id}`).join(', ') || 'empty')
+
+/* And the same when its analysis had failed before it was superseded — the
+   case that used to leave an entry nobody could ever clear, hidden from the
+   results and unreachable by Retry. */
+db.prepare(`UPDATE triage_applicants SET deep_status = 'failed', deep_error = ? WHERE id = ?`)
+  .run('forced by the test', versions[0].id)
+
+const withFailure = await json(await fetch(`${BASE}/api/hr/triage/${id}`, { headers: H(org.token) }))
+check('a superseded CV whose analysis failed is still not listed',
+  !withFailure.failures.some((row) => row.id === versions[0].id),
+  withFailure.failures.map((row) => `#${row.id}`).join(', ') || 'empty')
+
+db.prepare(`UPDATE triage_applicants SET deep_status = 'scored', deep_error = NULL WHERE id = ?`)
+  .run(versions[0].id)
+
+const room = await json(await fetch(`${BASE}/api/hr/triage/${id}/results`, { headers: H(org.token) }))
+const held = db.prepare(`SELECT COUNT(*) AS n FROM triage_applicants WHERE triage_id = ?`).get(id).n
+check('and it does not hold a place against the session ceiling',
+  room.adding.room === room.triage.fileCap - (held - 1),
+  `${room.adding.room} of ${room.triage.fileCap}, ${held} rows, 1 superseded`)
 
 // ------------------------------------------------------------ the switch ---
 

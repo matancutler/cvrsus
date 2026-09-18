@@ -305,6 +305,11 @@ function triageView(row) {
       usable,
       failed: row.failed_files,
       analysed: row.analysed_files,
+      /* Read perfectly, then set aside because the same person sent a newer
+         CV. Reported rather than folded into failed: nothing went wrong with
+         them, and a recruiter told "3 files failed" about three CVs that read
+         fine would go looking for a problem that is not there. */
+      superseded: row.superseded_files ?? 0,
       /* What the recruiter can read right now. Distinct from `analysed`: the
          buffer beyond the shown page is analysed but deliberately not shown. */
       frontier: row.analysis_frontier,
@@ -602,22 +607,34 @@ export function removeAllFiles({ triageId }) {
 
 /** Recomputes the denormalised counters from the rows they summarise. */
 export function recount(triageId) {
+  /*
+   * `analysed` carries the same exclusion `parsed` does, and that is not a
+   * detail. It did not, and the two were read together: a session of ten,
+   * all scored, taking a newer CV from somebody already in it ended up with
+   * nine parsed plus one new, still ten analysed, then eleven — and the
+   * workspace header rendered "11 of 10 applicants fully analysed" while the
+   * results page, which filters, showed ten. Three numbers on one screen from
+   * three definitions of "exists".
+   */
   const counts = db.prepare(`
     SELECT
       COUNT(*) AS total,
       SUM(CASE WHEN parse_status = 'parsed' THEN 1 ELSE 0 END) AS parsed,
       SUM(CASE WHEN parse_status IN ('unreadable', 'failed') THEN 1 ELSE 0 END) AS failed,
-      SUM(CASE WHEN deep_status = 'scored' THEN 1 ELSE 0 END) AS analysed
+      SUM(CASE WHEN parse_status = 'duplicate' THEN 1 ELSE 0 END) AS superseded,
+      SUM(CASE WHEN deep_status = 'scored' AND parse_status <> 'duplicate' THEN 1 ELSE 0 END)
+        AS analysed
     FROM triage_applicants WHERE triage_id = ?
   `).get(triageId)
 
   db.prepare(`
     UPDATE triages
-    SET total_files = ?, parsed_files = ?, failed_files = ?, analysed_files = ?, updated_at = ?
+    SET total_files = ?, parsed_files = ?, failed_files = ?, analysed_files = ?,
+        superseded_files = ?, updated_at = ?
     WHERE id = ?
   `).run(
     counts.total ?? 0, counts.parsed ?? 0, counts.failed ?? 0, counts.analysed ?? 0,
-    now(), triageId,
+    counts.superseded ?? 0, now(), triageId,
   )
 
   return counts
@@ -887,10 +904,17 @@ export function pipelineStates(triageId) {
     GROUP BY parse_status, deep_status
   `).all(triageId)
 
-  const states = { uploaded: 0, prioritized: 0, processing: 0, scored: 0, failed: 0 }
+  const states = {
+    uploaded: 0, prioritized: 0, processing: 0, scored: 0, failed: 0, superseded: 0,
+  }
 
   for (const row of rows) {
     if (row.parse_status === 'pending') states.uploaded += row.n
+    /* Its own bucket, ahead of the failure test. Lumped in with failures it
+       made the workspace say "3 files could not be read" about CVs that read
+       perfectly — and a session whose only non-parsed rows were superseded
+       could trip the "No applicants could be analysed" screen outright. */
+    else if (row.parse_status === 'duplicate') states.superseded += row.n
     else if (row.parse_status !== 'parsed') states.failed += row.n
     else if (row.deep_status === 'scored') states.scored += row.n
     else if (row.deep_status === 'failed') states.failed += row.n
@@ -907,7 +931,14 @@ export function failedFiles(triageId) {
     SELECT id, file_name AS name, parse_status AS status,
            COALESCE(parse_error, deep_error) AS error
     FROM triage_applicants
-    WHERE triage_id = ? AND (parse_status IN ('unreadable', 'failed') OR deep_status = 'failed')
+    WHERE triage_id = ?
+      AND (parse_status IN ('unreadable', 'failed') OR deep_status = 'failed')
+      /* Not a superseded CV, whatever its analysis did. One whose analysis
+         had failed before a newer CV arrived was listed here for ever with
+         its model error as the reason, hidden from the results, and
+         unreachable by Retry — which only looks at parsed rows. Nothing the
+         recruiter could do would clear it. */
+      AND parse_status <> 'duplicate'
     ORDER BY id
   `).all(triageId)
 }

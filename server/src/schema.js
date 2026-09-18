@@ -839,6 +839,7 @@ export const SCHEMA = `
     parsed_files      INTEGER NOT NULL DEFAULT 0,
     failed_files      INTEGER NOT NULL DEFAULT 0,
     analysed_files    INTEGER NOT NULL DEFAULT 0,
+    superseded_files  INTEGER NOT NULL DEFAULT 0,
     /* How far the rolling buffer has reached, as a count of preliminary ranks
        queued for deep analysis: 50 after the initial pass, then 75, 100, ... */
     analysis_frontier INTEGER NOT NULL DEFAULT 0,
@@ -1299,6 +1300,10 @@ export const ADDED_COLUMNS = {
   triages: [
     ['charged_cvs', 'INTEGER NOT NULL DEFAULT 0'],
     ['refunded_cvs', 'INTEGER NOT NULL DEFAULT 0'],
+    /* CVs set aside because the same person sent a newer one. Counted
+       separately from parsed and from failed, because they are neither: they
+       read perfectly, and they are not what the recruiter is being shown. */
+    ['superseded_files', 'INTEGER NOT NULL DEFAULT 0'],
   ],
   /*
    * This key did not exist until rolling sessions needed it, which is exactly
