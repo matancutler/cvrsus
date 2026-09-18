@@ -1,0 +1,14 @@
+Payments Operations Analyst — Tel Aviv
+
+We review card-not-present transactions for a payments company and need
+somebody who has done this work rather than read about it.
+
+Requirements:
+- 3+ years reviewing card-not-present transactions
+- Chargeback and dispute handling end to end
+- SQL for investigating transaction data
+- Hebrew and English
+
+Nice to have:
+- Fraud tooling and rules engines
+- Experience with a payment service provider or acquirer

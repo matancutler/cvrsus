@@ -1382,9 +1382,26 @@ function TriageApplicantDialog({ row, triageId, onClose }) {
         <header className="modal-head">
           <div>
             <h2>{row.name}</h2>
-            <p className="muted">
-              {[row.email, row.phone, row.location].filter(Boolean).join(' · ') || row.fileName}
-            </p>
+            {/* The same labelled lines as the card, for the same reason: two
+                of three fields joined by a dot is a guessing game. */}
+            <dl className="result-contact">
+              {[
+                ['Email', row.email],
+                ['Phone', row.phone],
+                ['Location', row.location],
+              ].filter(([, value]) => value).map(([label, value]) => (
+                <div key={label}>
+                  <dt>{label}</dt>
+                  <dd>{value}</dd>
+                </div>
+              ))}
+              {!row.email && !row.phone && !row.location && (
+                <div>
+                  <dt>File</dt>
+                  <dd>{row.fileName}</dd>
+                </div>
+              )}
+            </dl>
           </div>
           <button type="button" className="btn btn-quiet" onClick={onClose} aria-label="Close">×</button>
         </header>
