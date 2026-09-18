@@ -516,10 +516,27 @@ async function runDeep(triage, batch) {
     ORDER BY prelim_rank
   `).all(triage.id, batch.from_rank, batch.to_rank)
 
-  // Everything in this range is already scored — a re-crossed boundary, or a
-  // resumed batch that finished its work before the process died.
+  /*
+   * Nothing to do in this range. There are two reasons for that and they are
+   * not the same, which is why the frontier is not simply moved to the end of
+   * the batch.
+   *
+   * Either everything here is already scored — a re-crossed boundary, or a
+   * resumed batch that finished before the process died — or the ranks in this
+   * range do not exist yet, because the pile is still being read. Advancing
+   * past ranks that do not exist strands them: the frontier only moves forward,
+   * so rows ranked into that band afterwards are never selected again.
+   *
+   * So the frontier moves to the highest rank that actually exists at or below
+   * this batch's end, and no further.
+   */
   if (rows.length === 0) {
-    advanceFrontier(triage.id, batch.to_rank)
+    const highest = db.prepare(`
+      SELECT COALESCE(MAX(prelim_rank), 0) AS at FROM triage_applicants
+      WHERE triage_id = ? AND prelim_rank IS NOT NULL AND prelim_rank <= ?
+    `).get(triage.id, batch.to_rank).at
+
+    advanceFrontier(triage.id, highest)
     settleStatus(triage.id)
     return
   }
@@ -751,8 +768,27 @@ export function requestNextTranche(triageId) {
   if (!triage) return { queued: false, reason: 'not_found' }
   if (triage.status === 'draft') return { queued: false, reason: 'not_launched' }
 
+  /*
+   * Counted in RANKS, not in parsed rows.
+   *
+   * These are two different numbers while a pile is being read: a row is
+   * flipped to 'parsed' as its text is extracted, but it gets its rank later,
+   * when the whole pile is ranked together. Sizing the tranche by the parsed
+   * count let the frontier run past ranks that did not exist yet — the batch
+   * found nothing in the range, advanced the frontier anyway, and the rows
+   * ranked into that band a moment later were then below a cursor that only
+   * moves forward. Parsed, ranked, never analysed, and nothing in the product
+   * able to name them.
+   *
+   * Reachable from the ordinary UI: "Show the next 25" sends advance=1, and a
+   * recruiter reading the first page while the rest of the pile is still being
+   * read is exactly the case.
+   *
+   * Ranks are dense, so the count of ranked rows is also the highest rank.
+   */
   const total = db.prepare(`
-    SELECT COUNT(*) AS n FROM triage_applicants WHERE triage_id = ? AND parse_status = 'parsed'
+    SELECT COUNT(*) AS n FROM triage_applicants
+    WHERE triage_id = ? AND prelim_rank IS NOT NULL
   `).get(triageId).n
 
   const from = triage.analysis_frontier + 1

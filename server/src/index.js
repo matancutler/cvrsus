@@ -6458,6 +6458,25 @@ app.patch('/api/hr/triage/:id', recruiterOnly, (req, res, next) => {
 app.post('/api/hr/triage/:id/files', recruiterOnly, triageUpload, async (req, res, next) => {
   const uploaded = Array.isArray(req.files) ? req.files : []
 
+  /*
+   * The files that now have a row pointing at them.
+   *
+   * The catch at the foot of this handler deletes what is left on disk from a
+   * request that failed, which is right for a file nothing refers to and wrong
+   * for one that was already committed. It deleted both: the loop below writes
+   * a triage_applicants row per accepted file, and any throw after that point
+   * — the launched-while-uploading 409 a few lines later, or anything else —
+   * unlinked the bytes out from under rows that survived. The row then pointed
+   * at nothing, and the failure surfaced minutes later as "this file could not
+   * be read" rather than as the data loss it was.
+   *
+   * So a committed file is recorded here and excluded from the sweep. Claimed
+   * before the insert rather than after it: the only cost of being wrong that
+   * way is a file left on disk, and the only cost of the other way is a row
+   * pointing at nothing.
+   */
+  const committed = new Set()
+
   try {
     const companyId = companyIdFor(req.session.id)
     const { triage, error } = mustOwn({ companyId, id: req.params.id })
@@ -6517,7 +6536,11 @@ app.post('/api/hr/triage/:id/files', recruiterOnly, triageUpload, async (req, re
         continue
       }
 
+      committed.add(file.path)
       const outcome = addFile({ triageId: triage.id, file })
+      /* A duplicate was refused and its bytes were unlinked by addFile itself,
+         so there is nothing left to protect. */
+      if (outcome.duplicate) committed.delete(file.path)
       results.push(outcome.duplicate
         ? {
           name: file.originalname, status: 'duplicate',
@@ -6559,8 +6582,12 @@ app.post('/api/hr/triage/:id/files', recruiterOnly, triageUpload, async (req, re
       readiness: launchReadiness({ triage: updated, capacity: capacityFor(companyId, req.session.id, updated) }),
     })
   } catch (error) {
-    // Anything still on disk from a rejected request is not ours to keep.
-    for (const file of uploaded) await fs.promises.unlink(file.path).catch(() => {})
+    /* Anything still on disk from a rejected request is not ours to keep —
+       except the files a row already names. See the note at the top. */
+    for (const file of uploaded) {
+      if (committed.has(file.path)) continue
+      await fs.promises.unlink(file.path).catch(() => {})
+    }
     next(error)
   }
 })
@@ -6692,10 +6719,27 @@ app.post('/api/hr/triage/:id/launch', recruiterOnly, (req, res, next) => {
         note: 'CVs returned: the Triage could not be started',
       })
 
-      /* And it is a draft again. `launched` is derived from ledger_id
-         (triage.js), so leaving it set would show a refunded Triage as running
-         with no queue behind it. */
-      db.prepare(`UPDATE triages SET ledger_id = NULL WHERE id = ?`).run(triage.id)
+      /*
+       * And it is a draft again — every part of that, not one.
+       *
+       * `launched` is derived from ledger_id (triage.js), so leaving it set
+       * would show a refunded Triage as running with no queue behind it. But
+       * startProcessing has already written status = 'processing', and
+       * clearing only the ledger left the row in a state the product has no
+       * name for: un-launched and processing at once. The builder would open
+       * on it, the queue would never touch it, and settleStatus refuses to
+       * move anything it did not start.
+       *
+       * The charge counters go back to zero with it — the refund above has
+       * already returned everything that was taken — and the error is cleared,
+       * because this Triage is editable again and a stale message from a failed
+       * start is not what the recruiter should meet on their next attempt.
+       */
+      db.prepare(`
+        UPDATE triages SET ledger_id = NULL, status = 'draft', error = NULL,
+                           charged_cvs = 0, refunded_cvs = 0, updated_at = ?
+        WHERE id = ?
+      `).run(new Date().toISOString(), triage.id)
 
       throw startError
     }

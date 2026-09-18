@@ -65,7 +65,8 @@
     "test:triage-history": "node test/triage-history-check.mjs",
     "test:comments": "node test/comments-check.mjs",
     "test:triage-funnel": "node test/triage-funnel-check.mjs",
-    "test:triage-capacity": "node test/triage-capacity-check.mjs"
+    "test:triage-capacity": "node test/triage-capacity-check.mjs",
+    "test:triage-skip": "node test/triage-skip-check.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",
