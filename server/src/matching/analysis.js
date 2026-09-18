@@ -13,26 +13,38 @@
  * overwrite a fresh one — the database enforces what a convention would not.
  */
 import db from '../db.js'
-import { MODEL, analyseMatches, isConfigured as aiConfigured } from '../ai.js'
+import { MATCH_MODEL, analyseMatches, isConfigured as aiConfigured } from '../ai.js'
+import { itemsInWindow, recordCost, sumUsage } from '../costs.js'
 import { effectiveProfile } from '../profiles.js'
 import { scoreCandidate } from '../match.js'
 import { MATCHING, VERSIONS } from './config.js'
-import { needsReview, scoreAgainst } from './score.js'
+import { deriveHighlights, needsReview, scoreAgainst } from './score.js'
 import { profileVersion } from './intelligence.js'
 
-/** The model identifier that participates in the cache key. */
-export function analysisModel() {
-  return aiConfigured() ? MODEL : 'deterministic'
+/**
+ * The model identifier that participates in the cache key.
+ *
+ * MATCH_MODEL rather than MODEL, because the judging call is the one the cache
+ * is about and it is the one that can be switched by an environment variable.
+ * Keyed on the constant instead, a switch to Sonnet would quietly serve every
+ * recruiter Opus's stored answers under Sonnet's name.
+ *
+ * Takes the model as an argument because the public demo judges with a cheaper
+ * one, and its answers must not be read back as though a recruiter's search
+ * had produced them.
+ */
+export function analysisModel(model = MATCH_MODEL) {
+  return aiConfigured() ? model : 'deterministic'
 }
 
-export function readCached({ candidateId, jobId, jdVersion }) {
+export function readCached({ candidateId, jobId, jdVersion, model = MATCH_MODEL }) {
   const row = db.prepare(`
     SELECT * FROM candidate_job_analyses
     WHERE candidate_id = ? AND profile_version = ? AND job_id = ? AND jd_version = ?
       AND analysis_model = ? AND scoring_version = ?
   `).get(
     candidateId, profileVersion(candidateId), jobId, jdVersion,
-    analysisModel(), VERSIONS.scoring,
+    analysisModel(model), VERSIONS.scoring,
   )
 
   if (!row) return null
@@ -47,7 +59,7 @@ export function readCached({ candidateId, jobId, jdVersion }) {
   }
 }
 
-export function writeCached({ candidateId, jobId, jdVersion, absoluteFit, criteria, explanation, source }) {
+export function writeCached({ candidateId, jobId, jdVersion, absoluteFit, criteria, explanation, source, model = MATCH_MODEL }) {
   db.prepare(`
     INSERT INTO candidate_job_analyses (
       candidate_id, profile_version, job_id, jd_version, analysis_model,
@@ -60,7 +72,7 @@ export function writeCached({ candidateId, jobId, jdVersion, absoluteFit, criter
       source = excluded.source,
       created_at = excluded.created_at
   `).run(
-    candidateId, profileVersion(candidateId), jobId, jdVersion, analysisModel(),
+    candidateId, profileVersion(candidateId), jobId, jdVersion, analysisModel(model),
     VERSIONS.scoring, absoluteFit, JSON.stringify(criteria ?? {}),
     explanation ?? null, source ?? 'deterministic', new Date().toISOString(),
   )
@@ -142,13 +154,20 @@ function deterministicFit({ candidate, matchProfile, cvText }) {
  * unchanged search pays nothing, which is the behaviour §12 asks for and the
  * reason the funnel above is worth having at all.
  */
-export async function analyseBatch({ job, matchProfile, rows, signal }) {
+export async function analyseBatch({
+  job, matchProfile, rows, signal, context = 'search', companyId = null,
+  /* Which model judges this batch. The public demo runs a cheaper one — see
+     runPublicSearch — and it has to travel into the cache key as well as into
+     the request, or the demo would write Sonnet's answers under Opus's name and
+     never read its own work back. */
+  model = MATCH_MODEL,
+}) {
   const results = new Map()
   const misses = []
 
   for (const row of rows) {
     const cached = readCached({
-      candidateId: row.candidate.id, jobId: job.id, jdVersion: job.jd_version,
+      candidateId: row.candidate.id, jobId: job.id, jdVersion: job.jd_version, model,
     })
     if (cached) {
       results.set(row.candidate.id, cached)
@@ -170,8 +189,22 @@ export async function analyseBatch({ job, matchProfile, rows, signal }) {
 
   const requirements = requirementsFrom(matchProfile)
 
+  /*
+   * The ceiling, checked once per batch rather than per candidate.
+   *
+   * A runaway — a loop, a script, somebody pasting job descriptions all night —
+   * spends money at four calls a second and nothing in the product noticed
+   * until the invoice. Over the ceiling, the batch falls through to the
+   * deterministic scorer: every candidate still gets a score and a place in the
+   * ranking, the results are simply not model-read. That is the same path a
+   * missing API key already takes, so it is exercised constantly rather than
+   * being a failure mode nobody has seen.
+   */
+  const allowed = withinDailyCeiling({ context, companyId, wanted: misses.length })
+
   let aiResults = new Map()
-  if (aiConfigured()) {
+  const started = Date.now()
+  if (aiConfigured() && allowed) {
     aiResults = await analyseMatches({
       jobDescription: job.raw_jd,
       criteria: {
@@ -193,7 +226,28 @@ export async function analyseBatch({ job, matchProfile, rows, signal }) {
         profile: effectiveProfile(row.candidate.id),
       })),
       signal,
+      model,
     })
+
+    /* What the batch actually cost, from the provider's own counts. Search
+       recorded nothing before this, which is why the only answer to "what does
+       a search cost" was an estimate. */
+    const usage = sumUsage([...aiResults.values()].map((result) => result.usage))
+    if (usage.calls > 0) {
+      recordCost({
+        context,
+        stage: 'match',
+        model: analysisModel(model),
+        companyId,
+        calls: usage.calls,
+        items: usage.calls,
+        inputTokens: usage.inputTokens,
+        cacheWriteTokens: usage.cacheWriteTokens,
+        cacheReadTokens: usage.cacheReadTokens,
+        outputTokens: usage.outputTokens,
+        durationMs: Date.now() - started,
+      })
+    }
   }
 
   for (const row of misses) {
@@ -241,11 +295,11 @@ export async function analyseBatch({ job, matchProfile, rows, signal }) {
           needsReview: needsReview(judged.coverage),
           verdicts: judged.breakdown,
           confidence: ai.confidence,
-          strengths: ai.strengths,
-          gaps: ai.gaps,
+          /* Derived from the verdicts above rather than asked of the model,
+             which used to write all three a second time. Same lists, same
+             wording discipline, no tokens. */
+          ...deriveHighlights(judged.breakdown),
           transferable: ai.transferable,
-          evidence: ai.evidence,
-          probes: ai.probes,
           /* Kept beside the criteria rather than folded into the score: both
              are decision-relevant on their own, and the ranking applies its own
              bounded adjustment for location rather than letting the model spend
@@ -270,7 +324,7 @@ export async function analyseBatch({ job, matchProfile, rows, signal }) {
     writeCached({
       candidateId: id, jobId: job.id, jdVersion: job.jd_version,
       absoluteFit: record.absoluteFit, criteria: record.criteria,
-      explanation: record.explanation, source: record.source,
+      explanation: record.explanation, source: record.source, model,
     })
 
     results.set(id, record)
@@ -279,13 +333,81 @@ export async function analyseBatch({ job, matchProfile, rows, signal }) {
   return { results, analysed: misses.length, reused: results.size - misses.length }
 }
 
+/**
+ * Adds a written explanation to an analysis that already exists.
+ *
+ * Merged into the stored criteria rather than kept in a table of its own: it is
+ * read in exactly one place, at exactly the moment the analysis beside it is
+ * read, and a second table would mean a second query and a second thing that
+ * can be out of step with the verdicts it describes.
+ *
+ * Returns false when there is nothing to attach it to — the analysis expired
+ * from the cache, or the job version moved on — so the caller can say so rather
+ * than reporting a success that stored nothing.
+ */
+export function attachExplanation({ candidateId, jobId, jdVersion, explain, model = MATCH_MODEL }) {
+  const row = db.prepare(`
+    SELECT criteria_results FROM candidate_job_analyses
+    WHERE candidate_id = ? AND profile_version = ? AND job_id = ? AND jd_version = ?
+      AND analysis_model = ? AND scoring_version = ?
+  `).get(
+    candidateId, profileVersion(candidateId), jobId, jdVersion,
+    analysisModel(model), VERSIONS.scoring,
+  )
+
+  if (!row) return false
+
+  const criteria = JSON.parse(row.criteria_results)
+  criteria.explain = explain
+
+  db.prepare(`
+    UPDATE candidate_job_analyses SET criteria_results = ?
+    WHERE candidate_id = ? AND profile_version = ? AND job_id = ? AND jd_version = ?
+      AND analysis_model = ? AND scoring_version = ?
+  `).run(
+    JSON.stringify(criteria), candidateId, profileVersion(candidateId), jobId, jdVersion,
+    analysisModel(model), VERSIONS.scoring,
+  )
+
+  return true
+}
+
+/**
+ * Whether there is room under the daily ceiling for this much work.
+ *
+ * Two ceilings, because there are two things to protect against. A company's
+ * own runaway is capped per company; the public demo is capped globally,
+ * because it has no company behind it and anyone on the internet can start one.
+ *
+ * Deliberately not a hard stop: over the line, analysis falls back to the
+ * deterministic scorer rather than failing the request. A recruiter who hits an
+ * invisible limit should get a working, plainer search — and be told why, which
+ * is the caller's job with the flag this returns.
+ */
+export function withinDailyCeiling({ context, companyId = null, wanted = 1 }) {
+  const cap = context === 'demo' ? MATCHING.demoDailyAnalyses : MATCHING.companyDailyAnalyses
+  if (!Number.isFinite(cap) || cap <= 0) return true
+
+  const used = itemsInWindow(
+    context === 'demo' ? { context: 'demo' } : { context, companyId },
+  )
+
+  if (used + wanted <= cap) return true
+
+  console.warn(
+    `  daily analysis ceiling reached (${context}${companyId ? ` company ${companyId}` : ''}): `
+    + `${used} used, ${wanted} wanted, cap ${cap}. Falling back to deterministic scoring.`,
+  )
+  return false
+}
+
 /** Every analysis stored for this job version — the universe §10.2 normalises over. */
-export function analysedUniverse({ jobId, jdVersion }) {
+export function analysedUniverse({ jobId, jdVersion, model = MATCH_MODEL }) {
   return db.prepare(`
     SELECT candidate_id AS candidateId, absolute_fit AS absoluteFit,
            criteria_results AS criteria, explanation, source
     FROM candidate_job_analyses
     WHERE job_id = ? AND jd_version = ? AND analysis_model = ? AND scoring_version = ?
-  `).all(jobId, jdVersion, analysisModel(), VERSIONS.scoring)
+  `).all(jobId, jdVersion, analysisModel(model), VERSIONS.scoring)
     .map((row) => ({ ...row, criteria: JSON.parse(row.criteria) }))
 }

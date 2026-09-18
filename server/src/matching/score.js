@@ -122,6 +122,57 @@ function status_is_known(status) {
 }
 
 /**
+ * Strengths, gaps and evidence — derived from the verdicts rather than bought.
+ *
+ * The model used to be asked for all three by name, on top of the verdicts, and
+ * they were the same information written a second time: a strength is a
+ * requirement it just said meets and quoted, a gap is one nothing could be
+ * found for, and evidence is the quote it already gave. Three extra lists on
+ * every CV, at five times the input price, restating what the verdicts hold —
+ * so they are computed here, for nothing, and the model writes less.
+ *
+ * The wording of a gap matters and is the reason this is not a one-liner.
+ * no_evidence means the CV is silent, not that the candidate cannot do it, and
+ * a list that renders silence as failure is exactly the mistake the scorer is
+ * careful to avoid. The two are phrased differently, and only contradicted is
+ * stated as a fact about the person.
+ */
+export function deriveHighlights(breakdown, { limit = 8 } = {}) {
+  const rows = breakdown ?? []
+  const byTier = (a, b) => (TIER_WEIGHT[b.tier] ?? 0) - (TIER_WEIGHT[a.tier] ?? 0)
+
+  /* The model's own one-line reason where it gave one, because it says what
+     this candidate did; the requirement text otherwise, which at least says
+     what was being asked. */
+  const said = (row) => (String(row.reason ?? '').trim() || String(row.requirement ?? '').trim())
+
+  const strengths = rows
+    .filter((row) => row.status === 'meets')
+    .sort(byTier)
+    .map(said)
+    .filter(Boolean)
+    .slice(0, limit)
+
+  const gaps = [
+    ...rows
+      .filter((row) => row.status === 'contradicted')
+      .sort(byTier)
+      .map((row) => `${row.requirement} — the CV shows otherwise`),
+    ...rows
+      .filter((row) => row.status === 'no_evidence' && row.tier === 'must_have')
+      .map((row) => `${row.requirement} — the CV does not mention it`),
+  ].slice(0, limit)
+
+  const evidence = rows
+    .filter((row) => String(row.quote ?? '').trim().length > 0)
+    .sort(byTier)
+    .map((row) => ({ claim: said(row), quote: String(row.quote).trim() }))
+    .slice(0, limit)
+
+  return { strengths, gaps, evidence }
+}
+
+/**
  * Whether a score rests on enough evidence to show as a number.
  *
  * Below the floor the fit is arithmetically fine and practically meaningless:

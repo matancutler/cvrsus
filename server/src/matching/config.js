@@ -33,6 +33,22 @@ export const MATCHING = {
   freshnessMonths: num('MATCH_FRESHNESS_MONTHS', 6),
 
   /**
+   * Ceilings on model-read analyses in a rolling 24 hours.
+   *
+   * Not a budget — a circuit breaker. It sits far above what real use looks
+   * like, so hitting it means something is wrong rather than something is
+   * popular. Over the line, scoring falls back to the deterministic path,
+   * which still ranks everybody, and the recruiter is told rather than left
+   * wondering why the reasoning went quiet.
+   *
+   * The demo's is global and much lower for the obvious reason: nobody behind
+   * it is paying, anybody on the internet can start one, and eight searches an
+   * hour per browser is not a limit when there is no limit on browsers.
+   */
+  companyDailyAnalyses: num('MATCH_DAILY_CAP', 1500),
+  demoDailyAnalyses: num('DEMO_DAILY_CAP', 200),
+
+  /**
    * §9.2 — hybrid retrieval weights. Deliberately not normalised to 1 here:
    * the scorer divides by the sum of the weights it actually used, so a
    * candidate missing an embedding is judged on the signals that do exist
