@@ -35,6 +35,9 @@
     "test:paste-image": "node test/paste-image-check.mjs",
     "test:recruiter-reset": "node test/recruiter-reset-check.mjs",
     "ai:health": "node server/scripts/ai-health.mjs",
+    "ai:cost": "node server/scripts/ai-cost.mjs",
+    "ai:eval": "node server/scripts/ai-eval.mjs",
+    "triage:audit": "node server/scripts/triage-audit.mjs",
     "test:criterion-scoring": "node test/criterion-scoring-check.mjs",
     "test:ai-observability": "node test/ai-observability-check.mjs",
     "test:chip-alignment": "node test/chip-alignment-check.mjs",
@@ -66,7 +69,10 @@
     "test:comments": "node test/comments-check.mjs",
     "test:triage-funnel": "node test/triage-funnel-check.mjs",
     "test:triage-capacity": "node test/triage-capacity-check.mjs",
-    "test:triage-skip": "node test/triage-skip-check.mjs"
+    "test:triage-skip": "node test/triage-skip-check.mjs",
+    "test:cost": "node test/ai-cost-check.mjs",
+    "test:explain": "node test/explain-route-check.mjs",
+    "test:triage-drop": "node test/triage-drop-check.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",

@@ -1189,6 +1189,72 @@ node server/scripts/contact.mjs show <span class="c">&lt;id&gt;</span></pre>
         </article>
       </div>
 
+      <div class="stack" style="margin-bottom:1rem">
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">npm run ai:health</span>
+            <span class="risk risk-read">Read</span>
+          </div>
+          <p class="what">
+            Is the AI layer actually running? Shows how many analyses used a model rather than the
+            keyword fallback, and why the rest fell back. Names a spend limit as a spend limit
+            rather than leaving it looking like a bad request.
+          </p>
+          <p class="when">
+            When scores look cruder than they should, and after any deploy that touches the model
+            settings. Every AI call falls back silently by design, so this is the only place the
+            failures are visible.
+          </p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">npm run ai:cost <span class="flag">[--days 7] [--by stage|model|day]</span></span>
+            <span class="risk risk-read">Read</span>
+          </div>
+          <p class="what">
+            What the model calls actually cost, from the ledger: dollars per CV by surface, how much
+            of the reading came from the prompt cache, and what the public demo has spent.
+          </p>
+          <p class="when">
+            On the live service — this laptop has no key and has therefore never spent anything.
+            Before and after any change meant to make the AI cheaper.
+          </p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">npm run triage:audit</span>
+            <span class="risk risk-read">Read</span>
+          </div>
+          <p class="what">
+            What is in the live database before a Triage migration: sessions by state, CVs and their
+            age, disk used, how many CVs were charged for and never analysed. Opens the database
+            read-only, so it cannot write even by accident.
+          </p>
+          <p class="when">
+            Before any Triage migration, and whenever the retention rule needs checking against
+            reality. Run it on the service, not a laptop.
+          </p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">npm run ai:eval <span class="flag">--configs baseline,opus-medium --dry</span></span>
+            <span class="risk risk-wreck">Spends</span>
+          </div>
+          <p class="what">
+            Judges the same CVs under several models and effort levels and reports how far each
+            agrees with what production runs today. Writes the must-have disagreements without
+            saying which setup produced which reading — read those before the key.
+          </p>
+          <p class="when">
+            Before switching the judging model or its effort. Roughly $25-30 a run, so it refuses to
+            start without <code>--yes</code>; <code>--dry</code> prints the plan and spends nothing.
+          </p>
+        </article>
+      </div>
+
       <div class="suites">
         <span>test:api</span><span>test:phase1</span><span>test:matching</span>
         <span>test:signin</span><span>test:persistence</span><span>test:identity</span>
@@ -1197,6 +1263,12 @@ node server/scripts/contact.mjs show <span class="c">&lt;id&gt;</span></pre>
         <span>test:usage</span><span>test:export</span><span>test:folders</span>
         <span>test:workspace</span><span>test:shared-folders</span><span>test:reveal</span>
         <span>test:triage</span><span>test:triage-funnel</span><span>test:triage-capacity</span><span>test:triage-skip</span>
+        <span>test:cost</span><span>test:explain</span><span>test:triage-drop</span>
+        <span>test:name-case</span><span>test:jd-image</span><span>test:paste-image</span>
+        <span>test:score-fairness</span><span>test:criterion-scoring</span><span>test:analysis-depth</span>
+        <span>test:ai-observability</span><span>test:onboarding</span><span>test:chip-alignment</span>
+        <span>test:session-refresh</span><span>test:recruiter-reset</span><span>test:comments</span>
+        <span>test:triage-draft-ux</span><span>test:triage-history</span>
         <span>test:security</span><span>test:cookies</span><span>test:single-session</span>
         <span>test:recruiter-profile</span><span>test:recruiter-usage</span><span>test:stats</span>
         <span>test:summary</span><span>test:summary-ai</span><span>test:summary-companies</span>
