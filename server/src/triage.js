@@ -81,6 +81,22 @@ export const TRIAGE = {
    * nonsense value falls back rather than becoming a hot loop.
    */
   wakeMs: num('TRIAGE_WAKE_MS', 5000),
+
+  /**
+   * Whether CVs may be added to a session that is already running.
+   *
+   * The whole of rolling Triage is built and tested behind this. It is ON
+   * everywhere except production, and OFF there until the cost of analysing a
+   * CV has been measured and the effort setting chosen — because a second
+   * delivery is a second charge, and putting a button in front of paying
+   * recruiters before we know what each press costs us is the wrong order to
+   * do those two things in.
+   *
+   * Flipping it on in production is one environment variable and a restart.
+   * No deploy, and nothing about the data changes either way: a session with
+   * one delivery and a session with three are the same shape.
+   */
+  addCvs: flag('TRIAGE_ADD_CVS', process.env.NODE_ENV !== 'production'),
 }
 
 function num(name, fallback) {
@@ -88,6 +104,15 @@ function num(name, fallback) {
   if (raw === undefined || raw === '') return fallback
   const parsed = Number(raw)
   return Number.isFinite(parsed) ? parsed : fallback
+}
+
+/* '0', 'false' and 'off' all mean off, because an operator typing one of them
+   into Render means the same thing by all three and should not have to guess
+   which one this file happens to parse. */
+function flag(name, fallback) {
+  const raw = process.env[name]
+  if (raw === undefined || raw === '') return fallback
+  return !['0', 'false', 'off', 'no'].includes(String(raw).trim().toLowerCase())
 }
 
 const now = () => new Date().toISOString()
@@ -410,8 +435,54 @@ export function ensureLaunchDrop(triageId) {
   db.prepare(`UPDATE triage_applicants SET drop_id = ? WHERE triage_id = ? AND drop_id IS NULL`)
     .run(drop.id, triageId)
   closeDrop(drop.id)
+  adoptSessionCharge({ triageId, dropId: drop.id })
 
   return drop
+}
+
+/**
+ * Moves a session's existing charge onto the delivery that now holds the CVs
+ * it paid for.
+ *
+ * This is the one that would have cost real money. A Triage launched before
+ * charging moved onto deliveries carries its charge on the triages row: a
+ * ledger id, a charged count, and no drop to hang them on. The first time a
+ * recruiter adds CVs to it, the old pile is adopted into a delivery — and that
+ * delivery would arrive with ledger_id NULL, which is the word for "not paid
+ * for". The next charge sweep would have billed the organization a second time
+ * for CVs it had already bought.
+ *
+ * So the charge follows the CVs. The drop is marked paid with the session's own
+ * ledger row and counts, and nothing new is written to the ledger: no money
+ * moved, this is the same charge being recorded where it now belongs.
+ *
+ * Only ever onto a drop that has none of its own, and only from a session whose
+ * charge is not already attributed to a delivery — a session with two paid
+ * drops has nothing left over, and copying a total onto a third would invent a
+ * charge that never happened.
+ */
+function adoptSessionCharge({ triageId, dropId }) {
+  const triage = db.prepare(
+    `SELECT ledger_id, charged_cvs, refunded_cvs FROM triages WHERE id = ?`,
+  ).get(triageId)
+
+  if (!triage?.ledger_id || (triage.charged_cvs ?? 0) <= 0) return false
+
+  const attributed = db.prepare(
+    `SELECT COUNT(*) AS n FROM triage_drops WHERE triage_id = ? AND ledger_id IS NOT NULL`,
+  ).get(triageId).n
+  if (attributed > 0) return false
+
+  const claimed = db.prepare(`
+    UPDATE triage_drops
+    SET ledger_id = ?, charged_cvs = ?, refunded_cvs = ?, charged_at = COALESCE(charged_at, ?)
+    WHERE id = ? AND ledger_id IS NULL
+  `).run(
+    triage.ledger_id, triage.charged_cvs, triage.refunded_cvs ?? 0,
+    now(), dropId,
+  )
+
+  return claimed.changes > 0
 }
 
 /**

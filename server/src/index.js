@@ -144,6 +144,7 @@ import db, {
 } from './db.js'
 import {
   TRIAGE,
+  addCvsToSession,
   addFile,
   chargeableCvs,
   applicantFile,
@@ -157,8 +158,10 @@ import {
   deleteTriage,
   draftBytes,
   draftFiles,
+  ensureLaunchDrop,
   failedFiles,
   getTriage,
+  listDrops,
   launchReadiness,
   latestDraft,
   listTriages,
@@ -173,7 +176,9 @@ import {
   triageUploadNames,
 } from './triage.js'
 import {
+  analysisLimit,
   queueDepth,
+  requeueFailedAnalyses,
   requestNextTranche,
   resumeQueue,
   startQueueWaker,
@@ -338,10 +343,12 @@ import {
 } from './pricing.js'
 import {
   consumeReveal,
-  consumeTriageCvs,
+  chargeTriageDrops,
+  consumeTriageDrop,
   creditReveals,
   creditTriages,
-  refundTriageCvs,
+  refundTriageDrop,
+  refundTriageSession,
   setTriageAllocations,
   triageAllocations,
   triageAllowanceRemaining,
@@ -6857,8 +6864,14 @@ app.post('/api/hr/triage/:id/launch', recruiterOnly, (req, res, next) => {
       )
     }
 
-    const charge = consumeTriageCvs({
-      companyId, triageId: triage.id, recruiterId: req.session.id, cvs: readiness.cvs,
+    /* Every CV belongs to a delivery before anything is charged. A draft
+       filled in before deliveries existed carries its pile at drop_id NULL,
+       and a charge with nothing to hang itself on would be charged again the
+       first time somebody added more. */
+    ensureLaunchDrop(triage.id)
+
+    const charge = chargeTriageDrops({
+      companyId, triageId: triage.id, recruiterId: req.session.id,
     })
     if (!charge.ok) {
       /* Lost a race with a concurrent launch that spent the capacity first.
@@ -6886,8 +6899,8 @@ app.post('/api/hr/triage/:id/launch', recruiterOnly, (req, res, next) => {
        * seat's usage stayed inflated, and the Triage stayed marked as paid for
        * while nothing ran.
        */
-      refundTriageCvs({
-        companyId, triageId: triage.id, totalCvs: charge.cvs,
+      refundTriageSession({
+        companyId, triageId: triage.id,
         note: 'CVs returned: the Triage could not be started',
       })
 
@@ -6913,6 +6926,15 @@ app.post('/api/hr/triage/:id/launch', recruiterOnly, (req, res, next) => {
         WHERE id = ?
       `).run(new Date().toISOString(), triage.id)
 
+      /* The deliveries go back to unpaid with it. Leaving a drop marked paid
+         over a session that has been un-launched would make the next launch
+         skip it — the CVs would be analysed and nobody would be charged. */
+      db.prepare(`
+        UPDATE triage_drops SET ledger_id = NULL, charged_cvs = 0, refunded_cvs = 0,
+                                charged_at = NULL
+        WHERE triage_id = ?
+      `).run(triage.id)
+
       throw startError
     }
 
@@ -6934,6 +6956,255 @@ app.post('/api/hr/triage/:id/launch', recruiterOnly, (req, res, next) => {
       charged: charge.charged,
       cvs: charge.cvs,
       states: pipelineStates(triage.id),
+    })
+  } catch (error) {
+    next(error)
+  }
+})
+
+/**
+ * Adds CVs to a session that is already running.
+ *
+ * This is rolling Triage from the outside: one more pile, charged on its own,
+ * ranked after the CVs already there, analysed as its turn comes. Everything
+ * that makes it safe was built in phase 1 — the delivery is the unit of work,
+ * ranks already handed out never move, and the queue finds the batch whether
+ * or not a browser is watching. What this route adds is the charge and the
+ * refusals.
+ *
+ * The order is deliberate and is the whole correctness of it:
+ *
+ *   1. Refuse before spending anything a recruiter would have to ask for back.
+ *   2. Write the rows, so the count being charged is the count that exists.
+ *   3. Charge that count, once, against this delivery.
+ *   4. Only then start the work.
+ *
+ * If step 3 fails the delivery is removed entirely — rows, files and all —
+ * rather than left sitting unpaid in a session that would analyse it anyway.
+ * A recruiter who is short of capacity gets an error and their CVs back, not a
+ * half-added pile they have to find and clear up.
+ */
+app.post('/api/hr/triage/:id/cvs', recruiterOnly, triageUpload, async (req, res, next) => {
+  const uploaded = Array.isArray(req.files) ? req.files : []
+  /* Same contract as the draft upload route: a file a row already names is
+     not ours to sweep. See the long note there. */
+  const committed = new Set()
+
+  try {
+    /* Off in production until the cost of a CV has been measured. A route
+       that is switched off does not exist, which is why this is a 404 and not
+       a 403 — there is nothing here to be allowed to do. */
+    if (!TRIAGE.addCvs) {
+      throw new HttpError(404, 'Adding CVs to a running Triage is not available yet.')
+    }
+
+    const companyId = companyIdFor(req.session.id)
+    const { triage, error } = mustOwn({ companyId, id: req.params.id })
+    if (error) throw new HttpError(404, 'That Triage does not exist.')
+
+    /* A draft has its own upload route, and it must keep it: files added
+       before launch are charged together at launch, and routing them through
+       here would charge them twice. */
+    if (!triage.launched) {
+      throw new HttpError(409, 'This Triage has not started yet. Add the CVs to it and press Start.')
+    }
+    if (triage.status === 'failed') {
+      throw new HttpError(409, 'This Triage could not be processed. Start a new one for these CVs.')
+    }
+
+    const preRejected = (req.rejectedUploads ?? []).map((entry) => ({
+      name: entry.name, status: 'rejected', reason: entry.reason,
+    }))
+
+    if (uploaded.length === 0 && preRejected.length === 0) {
+      throw new HttpError(400, 'Choose the CV files to add.')
+    }
+
+    /* The session ceiling, against the running total rather than this request,
+       so a pile cannot be walked past the cap one delivery at a time. */
+    const room = Math.max(0, triage.fileCap - triage.counts.total)
+    const accepted = uploaded.slice(0, room)
+    const overflow = uploaded.slice(room)
+
+    /*
+     * Capacity, before anything is written.
+     *
+     * Charging happens below, after the rows exist and the count is known —
+     * but a recruiter who is two hundred CVs short should be told so now,
+     * not after we have written two hundred rows and unwound them again. This
+     * is the check that produces the readable error; the charge below is the
+     * one that is actually authoritative, because only it is atomic.
+     */
+    if (accepted.length > 0) {
+      const capacity = triageCapacityCheck({
+        companyId, recruiterId: req.session.id, cvs: accepted.length,
+      })
+      if (capacity.organizationShort > 0) {
+        throw new HttpError(402,
+          `Adding ${accepted.length} CV${accepted.length === 1 ? '' : 's'} needs `
+          + `${accepted.length} of capacity and your organization has ${capacity.balance}. `
+          + `Buy ${capacity.organizationShort} more to add them.`)
+      }
+      if (capacity.seatShort > 0) {
+        throw new HttpError(403,
+          `Your Triage allowance leaves you ${capacity.allowance} of the ${accepted.length} CV`
+          + `${accepted.length === 1 ? '' : 's'} this needs. Your organization has capacity — `
+          + 'ask your administrator to raise your allowance.')
+      }
+    }
+
+    /* Nothing is awaited between here and the last insert, for the reason set
+       out on the draft upload route: a yield mid-loop lets another request
+       charge a delivery this one is still filling. */
+    const bytesHeld = draftBytes(triage.id)
+    const discardable = []
+    const keep = []
+    const results = [...preRejected]
+
+    for (const file of accepted) {
+      if (bytesHeld + (file.size ?? 0) > TRIAGE.maxTotalBytes) {
+        results.push({ name: file.originalname, status: 'rejected', reason: 'This Triage has reached its total size limit.' })
+        discardable.push(file.path)
+        continue
+      }
+      if ((file.size ?? 0) === 0) {
+        results.push({ name: file.originalname, status: 'rejected', reason: 'The file is empty.' })
+        discardable.push(file.path)
+        continue
+      }
+      committed.add(file.path)
+      keep.push(file)
+    }
+
+    for (const file of overflow) {
+      results.push({
+        name: file.originalname, status: 'rejected',
+        reason: `One Triage takes up to ${triage.fileCap} CVs at a time.`,
+      })
+      discardable.push(file.path)
+    }
+
+    if (keep.length === 0) {
+      await Promise.all(discardable.map((p) => fs.promises.unlink(p).catch(() => {})))
+      throw new HttpError(400, results[0]?.reason ?? 'None of those files could be added.')
+    }
+
+    const delivery = addCvsToSession({
+      triageId: triage.id, recruiterId: req.session.id, files: keep,
+    })
+    results.push(...delivery.results)
+
+    /* A duplicate never became a row and addFile has already deleted its
+       bytes, so it is no longer ours to protect. */
+    for (const row of delivery.results) {
+      if (row.status !== 'duplicate') continue
+      const file = keep.find((f) => f.originalname === row.name)
+      if (file) committed.delete(file.path)
+    }
+
+    await Promise.all(discardable.map((p) => fs.promises.unlink(p).catch(() => {})))
+
+    /*
+     * The charge, for exactly the rows that exist.
+     *
+     * `delivery.added` and not `keep.length`: a file that duplicated one
+     * already in the session was refused by the unique index and there is
+     * nothing to analyse, so there is nothing to charge for.
+     */
+    if (delivery.added === 0) {
+      dropDelivery(delivery.drop.id)
+      throw new HttpError(409, 'Every one of those CVs is already in this Triage.')
+    }
+
+    const charge = consumeTriageDrop({
+      companyId, triageId: triage.id, dropId: delivery.drop.id,
+      recruiterId: req.session.id, cvs: delivery.added,
+    })
+
+    if (!charge.ok) {
+      /* Lost a race with something that spent the capacity between the check
+         above and here. The delivery goes away completely — rows, files and
+         the drop — so the recruiter can simply try again once they have more. */
+      dropDelivery(delivery.drop.id)
+      throw new HttpError(
+        charge.reason === 'over_allowance' ? 403 : 402,
+        charge.reason === 'over_allowance'
+          ? 'Your Triage allowance no longer covers these. Ask your administrator to raise it.'
+          : 'Your organization no longer has enough Triage capacity for these. Buy more to add them.',
+      )
+    }
+
+    startProcessing(triage.id, { dropId: delivery.drop.id })
+
+    track('triage_cvs_added', {
+      actorType: 'recruiter', actorId: req.session.id,
+      triageId: triage.id, dropId: delivery.drop.id, added: delivery.added,
+    })
+
+    const updated = getTriage({ companyId, id: triage.id })
+    res.status(201).json({
+      triage: updated,
+      drop: { id: delivery.drop.id, seq: delivery.drop.seq, files: delivery.added },
+      drops: listDrops(triage.id),
+      results,
+      added: delivery.added,
+      charged: charge.charged ? charge.cvs : 0,
+      balance: charge.balance,
+      states: pipelineStates(triage.id),
+    })
+  } catch (error) {
+    for (const file of uploaded) {
+      if (committed.has(file.path)) continue
+      await fs.promises.unlink(file.path).catch(() => {})
+    }
+    next(error)
+  }
+})
+
+/**
+ * Removes a delivery that was never paid for, and the CVs in it.
+ *
+ * Only ever called on the failure path above, and only on a drop this request
+ * has just created, which is why it does not check ownership: the caller has
+ * already done that, and the alternative — leaving unpaid rows in a running
+ * session — is the failure this exists to prevent. Those rows would be parsed
+ * and analysed like any other, for free, and the recruiter would have no way
+ * to tell them from the ones they bought.
+ */
+function dropDelivery(dropId) {
+  const rows = db.prepare(`SELECT stored_name FROM triage_applicants WHERE drop_id = ?`).all(dropId)
+  db.prepare(`DELETE FROM triage_applicants WHERE drop_id = ?`).run(dropId)
+  db.prepare(`DELETE FROM triage_drops WHERE id = ? AND ledger_id IS NULL`).run(dropId)
+
+  for (const row of rows) {
+    if (row.stored_name) fs.promises.unlink(path.join(UPLOAD_DIR, row.stored_name)).catch(() => {})
+  }
+}
+
+/**
+ * Puts applicants whose analysis failed back in the queue.
+ *
+ * Analysis fails for reasons that pass: a timeout, a rate limit, a model
+ * having a bad minute. Until now a failure was final — the CV had been charged
+ * for, it sat in the list with no score, and the only route back was a new
+ * Triage and a second charge for the same file.
+ *
+ * Nothing is charged here. These CVs were paid for when their delivery
+ * arrived; this is us finishing work that was already bought.
+ */
+app.post('/api/hr/triage/:id/retry', recruiterOnly, (req, res, next) => {
+  try {
+    const companyId = companyIdFor(req.session.id)
+    const { triage, error } = mustOwn({ companyId, id: req.params.id })
+    if (error) throw new HttpError(404, 'That Triage does not exist.')
+
+    const requeued = requeueFailedAnalyses(triage.id)
+
+    res.json({
+      requeued,
+      triage: getTriage({ companyId, id: triage.id }),
+      states: pipelineStates(triage.id),
+      working: queueDepth(triage.id) > 0,
     })
   } catch (error) {
     next(error)
@@ -6967,6 +7238,33 @@ app.get('/api/hr/triage/:id/results', recruiterOnly, (req, res, next) => {
       states: pipelineStates(triage.id),
       working: queueDepth(triage.id) > 0,
       queued,
+      /* Every delivery into this session, so the page can say "36 CVs at the
+         start, 12 more on Friday" rather than presenting one undifferentiated
+         pile that grew when nobody was looking. */
+      drops: listDrops(triage.id),
+      /*
+       * What adding more would cost, and whether the button is there at all.
+       *
+       * Sent with the page rather than discovered by trying: a recruiter who
+       * is out of capacity should see that before they choose three hundred
+       * files, not after the upload has finished.
+       */
+      adding: {
+        enabled: TRIAGE.addCvs,
+        room: Math.max(0, triage.fileCap - triage.counts.total),
+        balance: triageBalance(companyId),
+        allowance: triageAllowanceRemaining(req.session.id) === Infinity
+          ? null : triageAllowanceRemaining(req.session.id),
+      },
+      /*
+       * Whether the model is doing the reading.
+       *
+       * The daily ceiling falls back to the deterministic scorer rather than
+       * failing, which keeps the product working and would otherwise keep the
+       * recruiter in the dark about why today's readings are plainer than last
+       * week's. Said here so the page can say it.
+       */
+      limits: analysisLimit(triage.id),
       /* Where each applicant is filed, so a row can wear the folder chip the
          search results wear. Company-wide and sent with the page rather than
          fetched per row: a folder is shared, so a colleague's filing shows up

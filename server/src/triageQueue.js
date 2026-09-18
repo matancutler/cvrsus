@@ -39,7 +39,7 @@ import { requirementsFrom, withinDailyCeiling } from './matching/analysis.js'
 import { deriveHighlights, needsReview, scoreAgainst } from './matching/score.js'
 import { VERSIONS } from './matching/config.js'
 import { TRIAGE, rawTriage, recount } from './triage.js'
-import { refundTriageCvs } from './wallet.js'
+import { refundTriageDrop, refundTriageSession } from './wallet.js'
 
 const now = () => new Date().toISOString()
 
@@ -59,7 +59,9 @@ let stopped = false
  * never cause the same candidate batch to be charged or processed twice" is
  * this INSERT and its unique index, and nothing else.
  */
-export function enqueue({ triageId, kind, fromRank = null, toRank = null, dropId = null }) {
+export function enqueue({
+  triageId, kind, fromRank = null, toRank = null, dropId = null, keySuffix = null,
+}) {
   /*
    * The delivery is part of the identity of the work.
    *
@@ -70,7 +72,16 @@ export function enqueue({ triageId, kind, fromRank = null, toRank = null, dropId
    * single hardest thing standing between this pipeline and a rolling one, and
    * it is this line.
    */
+  /*
+   * `keySuffix` is how a deliberate re-run gets past the very index that makes
+   * an accidental one free. Re-analysing a range that failed is the same work
+   * by every other measure, so without a suffix the INSERT is ignored and the
+   * retry silently does nothing. Only the retry path passes one, and it passes
+   * a round number, so two retries of the same range are two batches and a
+   * double-clicked retry is one.
+   */
   const idem = `${triageId}:${dropId ?? '-'}:${kind}:${fromRank ?? '-'}:${toRank ?? '-'}`
+    + (keySuffix === null ? '' : `:${keySuffix}`)
 
   const info = db.prepare(`
     INSERT OR IGNORE INTO triage_batches (triage_id, drop_id, kind, from_rank, to_rank, idem_key, created_at)
@@ -269,9 +280,8 @@ async function runBatch(batch) {
          */
         const failed = rawTriage(batch.triage_id)
         if (failed?.company_id && failed.charged_cvs > 0) {
-          const back = refundTriageCvs({
+          const back = refundTriageSession({
             companyId: failed.company_id, triageId: batch.triage_id,
-            totalCvs: failed.charged_cvs,
             note: 'CVs returned — this Triage could not be processed',
           })
           if (back.refunded > 0) {
@@ -382,35 +392,42 @@ async function runParse(triage, batch) {
    * at a spinner.
    */
   /*
-   * Only what was charged can be handed back.
+   * Against THIS delivery's charge, and nothing else.
    *
-   * The charge covers the delivery the session was launched with, and
-   * refundTriageCvs works in whole-session totals clamped to that one charge.
-   * Counting a later delivery's unreadable files into the same total would hand
-   * back capacity the recruiter paid for CVs they can still read.
+   * Each delivery is paid for on its own, so each one's unreadable files are
+   * owed back against its own line. A session-wide total would be wrong in
+   * both directions: two unreadable files in Friday's drop of six, counted
+   * against the whole session, would clamp to a charge the recruiter made in
+   * March and hand back capacity they had spent on CVs they can still read.
+   *
+   * A session launched before deliveries existed has its CVs at drop_id NULL
+   * and its charge on the triages row; refundTriageSession's legacy path is
+   * what serves it, which is why that case is asked separately.
    */
-  const chargedDrop = db.prepare(
-    `SELECT id FROM triage_drops WHERE triage_id = ? ORDER BY seq LIMIT 1`,
-  ).get(triage.id)?.id ?? null
-
-  const unreadable = chargedDrop === null
+  const unreadable = batch.drop_id
     ? db.prepare(`
+      SELECT COUNT(*) AS n FROM triage_applicants
+      WHERE triage_id = ? AND parse_status IN ('unreadable', 'failed') AND drop_id = ?
+    `).get(triage.id, batch.drop_id).n
+    : db.prepare(`
       SELECT COUNT(*) AS n FROM triage_applicants
       WHERE triage_id = ? AND parse_status IN ('unreadable', 'failed') AND drop_id IS NULL
     `).get(triage.id).n
-    : db.prepare(`
-      SELECT COUNT(*) AS n FROM triage_applicants
-      WHERE triage_id = ? AND parse_status IN ('unreadable', 'failed') AND drop_id = ?
-    `).get(triage.id, chargedDrop).n
 
   if (unreadable > 0 && triage.company_id) {
-    /* The TOTAL that should have gone back for this Triage, not a delta — this
-       sweep can run again after a retry or a crash and will report the same
-       number, and refundTriageCvs pays only the difference. */
-    const back = refundTriageCvs({
-      companyId: triage.company_id, triageId: triage.id, totalCvs: unreadable,
-      note: `CV${unreadable === 1 ? '' : 's'} returned — the file could not be read`,
-    })
+    /* The TOTAL that should have gone back for this DELIVERY, not a delta —
+       this sweep can run again after a retry or a crash and will report the
+       same number, and the refund pays only the difference. */
+    const back = batch.drop_id
+      ? refundTriageDrop({
+        companyId: triage.company_id, dropId: batch.drop_id, totalCvs: unreadable,
+        note: `CV${unreadable === 1 ? '' : 's'} returned — the file could not be read`,
+      })
+      : refundTriageSession({
+        companyId: triage.company_id, triageId: triage.id,
+        note: `CV${unreadable === 1 ? '' : 's'} returned — the file could not be read`,
+      })
+
     if (back.refunded > 0) {
       console.log(`  triage ${triage.id}: returned ${back.refunded} CV(s) of capacity`)
     }
@@ -1043,6 +1060,118 @@ export function startProcessing(triageId, { dropId = null, wake = true } = {}) {
      belongs to another process — the server holds the pump, and two pumps on
      one SQLite file race for the same batch. The waker below picks it up. */
   if (wake) pump()
+}
+
+/**
+ * Puts applicants whose analysis failed back in the queue.
+ *
+ * Analysis fails for reasons that pass — a timeout, a rate limit, a model
+ * having a bad minute — and until now a failure was final. The CV had been
+ * charged for, it sat in the list with no score, and the only way to get one
+ * was a new Triage and a second charge for the same file.
+ *
+ * Nothing is charged here. These CVs were paid for when their delivery
+ * arrived; this is finishing work that was already bought.
+ *
+ * The two hard parts:
+ *
+ * The frontier has already moved past them. It only ever goes forward, so no
+ * ordinary tranche will ever cover their ranks again — the batches have to be
+ * asked for by rank, explicitly, and they are.
+ *
+ * The identity of the work is the same. `enqueue` refuses a duplicate on
+ * purpose, which is the whole reason a refreshed page costs nothing, and it
+ * would refuse this too: same Triage, same kind, same range. So a round number
+ * goes into the key. Two retries a day apart are two batches; a retry pressed
+ * twice in a second is one.
+ */
+export function requeueFailedAnalyses(triageId) {
+  const failed = db.prepare(`
+    SELECT prelim_rank AS rank FROM triage_applicants
+    WHERE triage_id = ? AND deep_status = 'failed'
+      AND parse_status = 'parsed' AND prelim_rank IS NOT NULL
+    ORDER BY prelim_rank
+  `).all(triageId).map((row) => row.rank)
+
+  if (failed.length === 0) return 0
+
+  db.prepare(`
+    UPDATE triage_applicants SET deep_status = 'pending', deep_error = NULL
+    WHERE triage_id = ? AND deep_status = 'failed' AND parse_status = 'parsed'
+  `).run(triageId)
+
+  /* Which attempt this is. Counted from the batches already written rather
+     than held anywhere, so it survives a restart and cannot drift. */
+  const round = db.prepare(
+    `SELECT COUNT(*) AS n FROM triage_batches WHERE triage_id = ? AND kind = 'rolling'`,
+  ).get(triageId).n
+
+  /*
+   * Banded rather than one batch per applicant. A tranche is the size the rest
+   * of the pipeline works in, the analysis of a band shares one warmed prompt
+   * cache, and ten failures spread over four hundred ranks should not become
+   * ten separate model conversations.
+   *
+   * Only bands that actually contain a failure are queued. runDeep skips rows
+   * that are already scored, so an over-wide band would be harmless but would
+   * still cost a database pass per empty range.
+   */
+  const size = Math.max(1, TRIAGE.tranche)
+  const bands = new Map()
+  for (const rank of failed) {
+    const from = Math.floor((rank - 1) / size) * size + 1
+    bands.set(from, Math.min(from + size - 1, Math.max(...failed)))
+  }
+
+  for (const [from, to] of [...bands.entries()].sort((a, b) => a[0] - b[0])) {
+    enqueue({
+      triageId, kind: 'rolling', fromRank: from, toRank: to,
+      keySuffix: `retry${round}`,
+    })
+  }
+
+  /* A session that had settled as complete is working again. settleStatus
+     will move it back when the last band lands. */
+  db.prepare(`
+    UPDATE triages SET status = 'ready', updated_at = ?
+    WHERE id = ? AND status = 'completed'
+  `).run(now(), triageId)
+
+  pump()
+  return failed.length
+}
+
+/**
+ * Whether this session is being scored by the model, or by the fallback.
+ *
+ * The daily ceiling is deliberately not a hard stop: over the line every
+ * applicant still gets a score and a place in the ranking, from the
+ * deterministic scorer instead of the model. That is the right behaviour and
+ * the wrong silence — a recruiter comparing today's Triage with last week's
+ * would see plainer readings and shorter reasons and have no way to know why.
+ *
+ * Two different facts, and the product needs both. `capped` is now: more
+ * analysis today would fall back. `fallbacks` is history: this many CVs in
+ * this session were scored without the model, whatever the reason.
+ */
+export function analysisLimit(triageId) {
+  const triage = rawTriage(triageId)
+  if (!triage) return { configured: false, capped: false, fallbacks: 0 }
+
+  const configured = aiConfigured()
+
+  const fallbacks = db.prepare(`
+    SELECT COUNT(*) AS n FROM triage_applicants
+    WHERE triage_id = ? AND deep_status = 'scored' AND analysis_source <> 'claude'
+  `).get(triageId).n
+
+  return {
+    configured,
+    capped: configured && !withinDailyCeiling({
+      context: 'triage', companyId: triage.company_id, wanted: 1,
+    }),
+    fallbacks,
+  }
 }
 
 /**

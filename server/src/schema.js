@@ -590,6 +590,14 @@ export const SCHEMA = `
     actor_id     INTEGER,
     candidate_id INTEGER,
     pack_key     TEXT,
+    /* Which Triage, and which delivery into it, this line is about.
+       candidate_id already does this for reveals; Triage had no equivalent, so
+       a ledger full of "25 CVs submitted for Triage processing" could not be
+       tied back to the session it paid for — and once charging moved to one
+       line per delivery, the note alone stopped being enough to tell two
+       charges on the same session apart. */
+    triage_id    INTEGER,
+    triage_drop_id INTEGER,
     note         TEXT,
     created_at   TEXT NOT NULL
   );
@@ -951,6 +959,24 @@ export const SCHEMA = `
     /* How many rows this drop wrote, so the history can say "12 CVs on
        3 March" without counting rows again. */
     files         INTEGER NOT NULL DEFAULT 0,
+    /*
+     * What this delivery cost, and what came back.
+     *
+     * The charge used to belong to the session: one ledger row, one
+     * charged_cvs, claimed at launch and never touched again. That works while
+     * a session is one pile of CVs and stops working the moment a second pile
+     * can arrive — the second delivery would have been free, and an unreadable
+     * file in it would have been refunded against the first delivery's charge.
+     *
+     * So the drop holds it. ledger_id NULL means this delivery has not been
+     * paid for; the UPDATE that sets it is the claim, which is what makes a
+     * retried upload charge once. The session's own counters stay as the sum
+     * of these, because everything that reports on Triage spend reads them.
+     */
+    ledger_id     INTEGER,
+    charged_cvs   INTEGER NOT NULL DEFAULT 0,
+    refunded_cvs  INTEGER NOT NULL DEFAULT 0,
+    charged_at    TEXT,
     created_at    TEXT NOT NULL
   );
 
@@ -1285,6 +1311,22 @@ export const ADDED_COLUMNS = {
   ],
   triage_batches: [
     ['drop_id', 'INTEGER'],
+  ],
+  /*
+   * triage_drops shipped in the rolling-deliveries release, before charging
+   * moved onto it. The live table therefore exists WITHOUT these four columns,
+   * and the CREATE TABLE above will not add them — the same trap the note
+   * further up describes, and the second time this table has fallen into it.
+   */
+  triage_drops: [
+    ['ledger_id', 'INTEGER'],
+    ['charged_cvs', 'INTEGER NOT NULL DEFAULT 0'],
+    ['refunded_cvs', 'INTEGER NOT NULL DEFAULT 0'],
+    ['charged_at', 'TEXT'],
+  ],
+  billing_ledger: [
+    ['triage_id', 'INTEGER'],
+    ['triage_drop_id', 'INTEGER'],
   ],
   companies: [
     /*

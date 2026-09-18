@@ -35,15 +35,18 @@ function writeLedger({
   companyId, product, event, delta,
   amount = null, provider = null, providerRef = null,
   actorId = null, candidateId = null, packKey = null, note = null,
+  triageId = null, dropId = null,
 }) {
   return db.prepare(`
     INSERT INTO billing_ledger (
       company_id, product, event, delta, amount, currency,
-      provider, provider_ref, actor_id, candidate_id, pack_key, note, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      provider, provider_ref, actor_id, candidate_id, pack_key,
+      triage_id, triage_drop_id, note, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     companyId, product, event, delta, amount, amount === null ? null : CURRENCY,
-    provider, providerRef, actorId, candidateId, packKey, note,
+    provider, providerRef, actorId, candidateId, packKey,
+    triageId, dropId, note,
     new Date().toISOString(),
   ).lastInsertRowid
 }
@@ -975,45 +978,58 @@ export function triageCapacityCheck({ companyId, recruiterId, cvs }) {
 }
 
 /**
- * Spends CV capacity on one Triage, once, ever.
+ * Spends CV capacity on one DELIVERY, once, ever.
  *
  * The idempotency is not a convenience — it is the requirement. A recruiter who
- * double-clicks Launch, or whose browser retries, must be charged once.
+ * double-clicks Launch, or whose browser retries an upload, must be charged
+ * once.
  *
- * The guard is the triages row itself rather than a flag held here: the UPDATE
- * that claims it only matches while ledger_id IS NULL, so two concurrent
- * launches race on one row and exactly one of them changes it. The loser is
- * told 'already_launched' and charged nothing. A flag checked before the write
+ * The guard is the triage_drops row itself rather than a flag held here: the
+ * UPDATE that claims it only matches while ledger_id IS NULL, so two concurrent
+ * attempts race on one row and exactly one of them changes it. The loser is
+ * told 'already_charged' and charged nothing. A flag checked before the write
  * would leave a window between the check and the charge; this has none.
+ *
+ * It used to be the SESSION that carried the charge. That was right while a
+ * session was one pile of CVs uploaded once, and became wrong the day a second
+ * pile could arrive into a running session: the claim was "this Triage has been
+ * paid for", so the second delivery found the claim already made and was
+ * analysed for nothing. The unit of charge has to be the unit a recruiter can
+ * repeat, and that is the delivery.
  *
  * Both counters move inside the same transaction as the ledger row, so the
  * organization pool and the seat's usage can never disagree with the history.
  */
-export function consumeTriageCvs({ companyId, triageId, recruiterId, cvs }) {
+export function consumeTriageDrop({ companyId, triageId = null, dropId, recruiterId, cvs }) {
   if (!Number.isInteger(cvs) || cvs <= 0) {
     return { ok: false, reason: 'nothing_to_charge', balance: triageBalance(companyId) }
   }
 
   try {
     return db.transaction(() => {
-      const triage = db.prepare(
-        `SELECT id, company_id, ledger_id, charged_cvs FROM triages WHERE id = ?`,
-      ).get(triageId)
+      const drop = db.prepare(`
+        SELECT d.id, d.triage_id, d.ledger_id, d.charged_cvs, t.company_id
+        FROM triage_drops d JOIN triages t ON t.id = d.triage_id
+        WHERE d.id = ?
+      `).get(dropId)
 
-      if (!triage || triage.company_id !== companyId) throw new Error('triage_not_found')
+      if (!drop || drop.company_id !== companyId) throw new Error('drop_not_found')
+      /* Belt and braces: a drop id from another session, handed in by a bad
+         caller, must not charge this one. */
+      if (triageId !== null && drop.triage_id !== triageId) throw new Error('drop_not_found')
 
       /* Already paid for. Returning the existing row rather than an error is
-         what makes a retried launch land exactly where the first one did. */
-      if (triage.ledger_id) {
+         what makes a retried upload land exactly where the first one did. */
+      if (drop.ledger_id) {
         return {
-          ok: true, charged: false, reason: 'already_launched',
-          cvs: triage.charged_cvs, balance: triageBalance(companyId),
-          ledgerId: triage.ledger_id,
+          ok: true, charged: false, reason: 'already_charged',
+          cvs: drop.charged_cvs, balance: triageBalance(companyId),
+          ledgerId: drop.ledger_id, dropId: drop.id,
         }
       }
 
       /* The pool. The WHERE clause is the check — reading the balance first and
-         deciding in JavaScript would let two launches both see 300 and both
+         deciding in JavaScript would let two deliveries both see 300 and both
          spend 200 of it. */
       const spent = db.prepare(`
         UPDATE companies SET triage_cv_balance = triage_cv_balance - ?
@@ -1032,21 +1048,38 @@ export function consumeTriageCvs({ companyId, triageId, recruiterId, cvs }) {
 
       const ledgerId = writeLedger({
         companyId, product: 'triage', event: 'consume', delta: -cvs,
-        actorId: recruiterId,
+        actorId: recruiterId, triageId: drop.triage_id, dropId: drop.id,
         note: `${cvs} CV${cvs === 1 ? '' : 's'} submitted for Triage processing`,
       })
 
-      const claimed = db.prepare(
-        `UPDATE triages SET ledger_id = ?, charged_cvs = ? WHERE id = ? AND ledger_id IS NULL`,
-      ).run(ledgerId, cvs, triageId)
+      const claimed = db.prepare(`
+        UPDATE triage_drops SET ledger_id = ?, charged_cvs = ?, charged_at = ?
+        WHERE id = ? AND ledger_id IS NULL
+      `).run(ledgerId, cvs, new Date().toISOString(), drop.id)
 
-      // Lost the race against a concurrent launch. Rolling the whole
+      // Lost the race against a concurrent charge. Rolling the whole
       // transaction back returns the capacity and unwrites the ledger row.
-      if (claimed.changes === 0) throw new Error('already_launched_concurrently')
+      if (claimed.changes === 0) throw new Error('already_charged_concurrently')
+
+      /*
+       * The session's own counters stay the sum of its deliveries.
+       *
+       * Everything that reports Triage spend — the usage screen, the audit
+       * script, triageCvsUsed — reads triages.charged_cvs, and `launched` is
+       * derived from triages.ledger_id. Keeping both in step here means none of
+       * that had to learn about deliveries to keep telling the truth, and the
+       * session still points at the ledger row for its FIRST charge, which is
+       * the one that started it.
+       */
+      db.prepare(`
+        UPDATE triages
+        SET charged_cvs = charged_cvs + ?, ledger_id = COALESCE(ledger_id, ?)
+        WHERE id = ?
+      `).run(cvs, ledgerId, drop.triage_id)
 
       const capacityLeft = triageBalance(companyId)
       if (capacityLeft === 0) warnEmptied(companyId, 'triage')
-      return { ok: true, charged: true, cvs, balance: capacityLeft, ledgerId }
+      return { ok: true, charged: true, cvs, balance: capacityLeft, ledgerId, dropId: drop.id }
     })()
   } catch (error) {
     const message = String(error.message)
@@ -1064,15 +1097,15 @@ export function consumeTriageCvs({ companyId, triageId, recruiterId, cvs }) {
         allowance: triageAllowanceRemaining(recruiterId),
       }
     }
-    if (message.includes('already_launched_concurrently')) {
-      const row = db.prepare(`SELECT ledger_id, charged_cvs FROM triages WHERE id = ?`).get(triageId)
+    if (message.includes('already_charged_concurrently')) {
+      const row = db.prepare(`SELECT ledger_id, charged_cvs FROM triage_drops WHERE id = ?`).get(dropId)
       return {
-        ok: true, charged: false, reason: 'already_launched',
+        ok: true, charged: false, reason: 'already_charged',
         cvs: row?.charged_cvs ?? 0, balance: triageBalance(companyId),
-        ledgerId: row?.ledger_id ?? null,
+        ledgerId: row?.ledger_id ?? null, dropId,
       }
     }
-    if (message.includes('triage_not_found')) {
+    if (message.includes('drop_not_found')) {
       return { ok: false, reason: 'not_found', balance: triageBalance(companyId) }
     }
     throw error
@@ -1080,7 +1113,71 @@ export function consumeTriageCvs({ companyId, triageId, recruiterId, cvs }) {
 }
 
 /**
- * Hands capacity back for CVs that turned out not to be readable.
+ * Charges every delivery in a session that has not been paid for yet.
+ *
+ * This is what a launch is now. Normally there is exactly one unpaid delivery
+ * and this is consumeTriageDrop with the drop looked up for you; the loop
+ * exists because a draft can hold more than one if an earlier attempt failed
+ * part-way, and leaving one of them unpaid would mean analysing it for nothing.
+ *
+ * All or nothing. If a later delivery cannot be paid for, the ones this call
+ * charged are handed straight back — a half-charged launch is the one outcome
+ * a recruiter can neither understand nor undo.
+ */
+export function chargeTriageDrops({ companyId, triageId, recruiterId }) {
+  const unpaid = db.prepare(`
+    SELECT d.id AS id, d.seq AS seq, COUNT(a.id) AS cvs
+    FROM triage_drops d
+    LEFT JOIN triage_applicants a ON a.drop_id = d.id
+    WHERE d.triage_id = ? AND d.ledger_id IS NULL
+    GROUP BY d.id
+    HAVING cvs > 0
+    ORDER BY d.seq
+  `).all(triageId)
+
+  const paid = []
+
+  for (const drop of unpaid) {
+    const charge = consumeTriageDrop({
+      companyId, triageId, dropId: drop.id, recruiterId, cvs: drop.cvs,
+    })
+
+    if (!charge.ok) {
+      /* Undo whatever THIS call managed to take. Charges made before it are
+         not ours to unwind — they belong to an earlier launch. */
+      for (const done of paid) {
+        refundTriageDrop({
+          companyId, dropId: done.dropId, totalCvs: done.cvs,
+          note: 'CVs returned: the Triage could not be started',
+        })
+      }
+      return { ...charge, ok: false, cvs: 0, drops: [] }
+    }
+
+    if (charge.charged) paid.push({ dropId: charge.dropId, cvs: charge.cvs })
+  }
+
+  /* What the session has been charged in TOTAL, not what this call took: the
+     launch response reports the size of the job, and a retried launch that
+     charged nothing should still say "25 CVs". */
+  const total = db.prepare(`
+    SELECT COALESCE(SUM(charged_cvs), 0) AS n FROM triage_drops
+    WHERE triage_id = ? AND ledger_id IS NOT NULL
+  `).get(triageId).n
+
+  return {
+    ok: true,
+    charged: paid.length > 0,
+    cvs: total,
+    balance: triageBalance(companyId),
+    ledgerId: db.prepare(`SELECT ledger_id FROM triages WHERE id = ?`).get(triageId)?.ledger_id ?? null,
+    drops: paid,
+  }
+}
+
+/**
+ * Hands capacity back for CVs in ONE delivery that turned out not to be
+ * readable.
  *
  * A file is charged when it is accepted into the processing set, which is the
  * only moment the count is knowable — text extraction happens on the queue,
@@ -1088,7 +1185,7 @@ export function consumeTriageCvs({ companyId, triageId, recruiterId, cvs }) {
  * unreadable afterwards, and "one VALID CV consumes capacity once" is only true
  * if the difference is returned.
  *
- * `totalCvs` is the number that SHOULD have been refunded for this Triage in
+ * `totalCvs` is the number that SHOULD have been refunded for this DELIVERY in
  * total — not a delta to add. That distinction is the whole correctness of this
  * function. The caller is a queue sweep that can run more than once (a retried
  * batch, a reclaimed one after a crash), and it reports the same "1 unreadable"
@@ -1096,8 +1193,140 @@ export function consumeTriageCvs({ companyId, triageId, recruiterId, cvs }) {
  * returned two CVs for one bad file. Refunding the difference between what is
  * owed and what has already been paid is idempotent under any number of
  * repeats.
+ *
+ * Per delivery, and clamped to that delivery's charge, because the alternative
+ * pays real money for a mistake: an unreadable file in Friday's drop of six,
+ * counted against a session-wide total, would hand back capacity the recruiter
+ * had paid for CVs they can still read.
+ */
+export function refundTriageDrop({ companyId, dropId, totalCvs, note = 'CVs that could not be read' }) {
+  if (!Number.isInteger(totalCvs) || totalCvs <= 0) {
+    return { refunded: 0, balance: triageBalance(companyId) }
+  }
+
+  return db.transaction(() => {
+    const drop = db.prepare(`
+      SELECT d.id, d.triage_id, d.recruiter_id, d.ledger_id, d.charged_cvs, d.refunded_cvs,
+             t.company_id, t.recruiter_id AS triage_recruiter_id
+      FROM triage_drops d JOIN triages t ON t.id = d.triage_id
+      WHERE d.id = ?
+    `).get(dropId)
+
+    if (!drop || drop.company_id !== companyId || !drop.ledger_id) {
+      return { refunded: 0, balance: triageBalance(companyId) }
+    }
+
+    /* Owed in total, minus what has already gone back, clamped to what was
+       actually charged. Two independent guards, because either alone would let
+       a bad caller mint capacity. */
+    const owed = Math.max(0, Math.min(
+      totalCvs - drop.refunded_cvs,
+      drop.charged_cvs - drop.refunded_cvs,
+    ))
+    if (owed === 0) return { refunded: 0, balance: triageBalance(companyId) }
+
+    db.prepare(`UPDATE companies SET triage_cv_balance = triage_cv_balance + ? WHERE id = ?`)
+      .run(owed, companyId)
+
+    /*
+     * The seat that actually paid, which is not necessarily the one that
+     * created the session: a colleague may add CVs to somebody else's Triage,
+     * and the charge went to whoever pressed the button. It is recorded on the
+     * ledger row this DELIVERY claimed, so that is where the refund reads it
+     * from rather than trusting triages.recruiter_id.
+     */
+    const payer = db.prepare(`SELECT actor_id FROM billing_ledger WHERE id = ?`)
+      .get(drop.ledger_id)?.actor_id ?? drop.recruiter_id ?? drop.triage_recruiter_id
+
+    if (payer) {
+      db.prepare(`UPDATE recruiters SET triage_used = MAX(0, triage_used - ?) WHERE id = ?`)
+        .run(owed, payer)
+    }
+
+    db.prepare(`UPDATE triage_drops SET refunded_cvs = refunded_cvs + ? WHERE id = ?`)
+      .run(owed, dropId)
+    /* And the session total with it, for the same reason the charge moves both. */
+    db.prepare(`UPDATE triages SET refunded_cvs = refunded_cvs + ? WHERE id = ?`)
+      .run(owed, drop.triage_id)
+
+    writeLedger({
+      companyId, product: 'triage', event: 'refund', delta: owed,
+      actorId: payer, triageId: drop.triage_id, dropId: drop.id,
+      note: `${owed} ${note}`,
+    })
+
+    return { refunded: owed, balance: triageBalance(companyId), dropId: drop.id }
+  })()
+}
+
+/** Everything this session was ever charged, back. Used when it could not run at all. */
+export function refundTriageSession({ companyId, triageId, note = 'CVs that could not be read' }) {
+  const drops = db.prepare(`
+    SELECT id, charged_cvs FROM triage_drops
+    WHERE triage_id = ? AND ledger_id IS NOT NULL ORDER BY seq
+  `).all(triageId)
+
+  if (drops.length === 0) {
+    const row = db.prepare(`SELECT charged_cvs FROM triages WHERE id = ?`).get(triageId)
+    return refundLegacyTriage({ companyId, triageId, totalCvs: row?.charged_cvs ?? 0, note })
+  }
+
+  let refunded = 0
+  for (const drop of drops) {
+    refunded += refundTriageDrop({
+      companyId, dropId: drop.id, totalCvs: drop.charged_cvs, note,
+    }).refunded
+  }
+
+  return { refunded, balance: triageBalance(companyId) }
+}
+
+/**
+ * The session-level refund, kept because "this much should stand refunded for
+ * this Triage" is still a question worth being able to ask.
+ *
+ * It is now a distributor: the target total is spent against the deliveries
+ * oldest first, each clamped to its own charge. That keeps the whole thing
+ * idempotent — a repeat run computes the same per-drop targets and pays the
+ * same nothing.
  */
 export function refundTriageCvs({ companyId, triageId, totalCvs, note = 'CVs that could not be read' }) {
+  if (!Number.isInteger(totalCvs) || totalCvs <= 0) {
+    return { refunded: 0, balance: triageBalance(companyId) }
+  }
+
+  const drops = db.prepare(`
+    SELECT id, charged_cvs FROM triage_drops
+    WHERE triage_id = ? AND ledger_id IS NOT NULL ORDER BY seq
+  `).all(triageId)
+
+  /* A session charged before deliveries existed carries its charge on the
+     triages row and has no drop to hang it on. */
+  if (drops.length === 0) return refundLegacyTriage({ companyId, triageId, totalCvs, note })
+
+  let remaining = totalCvs
+  let refunded = 0
+
+  for (const drop of drops) {
+    if (remaining <= 0) break
+    const target = Math.min(remaining, drop.charged_cvs)
+    refunded += refundTriageDrop({ companyId, dropId: drop.id, totalCvs: target, note }).refunded
+    remaining -= target
+  }
+
+  return { refunded, balance: triageBalance(companyId) }
+}
+
+/**
+ * The pre-deliveries refund path, for sessions whose charge lives on the
+ * triages row and nowhere else.
+ *
+ * Kept rather than migrated: a session already in flight when this shipped has
+ * a ledger row, a charge and possibly an unreadable file, and rewriting its
+ * history into a delivery it never had would be a worse record than the one it
+ * has. New sessions never reach this.
+ */
+function refundLegacyTriage({ companyId, triageId, totalCvs, note }) {
   if (!Number.isInteger(totalCvs) || totalCvs <= 0) {
     return { refunded: 0, balance: triageBalance(companyId) }
   }
@@ -1112,9 +1341,6 @@ export function refundTriageCvs({ companyId, triageId, totalCvs, note = 'CVs tha
       return { refunded: 0, balance: triageBalance(companyId) }
     }
 
-    /* Owed in total, minus what has already gone back, clamped to what was
-       actually charged. Two independent guards, because either alone would let
-       a bad caller mint capacity. */
     const owed = Math.max(0, Math.min(
       totalCvs - triage.refunded_cvs,
       triage.charged_cvs - triage.refunded_cvs,
@@ -1124,13 +1350,6 @@ export function refundTriageCvs({ companyId, triageId, totalCvs, note = 'CVs tha
     db.prepare(`UPDATE companies SET triage_cv_balance = triage_cv_balance + ? WHERE id = ?`)
       .run(owed, companyId)
 
-    /*
-     * The seat that actually paid, which is not necessarily the one that
-     * created the draft: a colleague may launch a Triage somebody else set up,
-     * and the charge went to whoever pressed the button. It is recorded on the
-     * ledger row this Triage claimed, so that is where the refund reads it from
-     * rather than trusting triages.recruiter_id.
-     */
     const payer = db.prepare(`SELECT actor_id FROM billing_ledger WHERE id = ?`)
       .get(triage.ledger_id)?.actor_id ?? triage.recruiter_id
 
@@ -1144,7 +1363,7 @@ export function refundTriageCvs({ companyId, triageId, totalCvs, note = 'CVs tha
 
     writeLedger({
       companyId, product: 'triage', event: 'refund', delta: owed,
-      actorId: payer, note: `${owed} ${note}`,
+      actorId: payer, triageId, note: `${owed} ${note}`,
     })
 
     return { refunded: owed, balance: triageBalance(companyId) }
