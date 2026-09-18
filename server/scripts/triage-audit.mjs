@@ -295,6 +295,45 @@ const superseded = one(
 console.log('\nSUPERSEDED BY A NEWER CV FROM THE SAME PERSON')
 console.log(`  CVs      : ${superseded}`)
 
+/* ------------------------------------------- what the daily cap binds against --- */
+
+/*
+ * MATCH_DAILY_CAP is 1500 model-read analyses per company per rolling 24
+ * hours. Section 4.7 calls it about ten times any plan we would sell, which
+ * makes it a runaway guard rather than a commercial one — and says it will
+ * need to be lower under rolling sessions or it will not bind at all.
+ *
+ * Lowering it is not a change to make on a guess: over the line, scoring
+ * falls back to the deterministic scorer, so a cap set too low quietly gives
+ * paying recruiters plainer readings than the ones they bought. This is the
+ * number to pick it from — what companies actually do on their busiest days.
+ */
+if (has('ai_cost_events')) {
+  console.log('\nBUSIEST DAYS, PER COMPANY (what MATCH_DAILY_CAP has to clear)')
+
+  const peaks = rows(`
+    SELECT company_id AS companyId, DATE(created_at) AS day, SUM(items) AS items
+    FROM ai_cost_events
+    WHERE context = 'triage' AND company_id IS NOT NULL
+    GROUP BY company_id, DATE(created_at)
+    ORDER BY items DESC
+    LIMIT 10
+  `)
+
+  if (peaks.length === 0) {
+    console.log('  no Triage analyses recorded yet')
+  } else {
+    for (const row of peaks) {
+      console.log(`  ${pad(`company ${row.companyId}`, 16)}${pad(row.day, 12)}${row.items} CV(s)`)
+    }
+    const worst = peaks[0].items
+    console.log('')
+    console.log(`  Busiest single company-day so far: ${worst}.`)
+    console.log('  The cap is 1500. A cap below the busiest real day pushes that company onto')
+    console.log('  keyword matching for the rest of that day, silently.')
+  }
+}
+
 console.log('\nEDGE CASES FOR THE MIGRATION')
 const failed = one(`SELECT COUNT(*) AS n FROM triages WHERE ledger_id IS NOT NULL AND status = 'failed'`).n
 const unfinished = one(`
