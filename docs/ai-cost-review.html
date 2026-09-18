@@ -1,0 +1,1114 @@
+<title>Cursus AI Cost Review</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Public+Sans:ital,wght@0,400;0,500;1,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<style>
+  /* ---------------------------------------------------------------- tokens --
+     Lifted wholesale from the operator manual so the two pages read as one
+     set of documents. Same oxblood, same warm neutrals; the semantic trio is
+     repurposed, because on this page the axis that matters is not what a
+     command touches but how much of a number you can trust. */
+  :root {
+    --ground:      #f7f3f1;
+    --surface:     #ffffff;
+    --surface-2:   #f1eae7;
+    --ink:         #1d1512;
+    --ink-soft:    #5f524d;
+    --ink-faint:   #8b7d77;
+    --rule:        #e2d7d2;
+    --rule-strong: #cbbbb4;
+
+    --accent:      #7a2e2a;
+    --accent-soft: #f0e2df;
+
+    /* Read in the code / worked out from it / not knowable until measured. */
+    --read:        #2f6b4f;
+    --read-bg:     #e4efe9;
+    --write:       #8a5a12;
+    --write-bg:    #f6ecd9;
+    --wreck:       #a3352b;
+    --wreck-bg:    #f8e3e0;
+
+    --shadow: 0 1px 2px rgba(29, 21, 18, .05), 0 8px 24px -12px rgba(29, 21, 18, .12);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:      #15100e;
+      --surface:     #1e1715;
+      --surface-2:   #271e1b;
+      --ink:         #f3ebe7;
+      --ink-soft:    #b6a7a1;
+      --ink-faint:   #8b7b74;
+      --rule:        #362b27;
+      --rule-strong: #4a3b36;
+
+      --accent:      #d98079;
+      --accent-soft: #3a201e;
+
+      --read:        #7cc4a0;
+      --read-bg:     #16281f;
+      --write:       #e0b061;
+      --write-bg:    #2e2313;
+      --wreck:       #e88a80;
+      --wreck-bg:    #331916;
+
+      --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px -12px rgba(0, 0, 0, .6);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground:      #15100e;
+    --surface:     #1e1715;
+    --surface-2:   #271e1b;
+    --ink:         #f3ebe7;
+    --ink-soft:    #b6a7a1;
+    --ink-faint:   #8b7b74;
+    --rule:        #362b27;
+    --rule-strong: #4a3b36;
+
+    --accent:      #d98079;
+    --accent-soft: #3a201e;
+
+    --read:        #7cc4a0;
+    --read-bg:     #16281f;
+    --write:       #e0b061;
+    --write-bg:    #2e2313;
+    --wreck:       #e88a80;
+    --wreck-bg:    #331916;
+
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px -12px rgba(0, 0, 0, .6);
+  }
+
+  /* ------------------------------------------------------------------ base -- */
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: "Public Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1, h2, h3, .eyebrow, .chip, .risk, .fig-value, .fig-label {
+    font-family: Archivo, ui-sans-serif, system-ui, sans-serif;
+  }
+
+  code, pre, kbd { font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace; }
+  code { font-size: .86em; color: var(--ink); }
+
+  a { color: var(--accent); text-underline-offset: 3px; }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; }
+
+  /* --------------------------------------------------------------- shell --- */
+  .wrap {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 0 clamp(1rem, 4vw, 3rem) 6rem;
+    display: grid;
+    grid-template-columns: 210px minmax(0, 1fr);
+    gap: clamp(1.5rem, 4vw, 3.5rem);
+    align-items: start;
+  }
+
+  /* ---------------------------------------------------------------- head --- */
+  .masthead {
+    grid-column: 1 / -1;
+    padding: clamp(2.5rem, 7vw, 5rem) 0 2rem;
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: 2.5rem;
+  }
+
+  .eyebrow {
+    font-size: .72rem;
+    font-weight: 600;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 .9rem;
+  }
+
+  h1 {
+    font-size: clamp(2.1rem, 5.5vw, 3.4rem);
+    font-weight: 700;
+    letter-spacing: -.028em;
+    line-height: 1.02;
+    margin: 0 0 1rem;
+    text-wrap: balance;
+  }
+
+  .standfirst {
+    font-size: clamp(1rem, 1.6vw, 1.14rem);
+    color: var(--ink-soft);
+    max-width: 62ch;
+    margin: 0;
+  }
+
+  .standfirst strong { color: var(--ink); font-weight: 500; }
+
+  /* ---------------------------------------------------------------- rail --- */
+  .rail { position: sticky; top: 1.5rem; }
+
+  .rail-title {
+    font-family: Archivo, sans-serif;
+    font-size: .68rem;
+    font-weight: 600;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin: 0 0 .85rem;
+  }
+
+  .rail ol {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: .1rem;
+  }
+
+  .rail a {
+    display: block;
+    padding: .34rem 0 .34rem .75rem;
+    border-left: 2px solid var(--rule);
+    color: var(--ink-soft);
+    text-decoration: none;
+    font-size: .875rem;
+    transition: color .12s, border-color .12s;
+  }
+
+  .rail a:hover { color: var(--accent); border-left-color: var(--accent); }
+
+  .legend {
+    margin-top: 1.75rem;
+    padding-top: 1.25rem;
+    border-top: 1px solid var(--rule);
+    display: flex;
+    flex-direction: column;
+    gap: .55rem;
+  }
+
+  .legend p {
+    margin: 0 0 .2rem;
+    font-size: .8rem;
+    color: var(--ink-faint);
+    line-height: 1.45;
+  }
+
+  /* ---------------------------------------------------------------- body --- */
+  .main { min-width: 0; display: flex; flex-direction: column; gap: 3.25rem; }
+
+  section { scroll-margin-top: 1.5rem; }
+
+  h2 {
+    font-size: 1.42rem;
+    font-weight: 600;
+    letter-spacing: -.018em;
+    margin: 0 0 .35rem;
+    text-wrap: balance;
+  }
+
+  h3 {
+    font-size: 1.02rem;
+    font-weight: 600;
+    margin: 1.6rem 0 .4rem;
+    letter-spacing: -.01em;
+  }
+
+  .section-note {
+    margin: 0 0 1.4rem;
+    color: var(--ink-soft);
+    max-width: 68ch;
+    font-size: .95rem;
+  }
+
+  .main p { max-width: 72ch; }
+  .main p + p { margin-top: .9rem; }
+
+  /* -------------------------------------------------------------- figures --
+     Three numbers, because the whole argument is a movement between them.
+     Tabular figures so they line up as a set rather than as three sentences. */
+  .figures {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: .7rem;
+    margin: 0 0 1.5rem;
+  }
+
+  .figure {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 7px;
+    padding: 1rem 1.1rem;
+    box-shadow: var(--shadow);
+  }
+
+  .fig-label {
+    font-size: .63rem;
+    font-weight: 600;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin: 0 0 .35rem;
+  }
+
+  .fig-value {
+    font-size: 1.85rem;
+    font-weight: 700;
+    letter-spacing: -.02em;
+    line-height: 1;
+    margin: 0 0 .35rem;
+    font-variant-numeric: tabular-nums;
+    color: var(--ink);
+  }
+
+  .figure.now .fig-value  { color: var(--wreck); }
+  .figure.soon .fig-value { color: var(--write); }
+  .figure.floor .fig-value { color: var(--read); }
+
+  .fig-note { margin: 0; font-size: .82rem; color: var(--ink-soft); line-height: 1.45; }
+
+  /* --------------------------------------------------------------- chips --- */
+  .risk {
+    display: inline-block;
+    font-size: .63rem;
+    font-weight: 600;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+    padding: .18rem .48rem;
+    border-radius: 3px;
+    white-space: nowrap;
+  }
+
+  .risk-read  { color: var(--read);  background: var(--read-bg); }
+  .risk-write { color: var(--write); background: var(--write-bg); }
+  .risk-wreck { color: var(--wreck); background: var(--wreck-bg); }
+
+  /* --------------------------------------------------------------- table --- */
+  .compare-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--rule);
+    border-radius: 7px;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+    margin-bottom: 1.4rem;
+  }
+
+  table.compare {
+    border-collapse: collapse;
+    width: 100%;
+    min-width: 640px;
+    font-size: .88rem;
+  }
+
+  table.compare th,
+  table.compare td {
+    text-align: left;
+    vertical-align: top;
+    padding: .72rem .95rem;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  table.compare thead th {
+    font-family: Archivo, sans-serif;
+    font-size: .68rem;
+    font-weight: 600;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    background: var(--surface-2);
+    white-space: nowrap;
+  }
+
+  table.compare tbody th {
+    font-family: Archivo, sans-serif;
+    font-weight: 600;
+    font-size: .82rem;
+    color: var(--ink);
+    width: 1%;
+  }
+
+  table.compare tr:last-child th,
+  table.compare tr:last-child td { border-bottom: 0; }
+
+  table.compare td { color: var(--ink-soft); }
+  table.compare td strong { color: var(--ink); font-weight: 500; }
+
+  /* Money and token counts are read down the column, not across the row. */
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  tr.total th, tr.total td { background: var(--surface-2); color: var(--ink); font-weight: 500; }
+
+  /* ---------------------------------------------------------------- note --- */
+  .callout {
+    border-left: 3px solid var(--accent);
+    background: var(--accent-soft);
+    border-radius: 0 6px 6px 0;
+    padding: .95rem 1.15rem;
+    margin: 0 0 1.4rem;
+  }
+
+  .callout p { margin: 0; font-size: .92rem; color: var(--ink); max-width: 68ch; }
+  .callout p + p { margin-top: .55rem; }
+  .callout.warn { border-left-color: var(--wreck); background: var(--wreck-bg); }
+  .callout strong { font-weight: 600; }
+
+  /* -------------------------------------------------------------- phases ---
+     Numbered from zero, and the numbering is not decoration: Phase 0 measures,
+     and every phase after it is ordered by what must be true before it runs. */
+  .phases {
+    counter-reset: phase -1;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .phases > li {
+    counter-increment: phase;
+    display: grid;
+    grid-template-columns: 1.85rem minmax(0, 1fr);
+    gap: .9rem;
+    align-items: start;
+  }
+
+  .phases > li::before {
+    content: counter(phase);
+    font-family: Archivo, sans-serif;
+    font-size: .78rem;
+    font-weight: 700;
+    color: var(--accent);
+    background: var(--accent-soft);
+    border-radius: 4px;
+    height: 1.6rem;
+    display: grid;
+    place-items: center;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .phases h3 { margin: 0 0 .3rem; font-size: .98rem; font-weight: 600; }
+  .phases h3 .cost { color: var(--ink-faint); font-weight: 500; }
+  .phases p { margin: 0 0 .5rem; font-size: .9rem; color: var(--ink-soft); }
+  .phases ul { margin: 0 0 .5rem; padding-left: 1.05rem; }
+  .phases li { font-size: .9rem; color: var(--ink-soft); margin-bottom: .3rem; }
+  .phases p:last-child, .phases ul:last-child { margin-bottom: 0; }
+  .phases strong { color: var(--ink); font-weight: 600; }
+
+  .accept {
+    font-size: .85rem;
+    color: var(--ink);
+    background: var(--surface-2);
+    border-radius: 5px;
+    padding: .5rem .7rem;
+  }
+
+  .accept::before {
+    content: "Done when";
+    font-family: Archivo, sans-serif;
+    font-size: .63rem;
+    font-weight: 600;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin-right: .5rem;
+  }
+
+  /* ------------------------------------------------------------ decisions --- */
+  .decisions { display: flex; flex-direction: column; gap: .7rem; margin: 0; padding: 0; list-style: none; }
+
+  .decision {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 7px;
+    padding: .9rem 1.1rem;
+    box-shadow: var(--shadow);
+  }
+
+  .decision h3 { margin: 0 0 .3rem; font-size: .95rem; }
+  .decision p { margin: 0; font-size: .89rem; color: var(--ink-soft); }
+  .decision .rec { color: var(--ink); font-weight: 500; }
+
+  footer {
+    grid-column: 1 / -1;
+    margin-top: 3.5rem;
+    padding-top: 1.4rem;
+    border-top: 1px solid var(--rule);
+    font-size: .84rem;
+    color: var(--ink-faint);
+    max-width: 78ch;
+  }
+
+  @media (max-width: 820px) {
+    .wrap { grid-template-columns: minmax(0, 1fr); }
+    .rail { position: static; padding-bottom: 1.25rem; border-bottom: 1px solid var(--rule); }
+    .rail ol { flex-direction: row; flex-wrap: wrap; gap: .35rem .9rem; }
+    .rail a { border-left: 0; padding: .15rem 0; }
+    .legend { margin-top: 1.1rem; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
+  }
+</style>
+
+<div class="wrap">
+
+  <header class="masthead">
+    <p class="eyebrow">Cursus · engineering</p>
+    <h1>What the AI costs per CV</h1>
+    <p class="standfirst">
+      An answer to one question: a single model call, one CV against one job description,
+      should cost a few cents — so where does fifty cents go? The short version is that it is
+      <strong>about fifteen cents</strong>, and roughly two thirds of that is the model writing
+      rather than reading. Everything here is read off the code, not measured.
+    </p>
+  </header>
+
+  <nav class="rail" aria-label="Sections">
+    <p class="rail-title">Contents</p>
+    <ol>
+      <li><a href="#status">What is built</a></li>
+      <li><a href="#summary">The short answer</a></li>
+      <li><a href="#corrections">Corrections</a></li>
+      <li><a href="#code">What the code says</a></li>
+      <li><a href="#breakdown">Where the money goes</a></li>
+      <li><a href="#ladder">What each fix is worth</a></li>
+      <li><a href="#plan">The plan</a></li>
+      <li><a href="#decisions">Open decisions</a></li>
+    </ol>
+
+    <div class="legend">
+      <p class="rail-title" style="margin:0 0 .3rem">How sure is a number</p>
+      <p><span class="risk risk-read">In code</span> Read directly out of the repository.</p>
+      <p><span class="risk risk-write">Estimated</span> Worked out from prompt sizes and prices.</p>
+      <p><span class="risk risk-wreck">Unknown</span> Not knowable until Phase&nbsp;0 measures it.</p>
+    </div>
+  </nav>
+
+  <main class="main">
+
+    <!-- ------------------------------------------------------------- status -->
+    <section id="status">
+      <h2>What is built, as of 17 September</h2>
+      <p class="section-note">
+        Everything below the line was written and tested against the suites; none of it has met a
+        real API key yet, because this machine has none. The two things still open both need
+        somebody to spend money deliberately.
+      </p>
+
+      <div class="compare-wrap">
+        <table class="compare">
+          <thead>
+            <tr>
+              <th scope="col">Phase</th>
+              <th scope="col">State</th>
+              <th scope="col">What landed</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th scope="row">0 · Measure</th>
+              <td><span class="risk risk-read">Built</span></td>
+              <td><code>npm run ai:cost</code> — dollars per CV by surface, cache share, demo spend.
+                Run it on Render, where the spending happened.</td>
+            </tr>
+            <tr>
+              <th scope="row">0.5 · Eval</th>
+              <td><span class="risk risk-write">Needs you</span></td>
+              <td><code>npm run ai:eval</code> is written and refuses to start without
+                <code>--yes</code>. It needs three to five real job ads in <code>eval/jobs/</code>
+                and about fifteen CVs in <code>eval/cvs/</code>.</td>
+            </tr>
+            <tr>
+              <th scope="row">1 · No-risk savings</th>
+              <td><span class="risk risk-read">Built</span></td>
+              <td>Prompt caching with the candidate outside the cached prefix; one call sent ahead to
+                warm it; a cost ledger covering Search, Triage, the demo and explanations; the demo
+                cut from 25 analyses to 8; searches cancelled when the tab closes.</td>
+            </tr>
+            <tr>
+              <th scope="row">2 · Shorter answer</th>
+              <td><span class="risk risk-read">Built</span></td>
+              <td>Strengths, gaps and evidence are derived from the verdicts in code; the reason
+                field is capped at 25 words and the reading at two sentences.</td>
+            </tr>
+            <tr>
+              <th scope="row">3 · Explain on open</th>
+              <td><span class="risk risk-read">Built</span></td>
+              <td>Sonnet, low effort, no thinking, given the verdicts and forbidden from re-judging.
+                Stored on first open, so the second costs nothing.</td>
+            </tr>
+            <tr>
+              <th scope="row">4 · Effort and model</th>
+              <td><span class="risk risk-wreck">Waiting on the eval</span></td>
+              <td>Both are environment variables now (<code>MATCH_MODEL</code>,
+                <code>MATCH_EFFORT</code>) and the model is part of the analysis cache key, so the
+                switch is a Render setting rather than a deploy. The switch itself is not thrown.</td>
+            </tr>
+            <tr>
+              <th scope="row">5 · Guardrails</th>
+              <td><span class="risk risk-write">Half</span></td>
+              <td>In the app: <code>AI_PAUSED</code>, a per-company daily ceiling, a much lower one
+                for the demo, and <code>ai:health</code> naming a spend limit as a spend limit. In
+                the Console: the monthly spend limit and the dedicated workspace are still yours,
+                and still ten minutes.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout">
+        <p>
+          <strong>Also decided and done:</strong> the public demo judges with Sonnet 5 rather than
+          Opus, and Triage still analyses fifty on launch. <strong>Not done, because it is your
+          call:</strong> whether reopening an old search should ask before spending, rather than
+          re-analysing a page silently.
+        </p>
+      </div>
+    </section>
+
+    <!-- ------------------------------------------------------------ summary -->
+    <section id="summary">
+      <h2>The short answer</h2>
+      <p class="section-note">
+        One CV judged against one job description is <em>one</em> call to <code>analyseMatch</code>,
+        from either Search or Triage. It is not several calls, and it is not the whole pool in one
+        prompt. What makes it expensive is that the call thinks hard, writes a long report, and
+        re-sends the same instructions and job description for every CV.
+      </p>
+
+      <div class="figures">
+        <div class="figure now">
+          <p class="fig-label">Today</p>
+          <p class="fig-value">~15¢</p>
+          <p class="fig-note">Opus 5, high effort, full written answer, nothing cached.</p>
+        </div>
+        <div class="figure soon">
+          <p class="fig-label">After phases 1–3</p>
+          <p class="fig-value">~8¢</p>
+          <p class="fig-note">Caching and a shorter answer. No change to how anything is judged.</p>
+        </div>
+        <div class="figure floor">
+          <p class="fig-label">If the eval passes</p>
+          <p class="fig-value">~2–5¢</p>
+          <p class="fig-note">Lower effort, or Sonnet 5. Only after a measured quality comparison.</p>
+        </div>
+      </div>
+
+      <div class="callout">
+        <p>
+          <strong>Nothing here has been measured.</strong> The local database holds no telemetry
+          rows and the local environment has no API key, so every figure on this page is derived
+          from prompt sizes and published prices. Phase 0 replaces them with real numbers before
+          anything is rebuilt — and if the real figure comes back at thirty cents or more, the plan
+          stops until we know why.
+        </p>
+      </div>
+    </section>
+
+    <!-- -------------------------------------------------------- corrections -->
+    <section id="corrections">
+      <h2>Corrections to the plain-English summary</h2>
+      <p class="section-note">
+        The shape of that summary is right. Two of its numbers need changing, two of its suspects
+        turned out to be innocent, and one it listed in passing is the largest uncapped surface in
+        the product.
+      </p>
+
+      <div class="compare-wrap">
+        <table class="compare">
+          <thead>
+            <tr>
+              <th scope="col">Claim</th>
+              <th scope="col">Verdict</th>
+              <th scope="col">What to say instead</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th scope="row">“The three fixes” (two listed)</th>
+              <td><span class="risk risk-write">Incomplete</span></td>
+              <td>
+                Caching plus a shorter answer, still on Opus at high effort, lands at
+                <strong>~7–12¢</strong> — not 4¢. Thinking is most of the written output and neither
+                fix touches it. About 4¢ needs effort <code>high → medium</code>; about 2¢ needs
+                Sonnet 5. Both are quality-gated, so they follow an eval.
+              </td>
+            </tr>
+            <tr>
+              <th scope="row">“re-read them at a tenth of the price”</th>
+              <td><span class="risk risk-write">Half right</span></td>
+              <td>
+                Reads are a tenth, but <strong>writing the cache costs 1.25×</strong>, and the entry
+                only exists once the first response has begun. With four workers in parallel, all
+                four first calls pay the write price unless one is deliberately sent ahead. That is
+                the difference between “most” and “some” of the reading cost.
+              </td>
+            </tr>
+            <tr>
+              <th scope="row">“can’t cost more than about 25 cents”</th>
+              <td><span class="risk risk-read">Right</span></td>
+              <td>
+                8,000 written tokens is $0.20, plus about $0.06 read — a hard ceiling near
+                <strong>27¢</strong> per CV, set by <code>max_tokens</code>.
+              </td>
+            </tr>
+            <tr>
+              <th scope="row">“asked twice when the first answer fails”</th>
+              <td><span class="risk risk-read">Not it</span></td>
+              <td>
+                The SDK retries only on network, 429 and 5xx errors, none of which are billed.
+                Triage batch retries redo only applicants that are not yet scored. A refusal
+                <em>is</em> billed, but it is not retried — it falls back to the deterministic
+                score. Worst case one wasted call, not two.
+              </td>
+            </tr>
+            <tr>
+              <th scope="row">“testing”</th>
+              <td><span class="risk risk-read">Not it</span></td>
+              <td>
+                The local <code>.env</code> has no <code>ANTHROPIC_API_KEY</code> and the AI suites
+                stub <code>fetch</code>. Local tests cost nothing at all.
+              </td>
+            </tr>
+            <tr>
+              <th scope="row">“the free demo”</th>
+              <td><span class="risk risk-wreck">Bigger than it looks</span></td>
+              <td>
+                It runs the <strong>full Opus pipeline</strong> for anonymous visitors — twenty-five
+                deep analyses to show six cards. See the next section.
+              </td>
+            </tr>
+            <tr>
+              <th scope="row">“CVs uploaded as pictures”</th>
+              <td><span class="risk risk-write">Real, small</span></td>
+              <td>One vision call per image at low effort, roughly 3–5¢ a page.</td>
+            </tr>
+            <tr>
+              <th scope="row">“your database records the real numbers”</th>
+              <td><span class="risk risk-write">Triage only</span></td>
+              <td>
+                Search records no tokens at all, and demo spend is invisible. Once caching lands,
+                the recorded <code>input_tokens</code> will <em>undercount</em> unless the cache
+                fields are stored alongside it.
+              </td>
+            </tr>
+            <tr>
+              <th scope="row">“give the explanation the verdicts, don’t ask it to decide again”</th>
+              <td><span class="risk risk-read">Keep this</span></td>
+              <td>
+                Exactly right, and it is the whole risk of that phase. One addition: most of the
+                explanation needs no model at all — strengths and gaps are derivable from the
+                verdicts in code, for nothing.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- --------------------------------------------------------------- code -->
+    <section id="code">
+      <h2>Two things the code says that change the picture</h2>
+
+      <h3>A launched Triage analyses fifty CVs, not twenty-five</h3>
+      <p>
+        <code>TRIAGE_INITIAL_DEEP</code> defaults to 50 (<code>server/src/triage.js:46</code>); the
+        25 is the <em>rolling</em> tranche fetched afterwards as the recruiter scrolls. So a Triage
+        commits to roughly <strong>$6–9</strong> the moment it is launched, before anyone has
+        scrolled anywhere, and about <strong>$12–18</strong> for a 100-CV pile read to the end. The
+        “$12.50 per 100 free CVs” in the summary is about right; my earlier “first 25” framing was
+        not.
+      </p>
+
+      <h3>The public demo runs the full Opus pipeline for anonymous visitors</h3>
+      <p>
+        <code>runPublicSearch</code> (<code>server/src/publicDemo.js:198</code>) calls the same
+        <code>runSearch</code> a paying recruiter does: the job description is parsed, twenty-five
+        candidates are analysed at high effort, and six are shown. Identical job descriptions share
+        a job row — 144 demo searches have so far produced only 7 jobs — but every <em>distinct</em>
+        description a stranger pastes costs about <strong>$3–5</strong>.
+      </p>
+
+      <div class="callout warn">
+        <p>
+          The only limit is eight searches per hour per browser fingerprint. There is no global
+          ceiling, no daily allowance, and no telemetry: demo spend is the one surface of the
+          product that cannot be seen in the database at all. If the real bill is materially above
+          fifteen cents a CV, this is the first place to look.
+        </p>
+      </div>
+
+      <h3>Two smaller ones</h3>
+      <p>
+        <strong>Nothing is cancelled when a recruiter closes the tab.</strong> No abort signal is
+        wired from the HTTP request into <code>runSearch</code>, so a page of twenty-five analyses
+        runs to completion whether or not anyone is still waiting for it.
+      </p>
+      <p>
+        <strong>Changing the model re-analyses everything once.</strong> The model name is part of
+        the analysis cache key (<code>server/src/matching/analysis.js:24</code>), as is
+        <code>VERSIONS.scoring</code>. Phase 4 handles it by reading rows written by any model while
+        writing new ones under the current one.
+      </p>
+    </section>
+
+    <!-- ---------------------------------------------------------- breakdown -->
+    <section id="breakdown">
+      <h2>Where a CV’s money goes</h2>
+      <p class="section-note">
+        Opus 5 is $5 per million tokens read and $25 per million written; the model’s private
+        thinking is billed as writing. Token counts use the current tokenizer, about 2.5 characters
+        per token — which makes them some 40% higher than my first estimate.
+      </p>
+
+      <div class="compare-wrap">
+        <table class="compare">
+          <thead>
+            <tr>
+              <th scope="col">Part of the call</th>
+              <th scope="col" class="num">Tokens</th>
+              <th scope="col" class="num">Cost</th>
+              <th scope="col">Cacheable?</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th scope="row">Instructions (<code>MATCH_SYSTEM</code>, 8.5k characters)</th>
+              <td class="num">~3,400</td><td class="num">$0.017</td><td>Yes</td>
+            </tr>
+            <tr>
+              <th scope="row">The answer schema</th>
+              <td class="num">~1,800</td><td class="num">$0.009</td><td>Yes</td>
+            </tr>
+            <tr>
+              <th scope="row">Job description, requirements, instruction</th>
+              <td class="num">~2,000</td><td class="num">$0.010</td><td>Yes, per job</td>
+            </tr>
+            <tr>
+              <th scope="row">The CV and dossier</th>
+              <td class="num">~3–5,000</td><td class="num">$0.015–0.025</td><td>No</td>
+            </tr>
+            <tr class="total">
+              <th scope="row">Read, total</th>
+              <td class="num">~10–12,000</td><td class="num">~$0.05–0.06</td><td>~60% of it fixed</td>
+            </tr>
+            <tr>
+              <th scope="row">Thinking (adaptive, effort <code>high</code>)</th>
+              <td class="num">~2–4,000</td><td class="num">$0.05–0.10</td><td>—</td>
+            </tr>
+            <tr>
+              <th scope="row">The JSON answer (verdicts, reasoning, strengths, gaps, transferable, evidence, probes, notes)</th>
+              <td class="num">~1,500–2,000</td><td class="num">$0.04–0.05</td><td>—</td>
+            </tr>
+            <tr class="total">
+              <th scope="row">Written, total</th>
+              <td class="num">~3,500–6,000</td><td class="num">~$0.09–0.15</td><td>—</td>
+            </tr>
+            <tr class="total">
+              <th scope="row">Per CV</th>
+              <td class="num"></td><td class="num">~$0.14–0.20</td><td></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>
+        Roughly 35% reading, 65% writing. Caching addresses the 35%; a shorter answer addresses
+        about a third of the 65%; thinking is the rest. Only the per-requirement verdicts decide the
+        score — it is computed in code from them — so the remainder is explanation, and since the
+        Triage card stopped showing reasoning it is prose most recruiters never open.
+      </p>
+
+      <h3>What a whole run costs</h3>
+      <div class="compare-wrap">
+        <table class="compare">
+          <thead>
+            <tr>
+              <th scope="col">Run</th>
+              <th scope="col" class="num">Model calls</th>
+              <th scope="col" class="num">Estimated cost</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><th scope="row">One CV against one description</th><td class="num">1</td><td class="num">~$0.15</td></tr>
+            <tr><th scope="row">Reading the description into criteria</th><td class="num">1 per run</td><td class="num">~$0.05–0.10</td></tr>
+            <tr><th scope="row">One Search, first page</th><td class="num">26</td><td class="num">~$4</td></tr>
+            <tr><th scope="row">Each further page</th><td class="num">25</td><td class="num">~$3.75</td></tr>
+            <tr class="total"><th scope="row">A Triage, on launch</th><td class="num">51</td><td class="num">~$7</td></tr>
+            <tr><th scope="row">Triage of 100 CVs, read to the end</th><td class="num">101</td><td class="num">~$15</td></tr>
+            <tr><th scope="row">A candidate signing up (once, ever)</th><td class="num">3–4</td><td class="num">~$0.15</td></tr>
+            <tr><th scope="row">One anonymous demo search</th><td class="num">26</td><td class="num">~$3–5</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="section-note" style="margin-bottom:0">
+        Repeats are free: a Search result is cached per candidate, job and description version, so
+        running the same search again costs nothing.
+      </p>
+    </section>
+
+    <!-- ------------------------------------------------------------- ladder -->
+    <section id="ladder">
+      <h2>What each fix is worth</h2>
+      <p class="section-note">
+        Cumulative, in the order they are worth doing. The first two are quality-neutral. The last
+        two change what the model does, and must not ship on anyone’s intuition, mine included.
+      </p>
+
+      <div class="compare-wrap">
+        <table class="compare">
+          <thead>
+            <tr>
+              <th scope="col">Configuration</th>
+              <th scope="col" class="num">≈ $/CV</th>
+              <th scope="col" class="num">100 free CVs</th>
+              <th scope="col">Risk</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th scope="row">Today — Opus, high effort, full answer, no caching</th>
+              <td class="num">0.15</td><td class="num">$15</td>
+              <td>—</td>
+            </tr>
+            <tr>
+              <th scope="row">+ prompt caching <span class="cost">(Phase 1)</span></th>
+              <td class="num">0.11</td><td class="num">$11</td>
+              <td><span class="risk risk-read">None</span></td>
+            </tr>
+            <tr>
+              <th scope="row">+ shorter answer <span class="cost">(Phase 2)</span></th>
+              <td class="num">0.08</td><td class="num">$8</td>
+              <td><span class="risk risk-read">None to scoring</span></td>
+            </tr>
+            <tr>
+              <th scope="row">+ effort <code>medium</code> <span class="cost">(Phase 4a)</span></th>
+              <td class="num">0.04–0.05</td><td class="num">$4–5</td>
+              <td><span class="risk risk-write">Eval first</span></td>
+            </tr>
+            <tr>
+              <th scope="row">Sonnet 5, medium, cached, short answer <span class="cost">(Phase 4b)</span></th>
+              <td class="num">0.02</td><td class="num">$2</td>
+              <td><span class="risk risk-write">Eval first</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- --------------------------------------------------------------- plan -->
+    <section id="plan">
+      <h2>The plan</h2>
+      <p class="section-note">
+        Four to five working days in total. Fifteen cents down to four or five is phases 0–3 plus
+        the effort change — roughly two and a half days. Two cents needs the Sonnet eval to pass.
+      </p>
+
+      <ol class="phases">
+        <li>
+          <div>
+            <h3>Measure <span class="cost">· half a day, nothing changes</span></h3>
+            <ul>
+              <li><code>npm run ai:cost</code>: read <code>triage_cost_events</code> and
+                <code>ai_failures</code>, print dollars per CV by stage and model against a price
+                table. Run it on Render, where the real rows are.</li>
+              <li>Count the demo’s spend to date: distinct <code>job_id</code> in
+                <code>public_searches</code>, times about $4.</li>
+              <li>One free <code>countTokens</code> call on a real description and CV, to pin the
+                true prefix size.</li>
+            </ul>
+            <p class="accept">
+              There is a measured cost per CV and a real read/write split. If it is thirty cents or
+              more, stop and find out why before changing anything — it would mean something is
+              happening that reading the code does not explain.
+            </p>
+          </div>
+        </li>
+
+        <li>
+          <div>
+            <h3>Savings with no effect on quality <span class="cost">· one day</span></h3>
+            <ul>
+              <li><strong>Cache the shared prefix</strong> in <code>analyseMatch</code>: mark the
+                system block, and split the user message into [description + criteria +
+                instruction] and [this candidate]. Two of the four available breakpoints. The prefix
+                is already in the right order, so nothing needs rearranging. Opus 5’s minimum
+                cacheable prefix is 512 tokens and ours is about 7,000; that caching coexists with a
+                JSON schema needs proving on the first call rather than assuming.</li>
+              <li><strong>Warm the cache before fanning out</strong>: send the first candidate’s
+                call, release the other three workers when it starts responding. No extra call,
+                about two seconds of delay.</li>
+              <li><strong>Telemetry that survives caching</strong>: record the cache-write and
+                cache-read token counts as well as the plain ones, and extend the same telemetry to
+                Search and the demo, which record nothing today. Without this, Phase 1 makes the
+                recorded token count look like a saving it is not.</li>
+              <li><strong>Cap the demo</strong>: analyse only the eight candidates it might show
+                rather than twenty-five, and add a global daily allowance beyond which it falls back
+                to deterministic scoring and says so.</li>
+              <li><strong>Cancel abandoned searches</strong>: wire an abort from the closed request
+                into <code>runSearch</code>.</li>
+            </ul>
+            <p class="accept">
+              Cache reads are at least half of everything read on the second and subsequent CVs of a
+              page; the demo is capped; <code>analysis-depth-check</code>,
+              <code>ai-observability-check</code> and the Triage suites pass.
+            </p>
+          </div>
+        </li>
+
+        <li>
+          <div>
+            <h3>Ask for a shorter answer <span class="cost">· one day</span></h3>
+            <p>
+              <strong>Keep:</strong> the per-requirement verdicts (status, quote, and a reason of at
+              most twenty-five words), confidence, location fit, seniority alignment, and a
+              two-sentence <code>reasoning</code> — the Search result card prints that line, so it
+              has to be there.
+            </p>
+            <p>
+              <strong>Remove:</strong> <code>evidence</code> (it repeats the quotes already in the
+              verdicts), <code>strengths</code> and <code>gaps</code> (derivable from the verdicts by
+              tier, in code, for nothing), and move <code>transferable</code> and <code>probes</code>
+              to Phase 3. Trim the instructions to match, which shrinks the cached prefix as well.
+            </p>
+            <p>
+              The client reads derived strengths and gaps instead; both dialogs already null-check,
+              so stored analyses in the old shape keep rendering. <strong>Do not bump
+              <code>VERSIONS.scoring</code></strong> — scoring is unchanged, and bumping it would
+              re-analyse every reopened search.
+            </p>
+            <p class="accept">
+              Written tokens are down at least 30% and the verdict distribution on the fixture set is
+              unchanged (<code>score-fairness-check</code>).
+            </p>
+          </div>
+        </li>
+
+        <li>
+          <div>
+            <h3>Write the explanation when someone opens the candidate <span class="cost">· half to one day</span></h3>
+            <p>
+              A new endpoint returns the stored explanation if one exists, and otherwise generates
+              it: Sonnet 5, low effort, no thinking, <strong>given the verdicts that were already
+              decided and told to explain them rather than to judge again</strong>. That detail is
+              the whole risk of this phase — an explanation that re-decides will eventually
+              contradict the score on screen, and recruiters will see it. A code-side check discards
+              any explanation that treats a requirement with no evidence as met.
+            </p>
+            <p>
+              About one to two cents per candidate a recruiter actually opens, against fifteen for
+              every candidate whether opened or not. Most of the dialog — verdicts, derived
+              strengths and gaps — renders instantly from stored data; only the written paragraph
+              waits.
+            </p>
+          </div>
+        </li>
+
+        <li>
+          <div>
+            <h3>Effort and model, decided by an eval <span class="cost">· one to two days</span></h3>
+            <p>
+              The largest saving and the only part with real quality risk, so it is decided by
+              measurement rather than by argument. <code>npm run ai:eval</code> runs about five job
+              descriptions against about fifteen CVs under four configurations — Opus/high as the
+              baseline, Opus/medium, Sonnet 5/high, Sonnet 5/medium — and reports, against the
+              baseline: per-requirement verdict agreement (exact, and counting meets/partial as
+              adjacent), the rank correlation of fits within each job, cost per CV, and latency. One
+              run costs about $25–30.
+            </p>
+            <p>
+              <strong>Proposed rule:</strong> adopt the cheapest configuration that agrees with the
+              baseline on at least 90% of must-have verdicts and holds a rank correlation of 0.9 or
+              better. Expectation, to be proved right or wrong: Opus at medium effort passes
+              comfortably; Sonnet 5 at medium passes for Triage.
+            </p>
+            <p>
+              Model and effort become environment variables per call type, so the switch is a Render
+              setting rather than a deploy, and the analysis cache reads rows written by any model
+              while writing new ones under the current one — otherwise the switch silently
+              re-analyses every open search.
+            </p>
+          </div>
+        </li>
+
+        <li>
+          <div>
+            <h3>Guardrails <span class="cost">· half a day</span></h3>
+            <ul>
+              <li><strong>In the Console:</strong> a monthly spend limit, and a dedicated workspace
+                for the production key so the limit is scoped to Cursus rather than to the whole
+                account. Ten minutes, and not something code can do.</li>
+              <li><strong>In the app:</strong> a per-company daily ceiling on analyses, with the
+                deterministic fallback and an honest notice; an <code>AI_PAUSED</code> switch; and
+                <code>ai:health</code> naming the two spend-limit failures explicitly, so a capped
+                account is not mistaken for a broken one. Today a hit limit degrades results
+                quietly, which is the wrong failure for something recruiters pay for.</li>
+            </ul>
+          </div>
+        </li>
+      </ol>
+
+      <h3>Deliberately not doing: the Batch API for Triage</h3>
+      <p>
+        It is half price, but the first fifty CVs are what the recruiter is waiting for and the rest
+        are fetched by scrolling. Both are interactive. Pre-analysing the whole pile in a batch buys
+        a discount on CVs nobody scrolls to, which is not a saving.
+      </p>
+    </section>
+
+    <!-- ---------------------------------------------------------- decisions -->
+    <section id="decisions">
+      <h2>Open decisions</h2>
+      <p class="section-note">Four calls that are yours, not mine. Each changes what gets built.</p>
+
+      <ul class="decisions">
+        <li class="decision">
+          <h3>Triage initial depth: keep 50, or drop to 25?</h3>
+          <p>
+            With the next 25 queued immediately behind it. It only saves money when a recruiter
+            abandons a Triage after the first screen. <span class="rec">Recommendation: 25.</span>
+          </p>
+        </li>
+        <li class="decision">
+          <h3>Put the public demo on Sonnet 5 regardless of the eval?</h3>
+          <p>
+            It is a taster, and it is the one uncapped surface in the product.
+            <span class="rec">Recommendation: yes.</span>
+          </p>
+        </li>
+        <li class="decision">
+          <h3>Eval material: fixtures only, or real job descriptions?</h3>
+          <p>
+            Three to five real anonymised descriptions would make the decision rule mean something.
+            Nothing would be taken from users’ data.
+            <span class="rec">Recommendation: real ones, supplied by you.</span>
+          </p>
+        </li>
+        <li class="decision">
+          <h3>Sequencing: strictly in order, or eval in parallel?</h3>
+          <p>
+            Phases 1–3 in order, or start Phase 4’s eval alongside Phase 2 so the model decision is
+            ready when the rest lands? <span class="rec">Recommendation: in parallel.</span>
+          </p>
+        </li>
+      </ul>
+    </section>
+
+  </main>
+
+  <footer>
+    Cursus engineering note · written 16 September 2026 against the repository at commit 151b738.
+    Every figure here is an estimate derived from prompt sizes and published model prices — none of
+    it has been measured, and Phase 0 exists to replace it. Prices verified against the Claude
+    platform documentation on the same date: Opus 5 at $5 / $25 per million tokens, Sonnet 5 at
+    $2 / $10.
+  </footer>
+
+</div>
