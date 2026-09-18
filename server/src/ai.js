@@ -11,10 +11,43 @@ import { detectSkills } from './skills.js'
  */
 export const MODEL = 'claude-opus-5'
 
+/**
+ * The judging call's model and effort, settable without a deploy.
+ *
+ * These two decide most of what the product spends: judging a candidate is the
+ * only call that runs once per CV, and effort decides how much thinking it does
+ * — which is billed as output, at five times the input price. Env vars rather
+ * than constants so the switch is a Render setting somebody can make after
+ * reading an eval, and can undo in a minute if the quality is not there.
+ *
+ * MATCH_MODEL also participates in the analysis cache key, so changing it does
+ * not serve yesterday's answers under today's model's name.
+ */
+export const MATCH_MODEL = process.env.MATCH_MODEL ?? MODEL
+export const MATCH_EFFORT = process.env.MATCH_EFFORT ?? 'high'
+
+/** Sonnet, for the writing tasks that are not judgements. See explainVerdicts. */
+export const WRITER_MODEL = process.env.WRITER_MODEL ?? 'claude-sonnet-5'
+
 let client = null
 
+/**
+ * The kill switch.
+ *
+ * AI_PAUSED=1 on Render turns every model call in the product off without a
+ * deploy and without touching the key, and the app carries on with the
+ * deterministic path it already falls back to. It exists for one situation: a
+ * spend limit is about to be hit, or something is burning money and nobody has
+ * yet worked out what. Pausing is a decision somebody can take in thirty
+ * seconds; reverting a deploy is not.
+ */
+export function isPaused() {
+  const flag = String(process.env.AI_PAUSED ?? '').trim().toLowerCase()
+  return flag === '1' || flag === 'true' || flag === 'yes'
+}
+
 export function isConfigured() {
-  return Boolean(process.env.ANTHROPIC_API_KEY)
+  return Boolean(process.env.ANTHROPIC_API_KEY) && !isPaused()
 }
 
 function getClient() {
@@ -25,6 +58,24 @@ function getClient() {
 
 /** `anyOf` rather than a type array — structured outputs documents this form. */
 const nullable = (type) => ({ anyOf: [{ type }, { type: 'null' }] })
+
+/**
+ * The four token counts, kept apart because they are four different prices.
+ *
+ * input_tokens from the API means "tokens that were neither read from nor
+ * written to the cache" — it is not the total. Adding them up wrongly is the
+ * easy mistake here, and it would make caching look like a 90% saving on the
+ * day it shipped. See costs.js for what each one is worth.
+ */
+function usageOf(response) {
+  return {
+    inputTokens: response?.usage?.input_tokens ?? 0,
+    cacheWriteTokens: response?.usage?.cache_creation_input_tokens ?? 0,
+    cacheReadTokens: response?.usage?.cache_read_input_tokens ?? 0,
+    outputTokens: response?.usage?.output_tokens ?? 0,
+    model: response?.model ?? null,
+  }
+}
 
 const EXTRACTION_SCHEMA = {
   type: 'object',
@@ -368,8 +419,56 @@ function describeFailure(error) {
   }
 }
 
+/**
+ * A request nobody is waiting for any more, rather than a failure.
+ *
+ * Searches are cancelled when the recruiter closes the tab, so aborts are an
+ * ordinary event on a healthy system. Recording them as model failures would
+ * fill ai_failures with noise and make the one report that is supposed to say
+ * "the AI is not working" say it every time somebody changed their mind.
+ */
+function isAbort(error) {
+  return error?.name === 'AbortError'
+    || error?.name === 'APIUserAbortError'
+    || error?.constructor?.name === 'APIUserAbortError'
+}
+
+/**
+ * The two failures that mean "you have run out of money", named.
+ *
+ * They are ordinary-looking HTTP errors — a 400 and a 429 — and both read in a
+ * log like something the code did wrong. Naming them here, once, is what lets
+ * npm run ai:health say "the account is capped" instead of showing an operator
+ * a bad-request error they will spend an afternoon debugging.
+ */
+export function spendLimitReason({ status, type, message } = {}) {
+  const text = String(message ?? '')
+
+  if (status === 400 && /usage limits?/i.test(text)) {
+    return 'The spend limit set on this account has been reached. '
+      + 'Raise it in the Console (Settings > Billing > Spend limits) or wait for the next month.'
+  }
+
+  if (status === 429 && /enforced_spend_limit_reached/i.test(text)) {
+    return 'The monthly cap for this account tier has been reached. '
+      + 'It does not reset until next month; upgrading the tier is the only way to lift it now.'
+  }
+
+  if (status === 429 && String(type) === 'rate_limit_error') {
+    return 'Rate limited — too many tokens per minute, not a spend problem. It clears by itself.'
+  }
+
+  return null
+}
+
 function reportFailure(stage, error) {
+  /* Cancelled work is not a fault. Returned before the sink so it never reaches
+     the failure table or the health report. */
+  if (isAbort(error)) return { status: null, type: 'aborted', message: 'cancelled' }
+
   const detail = describeFailure(error)
+  const capped = spendLimitReason(detail)
+  if (capped) console.warn(`  ${stage} fell back: ${capped}`)
   console.warn(`  ${stage} fell back: ${detail.status ?? '-'} ${detail.type} — ${detail.message}`)
   try {
     failureSink({ stage, ...detail })
@@ -901,9 +1000,26 @@ export function trimToLimit(text, limit) {
 const MATCH_SCHEMA = {
   type: 'object',
   additionalProperties: false,
+  /*
+   * What the model is asked for, and what it is no longer asked for.
+   *
+   * strengths, gaps and evidence used to be here. Every one of them was the
+   * verdicts restated: a strength is a requirement just marked meets with a
+   * quote attached, a gap is one nothing was found for, evidence is that same
+   * quote under another name. They are now derived in code from criteria (see
+   * deriveHighlights in matching/score.js) at no cost, and the model writes
+   * about a third less on every CV — output being five times the price of
+   * input, that is the single largest saving available without changing what
+   * the model is asked to judge.
+   *
+   * probes also left, for a different reason: interview questions cannot be
+   * derived from anything, but nor are they read on a results page. They are
+   * written on demand now, by a cheaper model, when a recruiter actually opens
+   * a candidate. See explainVerdicts.
+   */
   required: [
-    'criteria', 'reasoning', 'strengths', 'gaps', 'transferable',
-    'evidence', 'probes', 'confidence', 'location_fit', 'seniority_alignment',
+    'criteria', 'reasoning', 'transferable',
+    'confidence', 'location_fit', 'seniority_alignment',
   ],
   properties: {
     /*
@@ -939,36 +1055,26 @@ const MATCH_SCHEMA = {
             enum: ['meets', 'partial', 'no_evidence', 'contradicted'],
           },
           /* Verbatim from the CV, and verified in code. Empty only when the
-             status is no_evidence — there is nothing to quote for a silence. */
+             status is no_evidence — there is nothing to quote for a silence.
+             This one quote now carries the evidence the separate evidence list
+             used to duplicate, so it earns its length. */
           quote: { type: 'string' },
-          reason: { type: 'string' },
+          /* One short clause. The length cap is enforced in the normaliser as
+             well as asked for here: a maxLength is an instruction, not a
+             guarantee, and this field is written once per requirement — ten to
+             fifteen times per CV — so it is where a wordy model costs real
+             money. */
+          reason: { type: 'string', maxLength: 180 },
         },
       },
     },
-    reasoning: { type: 'string' },
-    strengths: { type: 'array', items: { type: 'string' } },
-    gaps: { type: 'array', items: { type: 'string' } },
+    /* Two sentences, shown on the result card. */
+    reasoning: { type: 'string', maxLength: 400 },
     // Capability the role needs that the CV evidences under a different name.
+    // Kept in this call rather than derived: it is the one claim here that no
+    // amount of arithmetic over the verdicts could reconstruct, and it is the
+    // whole argument for reading a CV with a model at all.
     transferable: { type: 'array', items: { type: 'string' } },
-    /**
-     * Each claim tied to the words that support it. This is what separates a
-     * read from an impression: a recruiter can check the quote against the CV
-     * and see immediately if the assessment invented something.
-     */
-    evidence: {
-      type: 'array',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['claim', 'quote'],
-        properties: {
-          claim: { type: 'string' },
-          quote: { type: 'string' },
-        },
-      },
-    },
-    // What to ask to resolve what the CV cannot settle.
-    probes: { type: 'array', items: { type: 'string' } },
     // How far the CV actually supports the judgement, separate from the score.
     confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
 
@@ -1267,7 +1373,14 @@ function dossier({ candidate, profile }) {
  * Resolves to null on any failure, so the caller keeps the deterministic score
  * for that candidate rather than losing them from the results.
  */
-export async function analyseMatch({ jobDescription, criteria, candidate, profile, signal }) {
+export async function analyseMatch({
+  jobDescription, criteria, candidate, profile, signal,
+  /* Overridable so one run can be compared against another — the eval harness
+     judges the same CVs under several models and effort levels and needs them
+     to differ per call, not per process. Production passes neither and gets the
+     environment's settings. */
+  model = MATCH_MODEL, effort = MATCH_EFFORT,
+}) {
   const anthropic = getClient()
   if (!anthropic) return null
 
@@ -1303,29 +1416,48 @@ export async function analyseMatch({ jobDescription, criteria, candidate, profil
    */
   const instruction = String(criteria?.instruction ?? '').trim()
 
+  /*
+   * The job, and then the candidate — in two blocks, not one string.
+   *
+   * Everything above the candidate is identical for every CV judged against
+   * this role: the instructions, the schema, the posting, the requirement list.
+   * Twenty-five candidates meant sending all of it twenty-five times. Marked
+   * with cache_control, it is written once and read back at a tenth of the
+   * input price for every candidate after the first.
+   *
+   * The split has to be here rather than anywhere convenient: a cached prefix
+   * is matched from the start of the request, so the first byte that differs
+   * between two calls ends the reusable part. The candidate is that byte, so
+   * the candidate goes last and alone.
+   */
+  const shared = `Assess this candidate against the role.\n\n`
+    + `<role>\n${jobDescription}\n</role>\n\n`
+    + (wanted ? `<recruiter_criteria>\n${wanted}\n</recruiter_criteria>\n\n` : '')
+    + (instruction ? `<recruiter_instruction>\n${instruction}\n</recruiter_instruction>\n\n` : '')
+
   try {
     const response = await anthropic.messages.create({
-      model: MODEL,
+      model,
       // Room for the reasoning plus quoted evidence for several claims.
       max_tokens: 8000,
-      system: MATCH_SYSTEM,
+      /* A block rather than a string, so it can carry a cache breakpoint. The
+         system prompt is the largest fixed thing in the request. */
+      system: [{ type: 'text', text: MATCH_SYSTEM, cache_control: { type: 'ephemeral' } }],
       // Judging fit is the reasoning task in this product, so it gets adaptive
-      // thinking and a high effort budget — the opposite of extraction, which
-      // only reads and reports.
+      // thinking and an effort budget — the opposite of extraction, which only
+      // reads and reports. Effort is configurable because it is the single
+      // largest lever on what a judgement costs: thinking is billed as output.
       thinking: { type: 'adaptive' },
       output_config: {
-        effort: 'high',
+        effort,
         format: { type: 'json_schema', schema: MATCH_SCHEMA },
       },
       messages: [{
         role: 'user',
-        content: `Assess this candidate against the role.\n\n`
-          + `<role>\n${jobDescription}\n</role>\n\n`
-          + (wanted ? `<recruiter_criteria>\n${wanted}\n</recruiter_criteria>\n\n` : '')
-          + (instruction
-            ? `<recruiter_instruction>\n${instruction}\n</recruiter_instruction>\n\n`
-            : '')
-          + `<candidate>\n${dossier({ candidate, profile })}\n</candidate>`,
+        content: [
+          { type: 'text', text: shared, cache_control: { type: 'ephemeral' } },
+          { type: 'text', text: `<candidate>\n${dossier({ candidate, profile })}\n</candidate>` },
+        ],
       }],
     }, { signal })
 
@@ -1343,10 +1475,7 @@ export async function analyseMatch({ jobDescription, criteria, candidate, profil
       ...normalizeMatch(JSON.parse(text)),
       source: 'claude',
       model_version: response.model,
-      usage: {
-        inputTokens: response.usage?.input_tokens ?? null,
-        outputTokens: response.usage?.output_tokens ?? null,
-      },
+      usage: usageOf(response),
     }
   } catch (error) {
     reportFailure('match-analysis', error)
@@ -1374,26 +1503,19 @@ function normalizeMatch(raw) {
         requirement_id: item.requirement_id,
         status: item.status,
         quote: trimOrNull(item.quote) ?? '',
-        reason: trimOrNull(item.reason) ?? '',
+        reason: capWords(trimOrNull(item.reason) ?? '', 25),
       }))
-    : []
-
-  const evidence = Array.isArray(raw?.evidence)
-    ? raw.evidence
-      .map((item) => ({ claim: trimOrNull(item?.claim), quote: trimOrNull(item?.quote) }))
-      // A claim without its quote is the thing evidence exists to prevent.
-      .filter((item) => item.claim && item.quote)
-      .slice(0, 8)
     : []
 
   return {
     criteria,
-    reasoning: trimOrNull(raw?.reasoning) ?? '',
-    strengths: uniqueStrings(raw?.strengths).slice(0, 8),
-    gaps: uniqueStrings(raw?.gaps).slice(0, 8),
-    transferable: uniqueStrings(raw?.transferable).slice(0, 8),
-    evidence,
-    probes: uniqueStrings(raw?.probes).slice(0, 6),
+    /* Trimmed to the two sentences it was asked for. A model that writes five
+       is not corrected by the schema's maxLength — that truncates mid-word at
+       the transport, which is worse than an over-long line — so the cut is made
+       here, at a sentence boundary, and the tokens are simply not paid for
+       again next time because the prompt says two. */
+    reasoning: firstSentences(trimOrNull(raw?.reasoning) ?? '', 2),
+    transferable: uniqueStrings(raw?.transferable).slice(0, 6),
     confidence: ['high', 'medium', 'low'].includes(raw?.confidence) ? raw.confidence : 'medium',
 
     /*
@@ -1435,22 +1557,64 @@ const LOCATION_LEVELS = [
  * not open hundreds of sockets at once. Order of `candidates` is preserved in
  * the returned map keys.
  */
-export async function analyseMatches({ jobDescription, criteria, candidates, concurrency = 4, signal }) {
+export async function analyseMatches({
+  jobDescription, criteria, candidates, concurrency = 4, signal,
+  model = MATCH_MODEL, effort = MATCH_EFFORT,
+}) {
   const results = new Map()
   if (!isConfigured() || candidates.length === 0) return results
 
   const queue = [...candidates]
+
+  /*
+   * One call goes first, alone. The other twenty-four then read the cache.
+   *
+   * A cached prefix only exists once a request carrying it has begun being
+   * processed, so four workers starting at the same instant all miss and all
+   * pay the 1.25x write price — the cache is written four times and read none.
+   * Letting one call get ahead turns the other twenty-four into reads at a
+   * tenth of the price.
+   *
+   * Raced against a timeout rather than simply awaited, because the whole first
+   * judgement takes as long as any other and a search is something a recruiter
+   * is watching. The prefix is processed long before the answer is finished, so
+   * the wait needed is much shorter than the call. Nothing here is required for
+   * correctness: if the race is lost, the rest of the batch simply behaves the
+   * way it did before caching existed.
+   */
+  const first = queue.shift()
+  const lead = analyseMatch({
+    jobDescription, criteria, candidate: first.candidate, profile: first.profile, signal,
+    model, effort,
+  }).then((analysis) => {
+    if (analysis) results.set(first.candidate.id, analysis)
+  })
+
+  if (queue.length > 0) await Promise.race([lead, sleep(WARMUP_MS, signal)])
+
   const workers = Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
     for (let next = queue.shift(); next; next = queue.shift()) {
       const analysis = await analyseMatch({
         jobDescription, criteria, candidate: next.candidate, profile: next.profile, signal,
+        model, effort,
       })
       if (analysis) results.set(next.candidate.id, analysis)
     }
   })
 
-  await Promise.all(workers)
+  await Promise.all([lead, ...workers])
   return results
+}
+
+/** How long the rest of a batch waits for the first call to warm the cache. */
+const WARMUP_MS = Number(process.env.MATCH_WARMUP_MS ?? 8000)
+
+/** A cancellable wait — an abandoned search must not hold the process for it. */
+export function sleep(ms, signal) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms)
+    signal?.addEventListener?.('abort', () => { clearTimeout(timer); resolve() }, { once: true })
+  })
 }
 
 // ------------------------------------------------------ job match profile ---
@@ -1631,6 +1795,32 @@ export async function analyseJobDescription({ jobDescription, instruction, signa
 function trimOrNull(value) {
   const trimmed = String(value ?? '').trim()
   return trimmed === '' || trimmed.toLowerCase() === 'null' ? null : trimmed
+}
+
+/**
+ * The first N sentences, or the whole thing if it is already shorter.
+ *
+ * Cutting long prose to length by characters leaves a sentence hanging, which
+ * reads as a bug to whoever sees it. Cutting at a sentence boundary reads as an
+ * edit. Falls back to the original text when it cannot find a boundary at all
+ * — a paragraph with no full stop is unusual, and silently returning nothing
+ * would lose the only line the result card shows.
+ */
+function firstSentences(text, count) {
+  const value = String(text ?? '').trim()
+  if (!value) return ''
+
+  const parts = value.match(/[^.!?]+[.!?]+(\s|$)/g)
+  if (!parts || parts.length <= count) return value
+
+  return parts.slice(0, count).join('').trim()
+}
+
+/** A hard word limit for fields asked to be one short clause. */
+function capWords(text, limit) {
+  const words = String(text ?? '').trim().split(/\s+/).filter(Boolean)
+  if (words.length <= limit) return words.join(' ')
+  return `${words.slice(0, limit).join(' ')}…`
 }
 
 function uniqueStrings(value) {

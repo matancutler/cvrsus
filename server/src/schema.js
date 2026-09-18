@@ -992,6 +992,47 @@ export const SCHEMA = `
 
   CREATE INDEX IF NOT EXISTS idx_triage_cost ON triage_cost_events(triage_id, created_at);
 
+  /*
+   * Every model call the product pays for, in one ledger.
+   *
+   * triage_cost_events above stays where it is and keeps doing its job — it is
+   * per-batch operator telemetry, with durations and retries, answering "what
+   * happened to this Triage". This table answers a different question: what did
+   * the month cost, and which surface spent it. Search and the public demo
+   * recorded nothing at all before this, which is why nobody could say what a
+   * search cost or what strangers had spent.
+   *
+   * The three token columns are separate on purpose. Prompt caching bills a
+   * write at 1.25x the input price and a read at a tenth of it, so a single
+   * input_tokens number cannot be priced once caching is on: the same count
+   * can be five cents or half a cent. Recording them apart is what makes the
+   * saving provable rather than assumed.
+   */
+  CREATE TABLE IF NOT EXISTS ai_cost_events (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    /* Which surface spent it: search, demo, triage, signup, explain. */
+    context       TEXT NOT NULL,
+    stage         TEXT NOT NULL,
+    model         TEXT NOT NULL,
+    /* Who to bill it against, where that is known. NULL for the demo, which by
+       definition has no company behind it. */
+    company_id    INTEGER,
+    /* How many model calls, and how many things they were about — candidates,
+       applicants, documents. Both are needed: cost per call and cost per CV are
+       different numbers and the second is the one that matters. */
+    calls         INTEGER NOT NULL DEFAULT 0,
+    items         INTEGER NOT NULL DEFAULT 0,
+    input_tokens       INTEGER NOT NULL DEFAULT 0,
+    cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens  INTEGER NOT NULL DEFAULT 0,
+    output_tokens      INTEGER NOT NULL DEFAULT 0,
+    duration_ms   INTEGER,
+    created_at    TEXT NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_ai_cost_when ON ai_cost_events(created_at);
+  CREATE INDEX IF NOT EXISTS idx_ai_cost_company ON ai_cost_events(company_id, created_at);
+
   /* A Triage applicant filed into a folder.
 
      A separate table rather than a nullable column on folder_items, because the
