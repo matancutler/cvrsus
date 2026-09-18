@@ -6767,6 +6767,20 @@ app.post('/api/hr/triage/:id/files', recruiterOnly, triageUpload, async (req, re
       if (committed.has(file.path)) continue
       await fs.promises.unlink(file.path).catch(() => {})
     }
+    /*
+     * And the handler below must not undo that.
+     *
+     * It sweeps every entry in req.files, which is right for the routes that
+     * have no idea what multer left behind and exactly wrong here: this
+     * handler has just decided, file by file, which bytes a surviving row
+     * points at. Leaving them in req.files meant the outer sweep deleted them
+     * anyway — the row survived, its file did not, and the loss surfaced
+     * minutes later as "this CV could not be read".
+     *
+     * Emptied rather than filtered, because everything that needed removing
+     * has been removed on the line above. This route owns its own files.
+     */
+    req.files = []
     next(error)
   }
 })
@@ -7157,6 +7171,10 @@ app.post('/api/hr/triage/:id/cvs', recruiterOnly, triageUpload, async (req, res,
       if (committed.has(file.path)) continue
       await fs.promises.unlink(file.path).catch(() => {})
     }
+    /* This route has already decided which bytes a surviving row points at,
+       so the sweep in the error handler below must be given nothing. See the
+       longer note on the draft upload route. */
+    req.files = []
     next(error)
   }
 })
@@ -7782,8 +7800,15 @@ if (fs.existsSync(clientDist)) {
 }
 
 app.use((error, req, res, _next) => {
-  // Multer writes files to disk as it parses, so a rejection partway through a
-  // multi-file upload can leave the earlier ones orphaned. Clear them out.
+  /*
+   * Multer writes files to disk as it parses, so a rejection partway through a
+   * multi-file upload can leave the earlier ones orphaned. Clear them out.
+   *
+   * A route that has committed some of those files to rows empties req.files
+   * before it calls next(), because this sweep cannot tell a stray from a
+   * file a surviving row points at — and deleting the second kind is silent
+   * data loss that surfaces days later as an unreadable CV.
+   */
   for (const file of Object.values(req.files ?? {}).flat()) {
     fs.promises.unlink(file.path).catch(() => {})
   }

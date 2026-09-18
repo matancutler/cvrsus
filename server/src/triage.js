@@ -782,8 +782,19 @@ export function results({ triageId, offset = 0, limit = TRIAGE.pageSize }) {
    * exactly what a Search percentage means, since Search still normalises
    * against its pool.
    */
+  /*
+   * Superseded CVs are not results.
+   *
+   * A candidate who applied twice is one person, and the older CV — which may
+   * well have been analysed before the newer one arrived — would otherwise
+   * show up as a second row with the same name and a different score. The row
+   * and its analysis stay in the database; they are simply not what the
+   * recruiter is being shown, because the newer CV is the current version of
+   * that person. See resolveDuplicatePeople.
+   */
   const total = db.prepare(`
-    SELECT COUNT(*) AS n FROM triage_applicants WHERE triage_id = ? AND deep_status = 'scored'
+    SELECT COUNT(*) AS n FROM triage_applicants
+    WHERE triage_id = ? AND deep_status = 'scored' AND parse_status <> 'duplicate'
   `).get(triageId).n
 
   /*
@@ -799,7 +810,7 @@ export function results({ triageId, offset = 0, limit = TRIAGE.pageSize }) {
     SELECT id, display_name, email, phone, location, file_name, file_size,
            reviewed_at, absolute_fit, criteria, explanation, analysis_source, drop_id, created_at
     FROM triage_applicants
-    WHERE triage_id = ? AND deep_status = 'scored'
+    WHERE triage_id = ? AND deep_status = 'scored' AND parse_status <> 'duplicate'
     ORDER BY absolute_fit DESC, display_name ASC, id ASC
     LIMIT ? OFFSET ?
   `).all(triageId, limit, offset)

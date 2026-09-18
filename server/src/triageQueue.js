@@ -27,7 +27,10 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-import db, { UPLOAD_DIR } from './db.js'
+/* emailKey folds Gmail's dots and +tags, so "n.bar+jobs@gmail.com" and
+   "nbar@gmail.com" are one mailbox and one person — the same folding the
+   marketplace uses for candidate accounts. Anything else compares as written. */
+import db, { UPLOAD_DIR, emailKey } from './db.js'
 import { extractText } from './extract.js'
 import {
   analyseJobDescription, analyseMatch, deterministicContact,
@@ -433,9 +436,96 @@ async function runParse(triage, batch) {
     }
   }
 
+  /* Before ranking, not after: a CV superseded by a newer one from the same
+     person should never take a rank, because a rank is a promise that it will
+     be analysed and charged attention for. */
+  resolveDuplicatePeople(triage.id)
+
   // Ranking cannot start until every file has been read: a preliminary order
   // built over half the pile would put the second half behind all of it.
   enqueue({ triageId: triage.id, kind: 'preliminary', dropId: batch.drop_id ?? null })
+}
+
+/**
+ * One person, one CV — the newest one they sent.
+ *
+ * A recruiter forwards a mailbox into a session. The same candidate applies
+ * again three weeks later with a CV that now mentions the certification the
+ * job asks for. Two files, different bytes, so the content hash lets both
+ * through; two rows, two charges, two entries in the ranking, and the
+ * recruiter meets the same name twice with two different scores and no way to
+ * tell which is current.
+ *
+ * So the email decides. It is the only identifier a CV reliably carries — a
+ * name is not unique and a phone number is written six ways — and it is the
+ * one the candidate chose to be reached on. Same email, same person; the
+ * newest CV is the current version and the older ones step aside.
+ *
+ * No email means a new person, always. An unreadable contact block is not
+ * evidence of anything, and folding every CV that failed to yield an address
+ * into one "person" would be the worst possible failure here.
+ *
+ * What stepping aside means, precisely: parse_status becomes 'duplicate',
+ * which is a state the pipeline already understands. Ranking skips it,
+ * analysis skips it, completion does not wait for it, and the results page
+ * does not show it. What does NOT happen is a refund — that CV was read, and
+ * being superseded later is not the same as never having been readable.
+ *
+ * Idempotent, and run after every delivery is parsed: the newest row in each
+ * group is current whether this is the first time it has been asked or the
+ * fifth.
+ */
+function resolveDuplicatePeople(triageId) {
+  const rows = db.prepare(`
+    SELECT id, email, parse_status, created_at FROM triage_applicants
+    WHERE triage_id = ? AND parse_status IN ('parsed', 'duplicate')
+    ORDER BY created_at, id
+  `).all(triageId)
+
+  const groups = new Map()
+  for (const row of rows) {
+    const key = emailKey(row.email)
+    if (!key || !key.includes('@')) continue
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key).push(row)
+  }
+
+  let superseded = 0
+
+  for (const group of groups.values()) {
+    if (group.length < 2) continue
+
+    /* Ordered oldest first above, so the last one is the newest CV this
+       person has sent. Ties on the timestamp fall to the higher id, which is
+       the later insert. */
+    const current = group[group.length - 1]
+
+    for (const row of group) {
+      if (row.id === current.id) continue
+      if (row.parse_status === 'duplicate') continue
+      db.prepare(`
+        UPDATE triage_applicants SET parse_status = 'duplicate', duplicate_of = ?
+        WHERE id = ?
+      `).run(current.id, row.id)
+      superseded += 1
+    }
+
+    /* The newest row is current even if an earlier pass had put it aside —
+       which cannot happen today, because the newest is always chosen, but the
+       invariant is worth stating in code rather than in a comment alone. */
+    if (current.parse_status === 'duplicate') {
+      db.prepare(`
+        UPDATE triage_applicants SET parse_status = 'parsed', duplicate_of = NULL WHERE id = ?
+      `).run(current.id)
+    }
+  }
+
+  if (superseded > 0) {
+    console.log(`  triage ${triageId}: ${superseded} CV(s) superseded by a newer one from the same person`)
+    recount(triageId)
+  }
+
+  return superseded
 }
 
 function markUnreadable(id, message, status = 'unreadable') {

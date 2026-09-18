@@ -73,7 +73,8 @@
     "test:triage-skip": "node test/triage-skip-check.mjs",
     "test:cost": "node test/ai-cost-check.mjs",
     "test:explain": "node test/explain-route-check.mjs",
-    "test:triage-drop": "node test/triage-drop-check.mjs"
+    "test:triage-drop": "node test/triage-drop-check.mjs",
+    "test:triage-charge": "node test/triage-charge-check.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",
