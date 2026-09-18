@@ -1364,6 +1364,12 @@ export const ADDED_COLUMNS = {
     // to existing rows on migration too, so nobody silently gains seats.
     ['seat_limit', 'INTEGER NOT NULL DEFAULT 1'],
     /*
+     * When we last told this organization their Triage capacity was running
+     * low, so we can tell them once rather than on every delivery. Cleared
+     * whenever they buy more, which is what makes the next warning possible.
+     */
+    ['triage_low_warned_at', 'TEXT'],
+    /*
      * §15 removed the shared sign-up secret, which was the only thing standing
      * between a stranger and every CV on the platform. Registration is open now
      * and the gate moved here instead: a company is created immediately and can

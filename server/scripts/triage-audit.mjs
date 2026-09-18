@@ -233,7 +233,67 @@ if (has('triage_drops')) {
   console.log('\nDELIVERIES')
   console.log(`  drops recorded : ${drops.n ?? 0} across ${drops.sessions ?? 0} session(s)`)
   console.log(`  most in one    : ${drops.most ?? 0}`)
+
+  const charge = one(`
+    SELECT COALESCE(SUM(charged_cvs), 0) AS charged,
+           COALESCE(SUM(refunded_cvs), 0) AS refunded
+    FROM triage_drops
+  `)
+  console.log(`  charged CVs    : ${charge.charged}`)
+  console.log(`  refunded CVs   : ${charge.refunded}`)
+
+  /*
+   * A delivery in a LAUNCHED session that holds CVs and carries no ledger id
+   * is work nobody paid for. The route removes a delivery it could not charge,
+   * so a healthy database reads zero here; anything else means a charge failed
+   * somewhere the rollback did not reach, and those CVs are being read and
+   * analysed for free.
+   *
+   * Drafts are excluded — an unlaunched session has not been charged for
+   * anything yet, which is correct rather than a leak.
+   */
+  const unpaid = one(`
+    SELECT COUNT(*) AS n FROM triage_drops d
+    JOIN triages t ON t.id = d.triage_id
+    WHERE d.ledger_id IS NULL AND t.ledger_id IS NOT NULL
+      AND EXISTS (SELECT 1 FROM triage_applicants a WHERE a.drop_id = d.id)
+  `).n
+  console.log(`  unpaid deliveries holding CVs : ${unpaid}`
+    + (unpaid > 0 ? '   <-- analysed for nothing' : ''))
+
+  /*
+   * And the reverse. A session's own counters are meant to be the sum of its
+   * deliveries; one that disagrees has been charged or refunded somewhere that
+   * moved only half of the pair, and the usage screen and the ledger are now
+   * telling two different stories about the same money.
+   */
+  const drifted = rows(`
+    SELECT t.id AS id, t.charged_cvs AS session, COALESCE(SUM(d.charged_cvs), 0) AS drops
+    FROM triages t
+    JOIN triage_drops d ON d.triage_id = t.id AND d.ledger_id IS NOT NULL
+    WHERE t.ledger_id IS NOT NULL
+    GROUP BY t.id
+    HAVING session <> drops
+  `)
+  console.log(`  totals disagreeing with deliveries : ${drifted.length}`
+    + (drifted.length
+      ? `   <-- ${drifted.slice(0, 5).map((r) => `#${r.id} ${r.session} vs ${r.drops}`).join(', ')}`
+      : ''))
 }
+
+/*
+ * Charged, read, and then set aside because that candidate sent a newer CV.
+ *
+ * Nothing is owed back — the CV was read, which is the work that was paid for
+ * — but it belongs beside the never-analysed count above, because it answers
+ * the same question: the distance between what the recruiter bought and what
+ * they actually end up looking at.
+ */
+const superseded = one(
+  `SELECT COUNT(*) AS n FROM triage_applicants WHERE parse_status = 'duplicate'`,
+).n
+console.log('\nSUPERSEDED BY A NEWER CV FROM THE SAME PERSON')
+console.log(`  CVs      : ${superseded}`)
 
 console.log('\nEDGE CASES FOR THE MIGRATION')
 const failed = one(`SELECT COUNT(*) AS n FROM triages WHERE ledger_id IS NOT NULL AND status = 'failed'`).n

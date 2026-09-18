@@ -3,7 +3,7 @@ import db from './db.js'
    path the Team screen uses, so nothing is left half-deleted. */
 import { deleteRecruiterCompletely } from './accounts.js'
 import { track } from './analytics.js'
-import { sendRevealsEmptyEmail, sendTriageEmptyEmail } from './notify.js'
+import { sendRevealsEmptyEmail, sendTriageEmptyEmail, sendTriageLowEmail } from './notify.js'
 import {
   COMPLIMENTARY_REVEALS,
   COMPLIMENTARY_TRIAGE_CVS,
@@ -150,6 +150,60 @@ export function grantComplimentaryTriage(companyId) {
  * Nothing is awaited and nothing throws. A reveal that has been paid for must
  * not be undone because a mailbox was unreachable.
  */
+/**
+ * How low is low.
+ *
+ * A fixed number rather than a share of what they bought: "20% left" means
+ * four CVs to somebody who bought twenty and two hundred to somebody who
+ * bought a thousand, and the question being answered is "can they still add a
+ * normal-sized pile tomorrow", which is an absolute quantity.
+ */
+const TRIAGE_LOW_WATER = (() => {
+  const raw = Number(process.env.TRIAGE_LOW_WATER ?? 50)
+  return Number.isFinite(raw) && raw >= 0 ? raw : 50
+})()
+
+/**
+ * Says so once when the balance crosses the low mark on the way down.
+ *
+ * The empty warning fires at exactly zero, which is a moment a rolling session
+ * can skip straight past: a delivery of forty against a balance of thirty is
+ * refused, so the balance sits at thirty and nobody is ever told. And a
+ * warning that fired on every delivery below the mark would be four emails in
+ * an afternoon, which is the same as none.
+ *
+ * So the crossing is stamped on the company and the stamp is cleared when they
+ * buy more. One warning per descent.
+ */
+function warnLowBalance(companyId, remaining) {
+  if (TRIAGE_LOW_WATER <= 0) return
+  if (remaining > TRIAGE_LOW_WATER || remaining <= 0) return
+
+  const company = db.prepare(
+    `SELECT triage_low_warned_at FROM companies WHERE id = ?`,
+  ).get(companyId)
+  if (company?.triage_low_warned_at) return
+
+  /* Stamped first, and conditionally, so two deliveries landing together send
+     one email between them rather than one each. */
+  const stamped = db.prepare(`
+    UPDATE companies SET triage_low_warned_at = ?
+    WHERE id = ? AND triage_low_warned_at IS NULL
+  `).run(new Date().toISOString(), companyId)
+  if (stamped.changes === 0) return
+
+  const admin = db.prepare(`
+    SELECT first_name, email FROM recruiters
+    WHERE company_id = ? AND is_active = 1
+    ORDER BY is_org_admin DESC, id LIMIT 1
+  `).get(companyId)
+
+  track('triage_balance_low', { actorType: 'company', actorId: companyId })
+  if (!admin?.email) return
+
+  sendTriageLowEmail({ to: admin.email, name: admin.first_name, remaining }).catch(() => {})
+}
+
 function warnEmptied(companyId, product) {
   const admin = db.prepare(`
     SELECT first_name, email FROM recruiters
@@ -919,6 +973,13 @@ export function creditTriages({ companyId, quantity, event = 'purchase', amount 
     db.prepare(`UPDATE companies SET triage_cv_balance = triage_cv_balance + ? WHERE id = ?`)
       .run(quantity, companyId)
 
+    /* Buying more arms the low warning again. Without this it fires once in
+       the organization's lifetime and never afterwards, however many times
+       they refill and run down again. */
+    if (triageBalance(companyId) > TRIAGE_LOW_WATER) {
+      db.prepare(`UPDATE companies SET triage_low_warned_at = NULL WHERE id = ?`).run(companyId)
+    }
+
     writeLedger({
       companyId, product: 'triage', event, delta: quantity,
       amount, packKey, provider, providerRef, actorId,
@@ -1079,6 +1140,7 @@ export function consumeTriageDrop({ companyId, triageId = null, dropId, recruite
 
       const capacityLeft = triageBalance(companyId)
       if (capacityLeft === 0) warnEmptied(companyId, 'triage')
+      else warnLowBalance(companyId, capacityLeft)
       return { ok: true, charged: true, cvs, balance: capacityLeft, ledgerId, dropId: drop.id }
     })()
   } catch (error) {
@@ -1368,6 +1430,67 @@ function refundLegacyTriage({ companyId, triageId, totalCvs, note }) {
 
     return { refunded: owed, balance: triageBalance(companyId) }
   })()
+}
+
+/**
+ * Puts every existing Triage charge on the delivery it paid for.
+ *
+ * Two generations of session need this and neither is hypothetical.
+ *
+ * A session launched before deliveries existed carries its CVs at drop_id
+ * NULL; its charge is adopted the first time somebody adds more, because that
+ * is when the old pile gets a delivery of its own. Fine.
+ *
+ * A session launched in the window between deliveries shipping and charging
+ * moving onto them is the one this exists for. It HAS a delivery — phase 1
+ * created it at upload — and that delivery carries no ledger id, because the
+ * code that charged it wrote to the triages row instead. Nothing adopts it:
+ * ensureLaunchDrop finds no orphans and returns early. So the delivery reads
+ * as unpaid for ever, which is wrong in two directions — the audit reports
+ * CVs being analysed for nothing, and a refund owed for an unreadable file in
+ * that session finds no charge to clamp against and silently pays nothing.
+ *
+ * Idempotent, additive, and it touches only sessions whose charge is not yet
+ * attributed anywhere, so it runs on every boot and does nothing once it has
+ * caught up. No money moves: the ledger row already exists, and this records
+ * which delivery it was for.
+ */
+export function attributeTriageCharges() {
+  const pending = db.prepare(`
+    SELECT t.id AS triageId, t.ledger_id AS ledgerId,
+           t.charged_cvs AS charged, t.refunded_cvs AS refunded,
+           (SELECT d.id FROM triage_drops d WHERE d.triage_id = t.id ORDER BY d.seq LIMIT 1) AS dropId
+    FROM triages t
+    WHERE t.ledger_id IS NOT NULL AND t.charged_cvs > 0
+      AND NOT EXISTS (
+        SELECT 1 FROM triage_drops d WHERE d.triage_id = t.id AND d.ledger_id IS NOT NULL
+      )
+  `).all().filter((row) => row.dropId !== null)
+
+  let attributed = 0
+
+  for (const row of pending) {
+    const claimed = db.prepare(`
+      UPDATE triage_drops
+      SET ledger_id = ?, charged_cvs = ?, refunded_cvs = ?, charged_at = COALESCE(charged_at, ?)
+      WHERE id = ? AND ledger_id IS NULL
+    `).run(
+      row.ledgerId, row.charged, row.refunded ?? 0, new Date().toISOString(), row.dropId,
+    )
+    if (claimed.changes > 0) attributed += 1
+  }
+
+  /* And the ledger line itself, which predates the column that would have
+     said which session it belonged to. */
+  db.prepare(`
+    UPDATE billing_ledger SET triage_id = (
+      SELECT t.id FROM triages t WHERE t.ledger_id = billing_ledger.id
+    )
+    WHERE product = 'triage' AND triage_id IS NULL
+      AND EXISTS (SELECT 1 FROM triages t WHERE t.ledger_id = billing_ledger.id)
+  `).run()
+
+  return attributed
 }
 
 /** How many CVs this organization has ever put through Triage. */

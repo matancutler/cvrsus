@@ -294,6 +294,98 @@ const chargedForPerson = db.prepare(`
 check('both versions were charged, and neither was charged twice',
   chargedForPerson === START + SECOND + 2, `${chargedForPerson}`)
 
+section('An analysis that failed can be retried, free')
+
+/*
+ * Analysis fails for reasons that pass — a timeout, a rate limit, a model
+ * having a bad minute. Until this phase a failure was final: the CV had been
+ * charged for, it sat in the list with no score, and the only route to one was
+ * a new Triage and a second charge for the same file.
+ *
+ * Forced rather than provoked. Making a real analysis fail means breaking the
+ * model call, and the thing under test is not how it failed — it is that the
+ * frontier has already moved past these ranks, so nothing will ever cover them
+ * again unless the retry asks for them explicitly by rank.
+ */
+const victims = db.prepare(`
+  SELECT id, prelim_rank AS rank FROM triage_applicants
+  WHERE triage_id = ? AND deep_status = 'scored' AND parse_status = 'parsed'
+  ORDER BY prelim_rank LIMIT 2
+`).all(id)
+
+check('there are scored CVs to knock over', victims.length === 2, `${victims.length}`)
+
+for (const row of victims) {
+  db.prepare(`
+    UPDATE triage_applicants
+    SET deep_status = 'failed', deep_error = 'forced by the test', absolute_fit = NULL
+    WHERE id = ?
+  `).run(row.id)
+}
+
+const balanceBeforeRetry = balanceNow()
+const chargesBeforeRetry = ledger().length
+
+const retried = await json(await fetch(`${BASE}/api/hr/triage/${id}/retry`, {
+  method: 'POST', headers: H(org.token), body: '{}',
+}))
+check('the route reports what it re-queued', retried.requeued === 2, `${retried.requeued}`)
+
+const afterRetry = await settle(id)
+check('both are scored again', db.prepare(`
+  SELECT COUNT(*) AS n FROM triage_applicants
+  WHERE id IN (${victims.map(() => '?').join(',')}) AND deep_status = 'scored'
+`).get(...victims.map((v) => v.id)).n === 2)
+check('and they are back in the results', Boolean(afterRetry))
+check('nothing was charged for the retry', balanceNow() === balanceBeforeRetry,
+  `balance ${balanceNow()}, was ${balanceBeforeRetry}`)
+check('and no ledger line was written', ledger().length === chargesBeforeRetry,
+  `${ledger().length} lines, was ${chargesBeforeRetry}`)
+
+const nothingLeft = await json(await fetch(`${BASE}/api/hr/triage/${id}/retry`, {
+  method: 'POST', headers: H(org.token), body: '{}',
+}))
+check('a retry with nothing to retry does nothing', nothingLeft.requeued === 0,
+  `${nothingLeft.requeued}`)
+
+section('The balance running low is said once, before it is gone')
+
+/* Armed by setting the balance just above the mark, then spending across it.
+   The warning used to fire only at exactly zero, which a rolling session can
+   step straight past: a delivery of forty against a balance of thirty is
+   refused, so the balance sits at thirty and nobody is ever told. */
+/* The same default the wallet reads. Named here rather than imported because
+   it is a module-private constant there, and exporting it purely for a test
+   would make it look like something the product configures. */
+const TRIAGE_LOW_WATER = Number(process.env.TRIAGE_LOW_WATER ?? 50)
+
+db.prepare(`
+  UPDATE companies SET triage_cv_balance = ?, triage_low_warned_at = NULL WHERE id = ?
+`).run(TRIAGE_LOW_WATER + 2, org.company.id)
+
+const crossing = []
+for (let index = 0; index < 3; index += 1) {
+  crossing.push({ name: `low-${index}.pdf`, bytes: await cv('Lowwater', 700 + index) })
+}
+const crossed = await addCvs(id, crossing)
+check('the delivery that crosses the mark is accepted', crossed.status === 201,
+  `HTTP ${crossed.status}`)
+
+const stamp = () => db.prepare(`SELECT triage_low_warned_at AS at FROM companies WHERE id = ?`)
+  .get(org.company.id).at
+
+check('and the organization is warned', stamp() !== null, String(stamp()))
+
+const warnedAt = stamp()
+const again2 = await addCvs(id, [{ name: 'low-again.pdf', bytes: await cv('Lowwater', 710) }])
+check('a further delivery below the mark is still accepted', again2.status === 201,
+  `HTTP ${again2.status}`)
+check('but does not warn a second time', stamp() === warnedAt, `${stamp()} vs ${warnedAt}`)
+
+const { creditTriages } = await import('../server/src/wallet.js')
+creditTriages({ companyId: org.company.id, quantity: 500, event: 'adjustment' })
+check('buying more arms the warning again', stamp() === null, String(stamp()))
+
 section('A failed upload does not take committed CVs with it')
 
 /*

@@ -1241,6 +1241,41 @@ node server/scripts/contact.mjs show <span class="c">&lt;id&gt;</span></pre>
         </table>
       </div>
 
+      <h3>Two settings for rolling Triage</h3>
+
+      <div class="compare-wrap">
+        <table class="compare">
+          <thead>
+            <tr>
+              <th scope="col">Setting</th>
+              <th scope="col">Default</th>
+              <th scope="col">What it changes</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th scope="row"><code>TRIAGE_ADD_CVS</code></th>
+              <td>on, except in production</td>
+              <td>Whether CVs may be added to a Triage that is already running. Off in
+                production until the cost of a CV has been measured and the effort setting
+                chosen — a second delivery is a second charge, and the button should not be in
+                front of paying recruiters before we know what each press costs. Turning it on
+                is one variable and a restart; no deploy, and nothing about the stored data
+                changes either way.</td>
+            </tr>
+            <tr>
+              <th scope="row"><code>TRIAGE_LOW_WATER</code></th>
+              <td>50</td>
+              <td>How many CVs of capacity count as running low. Crossing it downwards emails
+                the organisation's administrator, once, and buying more arms the warning again.
+                Set it to 0 to switch the warning off. The old behaviour — one email at exactly
+                zero — could be stepped straight past, because a delivery bigger than the
+                balance is refused rather than partially spent.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
       <h3>What changed for Triage</h3>
 
       <p>
@@ -1255,6 +1290,23 @@ node server/scripts/contact.mjs show <span class="c">&lt;id&gt;</span></pre>
         while it is already running: each delivery is parsed and ranked on its own, and ranks
         already given out never move. The queue also looks for work every few seconds
         (<code>TRIAGE_WAKE_MS</code>), so analysis finishes whether or not a browser is open.
+      </p>
+      <p>
+        <strong>Each delivery is charged on its own.</strong> A session used to be charged once,
+        at launch. Now the charge belongs to the delivery — one ledger line per pile, naming the
+        session and the delivery it paid for — and a file that turns out to be unreadable is
+        refunded against its own delivery rather than against a total that might have been spent
+        months earlier. A recruiter who is short of capacity is refused before anything is
+        written, and the CVs come back rather than sitting half-added.
+      </p>
+      <p>
+        A candidate who applies twice is <strong>one person</strong>. The email decides: same
+        mailbox, newest CV wins, and the older one stops appearing in the results. Both were
+        charged, because both were read. A CV with no readable email is always a new person.
+      </p>
+      <p>
+        An analysis that failed can be <strong>retried for nothing</strong>. Those CVs were paid
+        for when their delivery arrived, so the retry finishes work that was already bought.
       </p>
       <p>
         A recruiter still sees the first fifty analysed immediately and twenty-five more each time
@@ -1413,7 +1465,8 @@ node server/scripts/contact.mjs show <span class="c">&lt;id&gt;</span></pre>
         <span>test:portal</span><span>test:landing</span><span>test:pricing</span>
         <span>test:usage</span><span>test:export</span><span>test:folders</span>
         <span>test:workspace</span><span>test:shared-folders</span><span>test:reveal</span>
-        <span>test:triage</span><span>test:triage-funnel</span><span>test:triage-capacity</span><span>test:triage-skip</span>
+        <span>test:triage</span><span>test:triage-funnel</span><span>test:triage-capacity</span>
+        <span>test:triage-charge</span><span>test:triage-skip</span>
         <span>test:cost</span><span>test:explain</span><span>test:triage-drop</span>
         <span>test:name-case</span><span>test:jd-image</span><span>test:paste-image</span>
         <span>test:score-fairness</span><span>test:criterion-scoring</span><span>test:analysis-depth</span>

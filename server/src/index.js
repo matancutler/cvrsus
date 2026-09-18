@@ -359,6 +359,7 @@ import {
   setSeatPlan,
   grantComplimentaryReveals,
   grantComplimentaryTriage,
+  attributeTriageCharges,
   migrateExistingOrganizations,
   quoteSeatPlan,
   allocationRemaining,
@@ -8049,6 +8050,13 @@ app.listen(PORT, async () => {
   }
   if (migrated.triaged > 0) {
     console.log(`  granted complimentary Triage capacity to ${migrated.triaged} organization(s)`)
+  }
+
+  /* Charges made before the delivery carried them. Idempotent, additive, and
+     it moves no money — see attributeTriageCharges. */
+  const attributed = attributeTriageCharges()
+  if (attributed > 0) {
+    console.log(`  attributed ${attributed} Triage charge(s) to the delivery they paid for`)
   }
 
   await runCheckinSweep().catch((error) => {

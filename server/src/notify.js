@@ -832,6 +832,30 @@ export async function sendTriageEmptyEmail({ to, name }) {
   })
 }
 
+/**
+ * Triage capacity is running low — sent once on the way down, not at zero.
+ *
+ * The empty email above arrives when there is nothing left to spend, which is
+ * to say after the recruiter has already been stopped. That was survivable
+ * when a Triage was one pile charged once; a rolling session takes deliveries
+ * for weeks, and finding out mid-week that the next drop cannot be added is a
+ * worse moment to learn it than any.
+ */
+export async function sendTriageLowEmail({ to, name, remaining }) {
+  return deliver({
+    to,
+    subject: 'Your Triage CVs are running low',
+    lines: [
+      `Hi ${name ?? 'there'},`,
+      `Your Cursus account has ${remaining} Triage CV${remaining === 1 ? '' : 's'} left.`,
+      'Adding CVs to a Triage that is already running draws on the same balance, '
+      + 'so a session in progress will stop taking new CVs once it runs out.',
+      `Buy Triage CVs: ${APP_URL}/hr?billing=triage`,
+      '— Cursus',
+    ],
+  })
+}
+
 /** 9 — a month's notice before the seat subscription renews or lapses. */
 export async function sendSeatExpiryEmail({ to, name, expiryDate }) {
   return deliver({
