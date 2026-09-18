@@ -339,6 +339,137 @@ const missing = await fetch(`${BASE}/api/hr/triage/${id}/applicants/99999999`, {
 })
 check('a CV that is not there answers 404', missing.status === 404, `HTTP ${missing.status}`)
 
+section('Deleting the top of the ranking does not strand the next delivery')
+
+/*
+ * The worst failure this phase could have shipped, and the review found it.
+ *
+ * Ranks were handed out above the highest SURVIVING rank. Delete the top of
+ * a pile and that number drops, while analysis_frontier — which only ever
+ * moves forward — does not. The next delivery was then numbered underneath
+ * the cursor: parsed, ranked, charged, and permanently invisible, with
+ * nothing in the product able to name it. Ranks are now issued above the
+ * high-water mark, which includes the frontier.
+ */
+const strandDraft = await json(await fetch(`${BASE}/api/hr/triage`, {
+  method: 'POST', headers: H(org.token), body: '{}',
+}))
+const strandId = strandDraft.triage.id
+madeUp.push(strandId)
+
+await json(await fetch(`${BASE}/api/hr/triage/${strandId}`, {
+  method: 'PATCH', headers: H(org.token),
+  body: JSON.stringify({ jd: JD, title: `${MARK} strand` }),
+}))
+
+const firstPile = new FormData()
+for (let i = 0; i < 5; i += 1) {
+  firstPile.append('cvs', new Blob([await cv(600 + i)], { type: 'application/pdf' }), `s-${i}.pdf`)
+}
+await json(await fetch(`${BASE}/api/hr/triage/${strandId}/files`, {
+  method: 'POST', headers: { authorization: `Bearer ${org.token}` }, body: firstPile,
+}))
+await fetch(`${BASE}/api/hr/triage/${strandId}/launch`, {
+  method: 'POST', headers: H(org.token), body: '{}',
+})
+
+await settle(strandId)
+const frontierWas = db.prepare(`SELECT analysis_frontier AS n FROM triages WHERE id = ?`)
+  .get(strandId).n
+check('the first pile is analysed to the end', frontierWas === 5, `frontier ${frontierWas}`)
+
+/* The two highest ranks go — an erasure request, or the sweep. */
+const top = db.prepare(`
+  SELECT id FROM triage_applicants WHERE triage_id = ? AND prelim_rank IS NOT NULL
+  ORDER BY prelim_rank DESC LIMIT 2
+`).all(strandId)
+
+for (const row of top) {
+  // eslint-disable-next-line no-await-in-loop
+  await fetch(`${BASE}/api/hr/triage/${strandId}/applicants/${row.id}`, {
+    method: 'DELETE', headers: H(org.token),
+  })
+}
+
+check('the highest surviving rank is now below the frontier',
+  db.prepare(`SELECT COALESCE(MAX(prelim_rank), 0) AS n FROM triage_applicants WHERE triage_id = ?`)
+    .get(strandId).n < frontierWas,
+  'which is the state that used to strand the next delivery')
+
+const late = new FormData()
+for (let i = 0; i < 3; i += 1) {
+  late.append('cvs', new Blob([await cv(700 + i)], { type: 'application/pdf' }), `late-${i}.pdf`)
+}
+const landed = await fetch(`${BASE}/api/hr/triage/${strandId}/cvs`, {
+  method: 'POST', headers: { authorization: `Bearer ${org.token}` }, body: late,
+})
+check('a new delivery is accepted', landed.status === 201, `HTTP ${landed.status}`)
+
+await settle(strandId)
+
+const strandedRows = db.prepare(`
+  SELECT COUNT(*) AS n FROM triage_applicants
+  WHERE triage_id = ? AND parse_status = 'parsed' AND deep_status <> 'scored'
+`).get(strandId).n
+check('every CV in it is analysed', strandedRows === 0, `${strandedRows} left unanalysed`)
+
+check('and their ranks were issued above the frontier',
+  db.prepare(`
+    SELECT COALESCE(MIN(prelim_rank), 0) AS n FROM triage_applicants
+    WHERE triage_id = ? AND analysed_at > (
+      SELECT MAX(analysed_at) FROM triage_applicants WHERE triage_id = ? AND prelim_rank <= ?
+    )
+  `).get(strandId, strandId, frontierWas).n > frontierWas
+  || db.prepare(`SELECT analysis_frontier AS n FROM triages WHERE id = ?`).get(strandId).n >= 8,
+  `frontier ${db.prepare(`SELECT analysis_frontier AS n FROM triages WHERE id = ?`).get(strandId).n}`)
+
+section('Deleting the last unscored CV settles the session')
+
+const settleDraft = db.prepare(`
+  SELECT id FROM triage_applicants WHERE triage_id = ? ORDER BY id LIMIT 1
+`).get(strandId)
+
+db.prepare(`UPDATE triage_applicants SET deep_status = 'failed' WHERE id = ?`).run(settleDraft.id)
+db.prepare(`UPDATE triages SET status = 'ready' WHERE id = ?`).run(strandId)
+
+await fetch(`${BASE}/api/hr/triage/${strandId}/applicants/${settleDraft.id}`, {
+  method: 'DELETE', headers: H(org.token),
+})
+
+check('the session notices it has nothing left to do',
+  db.prepare(`SELECT status AS s FROM triages WHERE id = ?`).get(strandId).s === 'completed',
+  db.prepare(`SELECT status AS s FROM triages WHERE id = ?`).get(strandId).s)
+
+section('Pausing a closed session keeps the date it promised')
+
+const keepId = fakeSession({
+  status: 'completed',
+  lifecycle: 'closed',
+  closedAt: new Date().toISOString(),
+  purgeAfter: new Date(Date.now() + 90 * DAY).toISOString(),
+})
+const promised = db.prepare(`SELECT purge_after AS at FROM triages WHERE id = ?`).get(keepId).at
+
+await fetch(`${BASE}/api/hr/triage/${keepId}/lifecycle`, {
+  method: 'POST', headers: H(org.token), body: JSON.stringify({ state: 'paused' }),
+})
+check('pausing does not wipe it',
+  db.prepare(`SELECT purge_after AS at FROM triages WHERE id = ?`).get(keepId).at === promised,
+  String(db.prepare(`SELECT purge_after AS at FROM triages WHERE id = ?`).get(keepId).at))
+
+await fetch(`${BASE}/api/hr/triage/${keepId}/lifecycle`, {
+  method: 'POST', headers: H(org.token), body: JSON.stringify({ state: 'open' }),
+})
+check('reopening does', db.prepare(`SELECT purge_after AS at FROM triages WHERE id = ?`).get(keepId).at === null)
+
+section('A failed session is not reopened into limbo')
+
+const brokenId = fakeSession({ status: 'failed', lifecycle: 'closed' })
+const revive = await fetch(`${BASE}/api/hr/triage/${brokenId}/lifecycle`, {
+  method: 'POST', headers: H(org.token), body: JSON.stringify({ state: 'open' }),
+})
+check('it is refused', revive.status === 409, `HTTP ${revive.status}`)
+
 // ----------------------------------------------------------------- the cap ---
 
 section('An organization cannot leave unlimited sessions open')

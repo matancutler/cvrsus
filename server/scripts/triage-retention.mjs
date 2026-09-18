@@ -91,8 +91,9 @@ console.log('')
 
 /* Counters on the sessions that lost rows, so the workspace does not go on
    reporting CVs that are gone. */
-const { recount } = await import('../src/triage.js')
-for (const id of result.sessions) recount(id)
 
+/* runRetention recounts for us — it used to be done here and not in the daily
+   sweep, which meant turning the flag on left every affected session reporting
+   CVs that no longer existed. */
 console.log(`Recounted ${result.sessions.length} session(s).`)
 console.log('')

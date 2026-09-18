@@ -661,6 +661,20 @@ export function setLifecycle({ triageId, to }) {
     return { ok: false, reason: 'not_started', from }
   }
 
+  /*
+   * A failed session cannot be opened.
+   *
+   * Everything downstream refuses it anyway — adding CVs answers "start a new
+   * one", startProcessing skips it, settleStatus will not move it — so
+   * "opening" one produced a session that reads as a live shortlist, holds a
+   * slot against the cap, and can do nothing at all. Reviving a failed
+   * session is a real thing to want and it is not this: it needs the error
+   * cleared and the work requeued, which is its own job.
+   */
+  if (row.status === 'failed' && to === 'open') {
+    return { ok: false, reason: 'failed', from }
+  }
+
   if (from === to) return { ok: true, changed: false, from, to }
 
   const stamp = now()
@@ -679,22 +693,114 @@ export function setLifecycle({ triageId, to }) {
     return { ok: true, changed: true, from, to, purgeAfter: purge }
   }
 
-  db.prepare(`
-    UPDATE triages SET lifecycle = ?, closed_at = NULL, purge_after = NULL, updated_at = ?
-    WHERE id = ?
-  `).run(to, stamp, triageId)
+  /*
+   * Only REOPENING clears the date. Pausing does not.
+   *
+   * They were cleared together, on reasoning that is true of one and not the
+   * other: a reopened session is in use again, so deleting its CVs on a date
+   * set by a decision that has been reversed would be indefensible. A paused
+   * session has not been reversed — it is still finished with, it just is not
+   * being worked on — and wiping its date silently held the CVs past the day
+   * the product had already shown the recruiter. Worse, pausing is outside
+   * the open-session cap, so "close everything, then pause it" was a
+   * supported way to hold unlimited CVs on disk for ever.
+   */
+  if (to === 'open') {
+    db.prepare(`
+      UPDATE triages SET lifecycle = 'open', closed_at = NULL, purge_after = NULL, updated_at = ?
+      WHERE id = ?
+    `).run(stamp, triageId)
+    return { ok: true, changed: true, from, to, purgeAfter: null }
+  }
 
-  return { ok: true, changed: true, from, to, purgeAfter: null }
+  const kept = db.prepare(`SELECT purge_after AS at FROM triages WHERE id = ?`).get(triageId)?.at
+  db.prepare(`UPDATE triages SET lifecycle = ?, updated_at = ? WHERE id = ?`)
+    .run(to, stamp, triageId)
+
+  return { ok: true, changed: true, from, to, purgeAfter: kept ?? null }
 }
 
 /** How many sessions this organization has open. The cap in 4.7 counts these. */
 export function openSessions(companyId) {
+  /*
+   * Launched sessions only.
+   *
+   * Drafts write lifecycle 'open' like everything else, and counting them
+   * made the cap block on rows the product does not show: the history lists
+   * only what was launched, and setLifecycle refuses to close a draft — so
+   * the error's advice, "close one you have finished with", was impossible to
+   * follow for the very rows inflating the number. A company with five
+   * recruiters each holding an unfinished draft silently lost five slots.
+   */
   return db.prepare(`
     SELECT COUNT(*) AS n FROM triages
-    WHERE company_id = ?
+    WHERE company_id = ? AND ledger_id IS NOT NULL
       AND COALESCE(lifecycle,
             CASE WHEN status IN ('completed', 'failed') THEN 'closed' ELSE 'open' END) = 'open'
   `).get(companyId).n
+}
+
+/**
+ * The calls a recruiter can make on an applicant.
+ *
+ * Deliberately three and deliberately not the folder vocabulary, which mixes
+ * derived pipeline stages with decisions. Inside a Triage there is no
+ * pipeline yet — nobody has been revealed or messaged — so the only honest
+ * states are the ones a person chooses.
+ */
+export const APPLICANT_STATUSES = [
+  { key: 'shortlisted', label: 'Shortlisted', hint: 'Taking them forward' },
+  { key: 'maybe', label: 'Maybe', hint: 'Worth a second look' },
+  { key: 'rejected', label: 'Not proceeding', hint: 'Hidden from the list by default' },
+]
+
+const APPLICANT_STATUS_KEYS = new Set(APPLICANT_STATUSES.map((row) => row.key))
+
+/** Sets or clears one applicant's status. '' clears it. */
+export function setApplicantStatus({ triageId, applicantId, status }) {
+  const value = String(status ?? '').trim()
+  if (value !== '' && !APPLICANT_STATUS_KEYS.has(value)) return { ok: false, reason: 'unknown' }
+
+  const changed = db.prepare(`
+    UPDATE triage_applicants SET recruiter_status = ? WHERE id = ? AND triage_id = ?
+  `).run(value === '' ? null : value, applicantId, triageId)
+
+  if (changed.changes === 0) return { ok: false, reason: 'not_found' }
+  return { ok: true, status: value === '' ? null : value }
+}
+
+/**
+ * What has arrived since this recruiter last looked at this session.
+ *
+ * Per recruiter, not per session: a colleague opening it must not mark your
+ * arrivals as read. Counted from analysed_at rather than from the upload,
+ * because a CV that is in the pile but has no score yet is not something to
+ * come back for.
+ */
+export function newSince({ triageId, recruiterId }) {
+  const seen = db.prepare(
+    `SELECT last_seen_at AS at FROM triage_views WHERE triage_id = ? AND recruiter_id = ?`,
+  ).get(triageId, recruiterId)?.at ?? null
+
+  /* Never looked: everything is new, but saying "327 new" to somebody opening
+     a session for the first time is noise. Their first look sets the mark. */
+  if (!seen) return { since: null, count: 0, first: true }
+
+  const count = db.prepare(`
+    SELECT COUNT(*) AS n FROM triage_applicants
+    WHERE triage_id = ? AND deep_status = 'scored' AND parse_status <> 'duplicate'
+      AND analysed_at > ?
+  `).get(triageId, seen).n
+
+  return { since: seen, count, first: false }
+}
+
+/** Stamps this recruiter's place in this session. */
+export function markSeen({ triageId, recruiterId }) {
+  db.prepare(`
+    INSERT INTO triage_views (triage_id, recruiter_id, last_seen_at) VALUES (?, ?, ?)
+    ON CONFLICT(triage_id, recruiter_id) DO UPDATE SET last_seen_at = excluded.last_seen_at
+  `).run(triageId, recruiterId, now())
 }
 
 /** Every delivery into a session, oldest first — the drop history. */
@@ -781,6 +887,8 @@ export function removeApplicant({ triageId, applicantId }) {
 
   if (!row) return null
 
+  let promoted = null
+
   db.prepare(`DELETE FROM triage_applicants WHERE id = ?`).run(row.id)
   if (row.stored_name) {
     fs.promises.unlink(path.join(UPLOAD_DIR, row.stored_name)).catch(() => {})
@@ -807,6 +915,7 @@ export function removeApplicant({ triageId, applicantId }) {
       db.prepare(`
         UPDATE triage_applicants SET parse_status = 'parsed', duplicate_of = NULL WHERE id = ?
       `).run(heir.id)
+      promoted = heir.id
     }
   }
 
@@ -816,7 +925,24 @@ export function removeApplicant({ triageId, applicantId }) {
     .run(row.id)
 
   recount(triageId)
-  return { id: row.id }
+
+  /*
+   * The caller has two things left to do and this cannot do either.
+   *
+   * `settleStatus` lives in the queue, which imports this file — so calling
+   * it here would be a cycle. And a promoted heir has no rank: it was a
+   * duplicate, so the ranking pass skipped it, and nothing will ever select
+   * an unranked row. Both are reported for the route to act on rather than
+   * left for the next delivery, which may never come.
+   *
+   * Getting this wrong is quiet in both directions. Without the settle, a
+   * session that just lost its last unscored CV sits at 'ready' for ever
+   * reporting work that does not exist — and a legacy row in that state
+   * reads as open and holds a slot against the cap. Without the ranking, the
+   * heir stays invisible, which is the exact failure promoting it was meant
+   * to prevent.
+   */
+  return { id: row.id, promoted, needsRanking: promoted !== null }
 }
 
 /** Recomputes the denormalised counters from the rows they summarise. */
@@ -992,7 +1118,9 @@ export function launchReadiness({ triage, capacity }) {
  * universe, so a 74 here means what a 74 there means. That shared meaning is
  * the reason Section 4 forbids inventing a separate Triage percentage.
  */
-export function results({ triageId, offset = 0, limit = TRIAGE.pageSize }) {
+export function results({
+  triageId, offset = 0, limit = TRIAGE.pageSize, includeRejected = false, since = null,
+}) {
   /*
    * The score shown is the candidate's own fit, and nothing else.
    *
@@ -1023,9 +1151,25 @@ export function results({ triageId, offset = 0, limit = TRIAGE.pageSize }) {
    * recruiter is being shown, because the newer CV is the current version of
    * that person. See resolveDuplicatePeople.
    */
+  /*
+   * Q8: a rejected applicant stays in the ranking and is hidden, rather than
+   * removed. "We looked and said no" is a fact worth keeping — it stops a
+   * colleague re-reading the same CV, and it is the only record that the
+   * decision was made at all.
+   */
+  const hide = includeRejected ? '' : ` AND COALESCE(recruiter_status, '') <> 'rejected'`
+
   const total = db.prepare(`
     SELECT COUNT(*) AS n FROM triage_applicants
+    WHERE triage_id = ? AND deep_status = 'scored' AND parse_status <> 'duplicate'${hide}
+  `).get(triageId).n
+
+  /* Counted whether or not they are shown, so the button that reveals them
+     can say how many there are. */
+  const rejected = db.prepare(`
+    SELECT COUNT(*) AS n FROM triage_applicants
     WHERE triage_id = ? AND deep_status = 'scored' AND parse_status <> 'duplicate'
+      AND recruiter_status = 'rejected'
   `).get(triageId).n
 
   /*
@@ -1039,18 +1183,25 @@ export function results({ triageId, offset = 0, limit = TRIAGE.pageSize }) {
    */
   const page = db.prepare(`
     SELECT id, display_name, email, phone, location, file_name, file_size,
-           reviewed_at, absolute_fit, criteria, explanation, analysis_source, drop_id, created_at
+           reviewed_at, absolute_fit, criteria, explanation, analysis_source, drop_id,
+           recruiter_status, analysed_at, created_at
     FROM triage_applicants
-    WHERE triage_id = ? AND deep_status = 'scored' AND parse_status <> 'duplicate'
+    WHERE triage_id = ? AND deep_status = 'scored' AND parse_status <> 'duplicate'${hide}
     ORDER BY absolute_fit DESC, display_name ASC, id ASC
     LIMIT ? OFFSET ?
   `).all(triageId, limit, offset)
 
   return {
-    results: page.map((row, index) => applicantView(
-      row, Math.round(row.absolute_fit ?? 0), offset + index + 1,
-    )),
+    results: page.map((row, index) => ({
+      ...applicantView(row, Math.round(row.absolute_fit ?? 0), offset + index + 1),
+      status: row.recruiter_status ?? null,
+      /* Marked rather than filtered: a new arrival that ranks 40th belongs at
+         40, not at the top of a separate list. The badge is what draws the
+         eye; the position is still the truth about the candidate. */
+      isNew: Boolean(since && row.analysed_at && row.analysed_at > since),
+    })),
     total,
+    rejected,
     offset,
     /* How many the next page will hold, so the button can say a true number
        rather than promising 25 and delivering 6. Same reasoning as hasMore
@@ -1236,6 +1387,7 @@ export function deleteTriage({ companyId, id }) {
     db.prepare(`DELETE FROM triage_batches WHERE triage_id = ?`).run(id)
     db.prepare(`DELETE FROM triage_cost_events WHERE triage_id = ?`).run(id)
     db.prepare(`DELETE FROM triage_drops WHERE triage_id = ?`).run(id)
+    db.prepare(`DELETE FROM triage_views WHERE triage_id = ?`).run(id)
     db.prepare(`DELETE FROM triages WHERE id = ?`).run(id)
   })()
 

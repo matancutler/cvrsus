@@ -709,9 +709,23 @@ async function runPreliminary(triage, batch) {
 
   /* Where this delivery starts in the rank space. Zero for the first one, and
      the end of the previous delivery for every one after it. */
-  const offset = db.prepare(
-    `SELECT COALESCE(MAX(prelim_rank), 0) AS at FROM triage_applicants WHERE triage_id = ?`,
-  ).get(triage.id).at
+  /*
+   * The high-water mark, not the highest surviving rank.
+   *
+   * Ranks are handed out above everything that has ever been handed out, and
+   * the frontier is part of "ever": it only moves forward, so a rank issued
+   * below it is a rank nothing will ever select. Deleting CVs is what makes
+   * these two numbers differ — remove the top ten of a hundred and MAX drops
+   * to 90 while the frontier stays at 100, so the next delivery would be
+   * numbered 91..95, land under the cursor, and never be analysed. Paid for,
+   * parsed, ranked, invisible, with nothing in the product able to name them.
+   */
+  const offset = db.prepare(`
+    SELECT MAX(
+      COALESCE((SELECT MAX(prelim_rank) FROM triage_applicants WHERE triage_id = ?), 0),
+      COALESCE((SELECT analysis_frontier FROM triages WHERE id = ?), 0)
+    ) AS at
+  `).get(triage.id, triage.id).at
 
   const write = db.prepare(
     `UPDATE triage_applicants SET prelim_score = ?, prelim_rank = ? WHERE id = ?`,
@@ -737,10 +751,13 @@ async function runPreliminary(triage, batch) {
    * deciding from that would return here without ever queueing the analysis,
    * and the session would sit at "processing" with nothing behind it.
    *
-   * Ranks are dense, so the count of ranked rows is also the highest rank.
+   * The highest rank, not the count of ranked rows. Those were the same
+   * number while ranks were dense; deleting a CV makes the count drop while
+   * the numbering does not, and every batch sized from the count would then
+   * under-cover the top of the next delivery.
    */
   const rankedTotal = db.prepare(
-    `SELECT COUNT(*) AS n FROM triage_applicants WHERE triage_id = ? AND prelim_rank IS NOT NULL`,
+    `SELECT COALESCE(MAX(prelim_rank), 0) AS n FROM triage_applicants WHERE triage_id = ?`,
   ).get(triage.id).n
 
   if (rankedTotal === 0) {
@@ -1136,6 +1153,43 @@ async function analyseApplicant({ triage, row, criteria, requirements, useAi = t
     model: ai.model_version ?? MATCH_MODEL,
     usage: ai.usage ?? null,
   }
+}
+
+/**
+ * Recomputes a session's status after something outside the queue changed it.
+ *
+ * Deleting a CV is the case. settleStatus is otherwise only reached from
+ * inside a batch, so a session that lost its last unscored applicant had
+ * nothing left to run and nothing to notice — it sat at 'ready' for ever,
+ * reporting outstanding work that did not exist, and a legacy row in that
+ * state reads as open and holds a slot against the cap.
+ */
+export function resettle(triageId) {
+  settleStatus(triageId)
+}
+
+/**
+ * Gives a rank to anything parsed that has not got one.
+ *
+ * Reached when a CV is deleted and an older version of the same person is
+ * promoted back: that row was a duplicate, so the ranking pass skipped it,
+ * and an unranked row is one no batch can ever select. Enqueues the ordinary
+ * preliminary pass, which ranks exactly those rows and appends them above
+ * everything already handed out.
+ */
+export function rankPending(triageId) {
+  const waiting = db.prepare(`
+    SELECT COUNT(*) AS n FROM triage_applicants
+    WHERE triage_id = ? AND parse_status = 'parsed' AND prelim_rank IS NULL
+  `).get(triageId).n
+
+  if (waiting === 0) return 0
+
+  /* Keyed off the count so a second promotion enqueues a second pass rather
+     than colliding with the first on the unique index. */
+  enqueue({ triageId, kind: 'preliminary', keySuffix: `promote${waiting}` })
+  pump()
+  return waiting
 }
 
 /** The requirement-by-requirement view, in the shape Search already renders. */

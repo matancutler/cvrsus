@@ -143,6 +143,7 @@ import db, {
   contactIsExempt,
 } from './db.js'
 import {
+  APPLICANT_STATUSES,
   TRIAGE,
   addCvsToSession,
   addFile,
@@ -162,8 +163,11 @@ import {
   failedFiles,
   getTriage,
   listDrops,
+  markSeen,
+  newSince,
   openSessions,
   removeApplicant,
+  setApplicantStatus,
   setLifecycle,
   launchReadiness,
   latestDraft,
@@ -181,7 +185,9 @@ import {
 import {
   analysisLimit,
   queueDepth,
+  rankPending,
   requeueFailedAnalyses,
+  resettle,
   requestNextTranche,
   resumeQueue,
   startQueueWaker,
@@ -7353,6 +7359,14 @@ app.post('/api/hr/triage/:id/lifecycle', recruiterOnly, (req, res, next) => {
       if (moved.reason === 'not_started') {
         throw new HttpError(409, 'This Triage has not started yet. Delete it if you do not want it.')
       }
+      if (moved.reason === 'failed') {
+        /* Opening one produces a session that reads as live and can do
+           nothing: adding CVs refuses it, the queue skips it, and its status
+           can never move again. Reviving a failed Triage is a real thing to
+           want and it is not this. */
+        throw new HttpError(409,
+          'This Triage could not be processed, so it cannot be reopened. Start a new one for these CVs.')
+      }
       throw new HttpError(404, 'That Triage does not exist.')
     }
 
@@ -7369,6 +7383,43 @@ app.post('/api/hr/triage/:id/lifecycle', recruiterOnly, (req, res, next) => {
       to: moved.to,
       purgeAfter: moved.purgeAfter ?? null,
     })
+  } catch (error) {
+    next(error)
+  }
+})
+
+/**
+ * The recruiter's own call on one applicant.
+ *
+ * Any seat, unlike deleting: this is a note about a decision, it is visible
+ * to the whole organization by design — two colleagues working the same pile
+ * should not each re-read the same CV — and it is changed by setting it
+ * again.
+ *
+ * Q8 decides what 'rejected' does: the applicant stays in the ranking and is
+ * hidden from the list by default. Removing them would destroy the one record
+ * that the decision was made, and would let the same CV come back around to a
+ * colleague as though nobody had looked at it.
+ */
+app.patch('/api/hr/triage/:id/applicants/:applicantId/status', recruiterOnly, (req, res, next) => {
+  try {
+    const companyId = companyIdFor(req.session.id)
+    const { triage, error } = mustOwn({ companyId, id: req.params.id })
+    if (error) throw new HttpError(404, 'That Triage does not exist.')
+
+    const set = setApplicantStatus({
+      triageId: triage.id,
+      applicantId: Number(req.params.applicantId),
+      status: req.body?.status ?? '',
+    })
+
+    if (!set.ok) {
+      throw set.reason === 'unknown'
+        ? new HttpError(400, 'That is not a status an applicant can have.')
+        : new HttpError(404, 'That CV is not in this Triage.')
+    }
+
+    res.json({ status: set.status, statuses: APPLICANT_STATUSES })
   } catch (error) {
     next(error)
   }
@@ -7410,6 +7461,13 @@ app.delete('/api/hr/triage/:id/applicants/:applicantId', recruiterOnly, (req, re
     })
     if (!removed) throw new HttpError(404, 'That CV is not in this Triage.')
 
+    /* Two things removeApplicant cannot do for itself — see the note there.
+       An older CV promoted back into the running needs a rank before any
+       batch can reach it, and the session's own status has to be recomputed
+       now, because nothing else is going to run and notice. */
+    if (removed.needsRanking) rankPending(triage.id)
+    resettle(triage.id)
+
     track('triage_applicant_deleted', {
       actorType: 'recruiter', actorId: req.session.id,
       triageId: triage.id, applicantId: Number(req.params.applicantId),
@@ -7441,7 +7499,25 @@ app.get('/api/hr/triage/:id/results', recruiterOnly, (req, res, next) => {
     if (error) throw new HttpError(404, 'That Triage does not exist.')
 
     const offset = Math.max(0, parseNumber(req.query.offset) ?? 0)
-    const page = results({ triageId: triage.id, offset, limit: TRIAGE.pageSize })
+
+    /*
+     * Read before the page, because reading the page is what makes it old.
+     *
+     * The mark moves on the FIRST page only. A recruiter paging to the end of
+     * a long list is still on the same visit, and moving the mark on every
+     * page would mean arrivals during that visit were never announced.
+     */
+    const seen = newSince({ triageId: triage.id, recruiterId: req.session.id })
+
+    const page = results({
+      triageId: triage.id,
+      offset,
+      limit: TRIAGE.pageSize,
+      includeRejected: req.query.rejected === '1',
+      since: seen.since,
+    })
+
+    if (offset === 0) markSeen({ triageId: triage.id, recruiterId: req.session.id })
 
     /*
      * New work only while the session is open.
@@ -7498,6 +7574,10 @@ app.get('/api/hr/triage/:id/results', recruiterOnly, (req, res, next) => {
          fetched per row: a folder is shared, so a colleague's filing shows up
          here, and twenty-five rows would otherwise be twenty-five requests. */
       filed: triageFolderIndex(req.session.id),
+      /* What has landed since this recruiter last opened it, and the calls
+         they can make on a row. Q9 — an in-app notice, and no emails. */
+      newSince: { count: seen.count, since: seen.since, first: seen.first },
+      statuses: APPLICANT_STATUSES,
       /* Said once, here, for the same reason Search says it: a score that moves
          when more people are analysed looks like instability unless the
          recruiter is told the scale moved rather than the candidate. */

@@ -945,6 +945,7 @@ export const SCHEMA = `
     scoring_version TEXT,
     analysis_source TEXT,
     analysed_at    TEXT,
+    recruiter_status TEXT,
     reviewed_at    TEXT,
     created_at     TEXT NOT NULL
   );
@@ -978,6 +979,16 @@ export const SCHEMA = `
    * existed are adopted into a delivery of their own on the first upload
    * afterwards — see ensureLaunchDrop.
    */
+  /* Where each recruiter had got to, so "new since you looked" is per person
+     rather than per session. A colleague opening it does not mark your
+     arrivals as read. */
+  CREATE TABLE IF NOT EXISTS triage_views (
+    triage_id    INTEGER NOT NULL,
+    recruiter_id INTEGER NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    PRIMARY KEY (triage_id, recruiter_id)
+  );
+
   CREATE TABLE IF NOT EXISTS triage_drops (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     triage_id     INTEGER NOT NULL,
@@ -1348,6 +1359,11 @@ export const ADDED_COLUMNS = {
    */
   triage_applicants: [
     ['drop_id', 'INTEGER'],
+    /* The recruiter's own call on this person, as opposed to anything the
+       model decided. Q8: rejected applicants stay in the ranking and are
+       hidden by default rather than removed, because "we looked and said no"
+       is a fact worth keeping. */
+    ['recruiter_status', 'TEXT'],
   ],
   triage_batches: [
     ['drop_id', 'INTEGER'],
