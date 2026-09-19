@@ -254,15 +254,39 @@ export function blankTriage() {
  * what was launched and paid for. An unfinished draft is not lost — pressing
  * New reopens it (see latestDraft) — it just is not history.
  */
-export function listTriages(companyId) {
+export function listTriages(companyId, recruiterId = null) {
+  /*
+   * Three things the rail could not say before, and each of them changes
+   * what a row means.
+   *
+   * What state it is in, because a closed session and a live one look
+   * identical in a list of titles. How much is in it, because "Payments
+   * Analyst" tells you nothing about whether it holds four CVs or four
+   * hundred. And whether anything has landed since YOU last looked — per
+   * recruiter, so a colleague opening it does not mark your arrivals as read.
+   *
+   * `lastActivityAt` is the most recent ANALYSIS, not updated_at. The worker
+   * writes updated_at three times per tranche, so ordering or labelling by it
+   * would make a colleague's 300-CV run look like activity every few seconds
+   * while telling you nothing about when a human last got something.
+   */
   return db.prepare(`
     SELECT t.*,
-           TRIM(COALESCE(r.first_name, '') || ' ' || COALESCE(r.last_name, '')) AS author
+           TRIM(COALESCE(r.first_name, '') || ' ' || COALESCE(r.last_name, '')) AS author,
+           (SELECT MAX(analysed_at) FROM triage_applicants a WHERE a.triage_id = t.id)
+             AS last_activity_at,
+           (SELECT COUNT(*) FROM triage_applicants a
+             WHERE a.triage_id = t.id AND a.deep_status = 'scored'
+               AND a.parse_status <> 'duplicate'
+               AND a.analysed_at > COALESCE(
+                 (SELECT v.last_seen_at FROM triage_views v
+                   WHERE v.triage_id = t.id AND v.recruiter_id = ?), a.analysed_at))
+             AS unread
     FROM triages t
     LEFT JOIN recruiters r ON r.id = t.recruiter_id
     WHERE t.company_id = ? AND t.ledger_id IS NOT NULL
     ORDER BY t.created_at DESC
-  `).all(companyId).map(triageView)
+  `).all(recruiterId ?? -1, companyId).map(triageView)
 }
 
 /*
@@ -390,6 +414,12 @@ function triageView(row) {
        a promise made about other people's data and the recruiter is the one
        who has to keep it. */
     purgeAfter: row.purge_after ?? null,
+    /* The last time a human got something, not the last time the worker
+       touched the row. See the note on listTriages. */
+    lastActivityAt: row.last_activity_at ?? null,
+    /* New since THIS recruiter last looked. Zero unless the list was asked
+       on somebody's behalf. */
+    unread: row.unread ?? 0,
     launchedAt: row.launched_at,
     completedAt: row.completed_at,
     /* What this workspace actually cost, net of anything handed back for files

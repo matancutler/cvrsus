@@ -6474,7 +6474,7 @@ app.get('/api/hr/triages', recruiterOnly, (req, res, next) => {
   try {
     const companyId = companyIdFor(req.session.id)
     res.json({
-      triages: listTriages(companyId),
+      triages: listTriages(companyId, req.session.id),
       /* The organization's remaining CV capacity. Reported as `balance`; there
          is no such thing as a number of Triages remaining. */
       balance: triageBalance(companyId),
@@ -7679,7 +7679,7 @@ app.delete('/api/hr/triage/:id', recruiterOnly, async (req, res, next) => {
     )
 
     track('triage_deleted', { actorType: 'recruiter', actorId: req.session.id, triageId: triage.id })
-    res.json({ deleted: true, triages: listTriages(companyId) })
+    res.json({ deleted: true, triages: listTriages(companyId, req.session.id) })
   } catch (error) {
     next(error)
   }

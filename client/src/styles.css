@@ -10543,3 +10543,39 @@ html:has(.workspace-shell) { scrollbar-gutter: auto; }
 
 .triage-arrived { display: flex; gap: 0.5rem; align-items: baseline; flex-wrap: wrap; }
 .triage-rejected-toggle { margin: 0.75rem 0 0; }
+
+/* --------------------------------------------- what a Triage row says now --
+   A list of titles cannot tell a closed report from a live shortlist, or a
+   pile of four from a pile of four hundred. */
+.chat-item-unread {
+  display: inline-block;
+  margin-left: 0.4rem;
+  padding: 0 0.35rem;
+  min-width: 1.15rem;
+  border-radius: 999px;
+  background: var(--accent, #7a2e2a);
+  color: #fff;
+  font-size: 0.65rem;
+  font-weight: 700;
+  line-height: 1.15rem;
+  text-align: center;
+  vertical-align: middle;
+}
+.chat-item-meta {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  flex-wrap: wrap;
+  font-size: 0.72rem;
+  color: var(--muted);
+  margin-top: 0.15rem;
+}
+.chat-item-state {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.62rem;
+  font-weight: 700;
+}
+.chat-item-state-closed { color: var(--muted); }
+.chat-item-state-paused { color: var(--warn, #8a5a12); }
+.chat-item-when { margin-left: auto; }

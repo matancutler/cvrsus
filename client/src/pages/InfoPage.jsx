@@ -339,6 +339,11 @@ function AboutPage() {
                 scored and ranked against the role. It's the same matching engine you see in
                 search, pointed at your own inbox.
               </p>
+              <p>
+                A Triage stays open while the role is. Add more CVs as they arrive and they join
+                the ranking in their place; a score already given never changes. Up to 500 CVs in
+                one Triage, and you pay per CV, each time you add some.
+              </p>
             </div>
           </div>
 

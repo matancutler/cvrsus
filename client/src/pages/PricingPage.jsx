@@ -245,6 +245,17 @@ export default function PricingPage() {
           reveals that open a candidate's contact details, the seats their colleagues sit in, and
           the Triage capacity that sorts the applicants they have already received.
         </p>
+        <p className="pricing-lead">
+          {/*
+            Said before the checkout rather than discovered at it. A Triage
+            can now be added to, which means it can be charged more than once
+            — and a recruiter who learns that after the second delivery has
+            been billed has been surprised by us, not by the product.
+          */}
+          Triage capacity is counted in CVs and does not expire. You are charged one CV of
+          capacity for each CV you submit, every time you add some to a Triage — a Triage stays
+          open and takes more as applications arrive. One Triage holds up to 500 CVs.
+        </p>
 
         {/*
           The same segmented control as the landing page's role switch, because

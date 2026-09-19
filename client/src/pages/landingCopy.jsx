@@ -197,6 +197,17 @@ export function RecruiterPitch({ onCta, onSwitchSide }) {
           description and the CVs you received, and read them back ranked against the role, instead
           of opening them one at a time.
         </p>
+        <p>
+          {/*
+            Rolling is the part worth saying out loud on the landing page,
+            because it is the difference between a report and a place to work.
+            The old sentence described a single upload, which is the thing
+            recruiters said they could not use: applications arrive for weeks.
+          */}
+          Applications keep arriving, so a Triage stays open. Add more CVs to one that is already
+          running and they are read, ranked and slotted into the list in their place — scores
+          already given never move.
+        </p>
 
         <h2 className="landing-section">What you'll bring</h2>
         <ul className="landing-list">

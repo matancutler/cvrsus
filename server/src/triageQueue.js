@@ -37,6 +37,10 @@ import {
   isConfigured as aiConfigured, MATCH_MODEL, MODEL,
 } from './ai.js'
 import { recordCost, sumUsage } from './costs.js'
+/* The worker had no voice in the analytics at all: every Triage event came
+   from a route, so everything that happens after the recruiter closes the tab
+   — which is most of the work, and all of the failures — was invisible. */
+import { track } from './analytics.js'
 import { keywordsFrom, parseJobDescription, scoreCandidate } from './match.js'
 import { requirementsFrom, withinDailyCeiling } from './matching/analysis.js'
 import { deriveHighlights, needsReview, scoreAgainst } from './matching/score.js'
@@ -252,6 +256,15 @@ async function runBatch(batch) {
 
     if (permanent) {
       console.error(`  triage ${batch.triage_id}: ${batch.kind} batch failed permanently — ${error.message}`)
+
+      /* The failure the routes cannot see. Everything that goes wrong here
+         happens minutes after the recruiter left, so without this the only
+         record of it is a console line that scrolls away. */
+      track('triage_batch_failed', {
+        actorType: 'company', actorId: rawTriage(batch.triage_id)?.company_id ?? null,
+        triageId: batch.triage_id, kind: batch.kind, dropId: batch.drop_id ?? null,
+        reason: String(error.message).slice(0, 200),
+      })
 
       /*
        * A failure in the FIRST delivery fails the session and hands back what
@@ -1238,10 +1251,22 @@ function settleStatus(triageId) {
   const settled = row.outstanding === 0 && row.unread === 0
   const status = row.scored === 0 ? 'processing' : (settled ? 'completed' : 'ready')
 
+  const before = db.prepare(`SELECT status AS s, company_id AS c FROM triages WHERE id = ?`)
+    .get(triageId)
+
   db.prepare(`
     UPDATE triages SET status = ?, completed_at = CASE WHEN ? = 'completed' THEN COALESCE(completed_at, ?) ELSE completed_at END, updated_at = ?
     WHERE id = ? AND status NOT IN ('draft', 'failed')
   `).run(status, status, now(), now(), triageId)
+
+  /* On the edge, not on every settle: settleStatus runs after every applicant
+     in a batch, and an event per CV would drown the table it is written to. */
+  if (before && before.s !== status && status === 'completed') {
+    track('triage_completed', {
+      actorType: 'company', actorId: before.c,
+      triageId, scored: row.scored,
+    })
+  }
 }
 
 // ------------------------------------------------------------- the ladder ---
