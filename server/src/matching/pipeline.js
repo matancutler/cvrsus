@@ -21,7 +21,6 @@ import { MATCHING } from './config.js'
 import { analyseBatch, analysedUniverse, analysisModel } from './analysis.js'
 import { MATCH_MODEL } from '../ai.js'
 import { ensureJobMatchProfile, findOrCreateJob, jobConceptIds } from './jobProfile.js'
-import { normalizeUniverse } from './normalize.js'
 import { hardFilter, rankAndPool } from './retrieval.js'
 import {
   claimNextBatch, createSession, displayedIds, getSession, latestSession,
@@ -167,7 +166,7 @@ function jobFor(jobId) {
 }
 
 /**
- * Analyses the claimed ids, then rescores the whole analysed universe.
+ * Analyses the claimed ids, then reads the fit of everyone analysed so far.
  *
  * `analysedUniverse` is read from the cache table rather than from this batch,
  * which is what keeps §10.2's promise across pages: the 26th candidate is
@@ -185,7 +184,24 @@ async function finishBatch({
     : { results: new Map(), analysed: 0, reused: 0 }
 
   const universe = analysedUniverse({ jobId: job.id, jdVersion: job.jd_version, model })
-  const scores = normalizeUniverse(universe)
+
+  /*
+   * The number shown is the candidate's own fit, and nothing else.
+   *
+   * It was normalised across everyone analysed so far — round(fit / best *
+   * ceiling) — which is defensible when the pile is the whole universe and
+   * is not when the pile grows. The denominator was the best CV retrieved,
+   * so pressing "Show more" moved everybody's number: a recruiter saw 82,
+   * asked for more candidates, and came back to 74 on the same person. We
+   * explained it in a caption. The right fix is not to explain it.
+   *
+   * Triage was changed to the absolute number first; this is Search catching
+   * up, and now a 74 means the same thing on both screens and in a folder
+   * six weeks later.
+   */
+  const scores = new Map(
+    universe.map((row) => [row.candidateId, Math.round(Math.max(0, row.absoluteFit ?? 0))]),
+  )
 
   /*
    * §7, §9.1 — eligibility is re-checked on the way out, not just on the way in.

@@ -10818,3 +10818,12 @@ html:has(.workspace-shell) { scrollbar-gutter: auto; }
 .triage-staged-cost { margin: 0 0 0.7rem; font-size: 0.88rem; }
 .triage-staged-actions { display: flex; align-items: center; gap: 0.9rem; flex-wrap: wrap; }
 
+
+/* Coverage below the floor. Amber rather than red: a thin CV is a reason to
+   read carefully, not an incident. */
+.chip-review {
+  background: var(--warn-bg, #f6ecd9);
+  color: var(--warn, #8a5a12);
+  border-color: transparent;
+  font-weight: var(--w-semi, 600);
+}

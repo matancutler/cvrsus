@@ -1069,10 +1069,17 @@ check('and they never count what is missing',
   !/Meets \$\{met\.length\} of/.test(reading)
   && !/of \$\{met\.length \+ missing\.length\}/.test(reading),
   '"Meets 0 of 15" is the red tags below with arithmetic added, read as a verdict on a person')
-check('they say what the tags cannot — transferable skills, thin evidence, where the gap sits',
+check('they say what the tags cannot — transferable skills, coverage, where the gap sits',
   /analysis\?\.transferable/.test(reading)
-  && /less certain than most/.test(reading)
-  && /analysis\?\.reasoning/.test(reading))
+  && /analysis\?\.coverage/.test(reading)
+  && /analysis\?\.reasoning/.test(reading),
+  'the thin-evidence caveat came from the model rating its own work; coverage is '
+  + 'arithmetic over the verdicts and says the same thing with evidence behind it')
+
+check('and confidence is reported as an opinion rather than a finding',
+  /rated its own confidence in this reading/.test(reading)
+  && /does not affect the score/.test(reading),
+  'it stays in the detail view, it never enters the score, and it is off the cards')
 check('and the code says where the real thing goes',
   /THE PRODUCT WANTS A DEDICATED FIELD/.test(panel),
   'the honest version is a field the model is asked for by name, in ai.js')

@@ -5422,7 +5422,8 @@ function SearchTab({ me, folders, setFolders, onControls }) {
                   </button>
                   <span className="muted">
                     {response.scoring.analysedUniverse} of {response.scoring.poolSize} shortlisted
-                    candidates read so far. Scores are re-ranked across everyone read.
+                    candidates read so far. Each score is that candidate against this role,
+                    on its own — reading more never changes a score already given.
                   </span>
                 </>
               ) : (
@@ -5480,6 +5481,50 @@ function tagsIn(rows) {
  * A row in the result list. Everything beyond the summary lives in the popup,
  * so the list stays scannable and the detail has room to breathe.
  */
+/**
+ * How much of the job the score actually rests on.
+ *
+ * This replaces the model's own "high / medium / low confidence". The two
+ * answer the same question and only one of them is evidence: coverage is
+ * computed from the verdicts — the weighted share of the job's requirements
+ * the CV let us check at all — while confidence was the model's opinion of
+ * its own work, which is the weaker signal and the one we were showing.
+ *
+ * It matters because of what the score is. Fit is earned out of the whole
+ * job, so a 74 on 90% coverage and a 74 on 30% are different claims: the
+ * first is a judgement, the second is a judgement about a third of a job.
+ * Below the floor the product says so in words rather than leaving the
+ * recruiter to read a percentage and guess what it implies.
+ *
+ * Absent entirely when there is no coverage to report — a deterministic
+ * score has no verdicts behind it, and an empty chip is furniture.
+ */
+function CoverageChip({ coverage, needsReview }) {
+  if (!Number.isFinite(coverage)) return null
+
+  if (needsReview) {
+    return (
+      <span
+        className="chip chip-review"
+        title={`Only ${coverage}% of this job could be checked against this CV. `
+          + 'The score is a judgement about that part of it, not about the whole role.'}
+      >
+        Needs review
+      </span>
+    )
+  }
+
+  return (
+    <span
+      className="chip chip-neutral"
+      title={`${coverage}% of the job's requirements could be checked against this CV. `
+        + 'The rest are not mentioned either way.'}
+    >
+      Checked {coverage}% of the job
+    </span>
+  )
+}
+
 function ResultCard({
   result, onOpen, onSave, onFile, onReveal, onDismiss, onTagsChanged, onRemove,
   removeLabel = 'Remove', meId = null, canSave = false,
@@ -5687,6 +5732,12 @@ function ResultCard({
                 From triage
               </span>
             )}
+            {/* What the score rests on, in place of the model's opinion of
+                its own work. See CoverageChip. */}
+            <CoverageChip
+              coverage={result.analysis?.coverage}
+              needsReview={result.analysis?.needsReview}
+            />
             {result.revealed && (
               <span
                 className="chip chip-revealed"
@@ -7763,9 +7814,24 @@ function ScoreInsights({ result, candidate }) {
     lines.push(`Brings ${prefMet.join(', ')} from the preferred list.`)
   }
 
-  if (analysis?.confidence && analysis.confidence !== 'high') {
-    lines.push('The CV says less than usual about the work itself, so this reading is '
-      + 'less certain than most, worth a conversation before ruling either way.')
+  /*
+   * Coverage first, because it is the measured one.
+   *
+   * This used to be a caveat sentence built from the model's own confidence,
+   * on every card and in here. Confidence is the model's opinion of its own
+   * work; coverage is arithmetic over the verdicts. Both are reported here,
+   * in that order, and neither has ever entered the score.
+   */
+  if (Number.isFinite(analysis?.coverage)) {
+    lines.push(analysis.needsReview
+      ? `Only ${analysis.coverage}% of the job could be checked against this CV, so this `
+        + 'score is a judgement about that part of the role rather than the whole of it.'
+      : `${analysis.coverage}% of the job's requirements could be checked against this CV.`)
+  }
+
+  if (analysis?.confidence) {
+    lines.push(`The model rated its own confidence in this reading as ${analysis.confidence}. `
+      + 'That is its opinion of the document, not a measurement, and it does not affect the score.')
   }
 
   if (lines.length === 0) {

@@ -1199,6 +1199,51 @@ node server/scripts/contact.mjs show <span class="c">&lt;id&gt;</span></pre>
       <div class="stack">
         <article class="cmd-card">
           <div class="cmd-head">
+            <span class="cmd">npm run score:migrate</span>
+            <span class="risk risk-read">Read</span>
+          </div>
+          <p class="what">
+            Dry run. Shows how many stored analyses the current scoring version would rescore,
+            how far their numbers move, and how many verdicts cite a quote that is not in the CV.
+            Writes nothing.
+          </p>
+          <p class="when">
+            After changing the scoring arithmetic, before letting it near anything.
+          </p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">npm run score:migrate <span class="flag">-- --run</span></span>
+            <span class="risk risk-write">Writes</span>
+          </div>
+          <p class="what">
+            Backs both tables up, then rescores every stored analysis from the verdicts already
+            on disk &mdash; no model calls. Search gets new rows beside the old ones; Triage is
+            updated in place.
+          </p>
+          <p class="when">
+            Once after a scoring-version bump. Without it the bump hides every stored analysis
+            and the next search pays a model to recompute what is already there.
+          </p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">npm run score:migrate <span class="flag">-- --revert --run</span></span>
+            <span class="risk risk-write">Writes</span>
+          </div>
+          <p class="what">
+            Removes the rows the migration added and puts Triage back from its backup.
+          </p>
+          <p class="when">
+            If the new scores are wrong. Then set <code>MATCH_V_SCORING=2</code> and restart &mdash;
+            the old rows were never touched, so they are found again immediately.
+          </p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
             <span class="cmd">npm run triage:retention</span>
             <span class="risk risk-read">Read</span>
           </div>
@@ -1595,7 +1640,7 @@ node server/scripts/contact.mjs show <span class="c">&lt;id&gt;</span></pre>
         <span>test:usage</span><span>test:export</span><span>test:folders</span>
         <span>test:workspace</span><span>test:shared-folders</span><span>test:reveal</span>
         <span>test:triage</span><span>test:triage-funnel</span><span>test:triage-capacity</span>
-        <span>test:triage-charge</span><span>test:triage-retention</span><span>test:triage-skip</span>
+        <span>test:triage-charge</span><span>test:triage-retention</span><span>test:score-migration</span><span>test:triage-skip</span>
         <span>test:cost</span><span>test:explain</span><span>test:triage-drop</span>
         <span>test:name-case</span><span>test:jd-image</span><span>test:paste-image</span>
         <span>test:score-fairness</span><span>test:criterion-scoring</span><span>test:analysis-depth</span>

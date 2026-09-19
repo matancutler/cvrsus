@@ -5843,6 +5843,12 @@ function matchRow({ candidate, score, analysis, context }) {
       ? {
         reasoning: analysis.explanation,
         fit: analysis.criteria?.fit ?? null,
+        /* How much of the job this score rests on, and whether that is too
+           little to trust. Computed on every analysis since scoring v2 and
+           never sent until now — the card showed the model's opinion of its
+           own work instead, which is the weaker of the two signals. */
+        coverage: analysis.criteria?.coverage ?? null,
+        needsReview: analysis.criteria?.needsReview ?? false,
         confidence: analysis.criteria?.confidence ?? null,
         /* Derived in code from the verdicts now, not written by the model — the
            field names are unchanged because what they mean is unchanged. */
@@ -5934,7 +5940,16 @@ function searchResponse(outcome, recruiterId, chatId = null) {
       })
     })
     .filter(Boolean)
+    /*
+     * Equal fits are broken by coverage, then by name.
+     *
+     * Two candidates on 74 are not equally well understood: one may have
+     * answered every requirement and the other half of them. The one we
+     * checked more of is the one to read first, and the alternative — a
+     * tie broken alphabetically — is a coin toss dressed as an order.
+     */
     .sort((a, b) => b.score - a.score
+      || (b.analysis?.coverage ?? 0) - (a.analysis?.coverage ?? 0)
       || String(a.candidate.display_name ?? '').localeCompare(String(b.candidate.display_name ?? '')))
 
   return {

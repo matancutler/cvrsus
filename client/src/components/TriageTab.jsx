@@ -1541,8 +1541,32 @@ function TriageResultCard({
               />
             )}
             {row.reviewedAt && <span className="chip chip-neutral">Opened</span>}
-            {row.analysis.confidence && (
-              <span className="chip chip-neutral">{row.analysis.confidence} confidence</span>
+            {/*
+              What the score rests on, not what the model thought of itself.
+              Coverage is computed from the verdicts — the weighted share of
+              the job the CV let us check — and confidence was the model
+              marking its own homework. Confidence is still stored and still
+              shown inside the applicant dialog; it does not belong on a card
+              a recruiter scans, and it has never entered the score.
+            */}
+            {Number.isFinite(row.analysis.coverage) && (
+              row.analysis.needsReview ? (
+                <span
+                  className="chip chip-review"
+                  title={`Only ${row.analysis.coverage}% of this job could be checked `
+                    + 'against this CV.'}
+                >
+                  Needs review
+                </span>
+              ) : (
+                <span
+                  className="chip chip-neutral"
+                  title={`${row.analysis.coverage}% of the job's requirements could be `
+                    + 'checked against this CV.'}
+                >
+                  Checked {row.analysis.coverage}% of the job
+                </span>
+              )
             )}
             {row.analysis.source === 'deterministic' && (
               <span

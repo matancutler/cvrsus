@@ -119,7 +119,13 @@ export const VERSIONS = {
   /* 2: fit computed in code from per-requirement verdicts, replacing the
      model-invented 0-100. Bumped so cached analyses in the old shape are not
      reused — the cache key includes this. */
-  scoring: process.env.MATCH_V_SCORING ?? '2',
+  /* 3: silence earns a fraction of its weight instead of being struck from
+     the fraction, and a verdict whose quote is not in the CV is downgraded.
+     Bumped so the two arithmetics are never mixed in one ranking — and the
+     stored analyses were MIGRATED to it rather than left behind, because
+     this key is what the cache reads on and abandoning them would have paid
+     a model to recompute what was already on disk. See score-migrate.mjs. */
+  scoring: process.env.MATCH_V_SCORING ?? '3',
 }
 
 /**

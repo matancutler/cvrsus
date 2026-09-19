@@ -1300,6 +1300,8 @@ function applicantView(row, score, rank) {
     analysis: {
       reasoning: row.explanation,
       fit: criteria.fit ?? null,
+      coverage: criteria.coverage ?? null,
+      needsReview: criteria.needsReview ?? false,
       confidence: criteria.confidence ?? null,
       strengths: criteria.strengths ?? [],
       gaps: criteria.gaps ?? [],
