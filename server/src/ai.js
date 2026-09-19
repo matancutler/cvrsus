@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 
 import { detectSkills } from './skills.js'
+import { checkQuotes } from './matching/score.js'
 
 /**
  * Every Claude call in the product goes through here.
@@ -1436,6 +1437,19 @@ export async function analyseMatch({
    * between two calls ends the reusable part. The candidate is that byte, so
    * the candidate goes last and alone.
    */
+  /*
+   * Built once and kept, because the quote check below has to compare
+   * against THIS string.
+   *
+   * dossier() redacts the candidate's name, email and phone, and prepends
+   * their profile summary and employment history — so it is not
+   * candidate.cv_text, and a quote checked against cv_text would be looked
+   * for in a document the model never saw. A candidate called Lee has
+   * "Leeds" rewritten to "[redacted]ds" here; the model quotes that, as it
+   * is told to, and the original would never match.
+   */
+  const shown = dossier({ candidate, profile })
+
   const shared = `Assess this candidate against the role.\n\n`
     + `<role>\n${jobDescription}\n</role>\n\n`
     + (wanted ? `<recruiter_criteria>\n${wanted}\n</recruiter_criteria>\n\n` : '')
@@ -1462,7 +1476,7 @@ export async function analyseMatch({
         role: 'user',
         content: [
           { type: 'text', text: shared, cache_control: { type: 'ephemeral' } },
-          { type: 'text', text: `<candidate>\n${dossier({ candidate, profile })}\n</candidate>` },
+          { type: 'text', text: `<candidate>\n${shown}\n</candidate>` },
         ],
       }],
     }, { signal })
@@ -1477,8 +1491,35 @@ export async function analyseMatch({
        this is the only place the number exists — reconstructing it later from
        character counts would be a guess dressed as a measurement. Ignored by
        every caller that does not want it. */
+    const answer = normalizeMatch(JSON.parse(text))
+
+    /*
+     * A quoted line that is not in the document is not evidence.
+     *
+     * Every verdict carries the sentence the model read its claim out of,
+     * and nothing checked the sentence was there. A quote that cannot be
+     * found means the model invented the evidence or paraphrased it — and a
+     * paraphrase presented as a quotation is the shape of an invention even
+     * when the conclusion happens to be right.
+     *
+     * Checked here rather than downstream because this is the only place
+     * that still has `shown`: the exact string the model was given,
+     * redactions and all. The comparison flattens case, whitespace and
+     * punctuation, and passes anything under twelve characters — it is
+     * deliberately generous, because a false positive downgrades a correct
+     * verdict and costs a real candidate a real place, while a false
+     * negative costs nothing anybody can see.
+     */
+    const checked = checkQuotes(answer.criteria, shown)
+    if (checked.downgraded > 0) {
+      console.warn(`  match-analysis: ${checked.downgraded} verdict(s) cited a quote that is `
+        + 'not in the CV and were downgraded to no_evidence')
+    }
+
     return {
-      ...normalizeMatch(JSON.parse(text)),
+      ...answer,
+      criteria: checked.breakdown,
+      quotesUnverified: checked.downgraded,
       source: 'claude',
       model_version: response.model,
       usage: usageOf(response),

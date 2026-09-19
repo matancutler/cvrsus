@@ -15,6 +15,7 @@
  * the query returned".
  */
 import { execFileSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 import Database from 'better-sqlite3'
@@ -31,6 +32,7 @@ const RUN = Date.now().toString(36)
 const JOB_ID = 900000 + (Date.now() % 90000)
 const CAND_A = JOB_ID + 1
 const CAND_B = JOB_ID + 2
+const TRIAGE_ID = JOB_ID + 500
 
 const CV_TEXT = 'Served in the personal bureau of senior commanders, managing high-priority '
   + 'schedules and sensitive information flow. Owned the dispute process end-to-end. '
@@ -127,6 +129,15 @@ function migrate(...flags) {
   return execFileSync(
     process.execPath,
     ['server/scripts/score-migrate.mjs', '--job', String(JOB_ID), ...flags],
+    { cwd: root, encoding: 'utf8' },
+  )
+}
+
+/* The Triage half, scoped the same way and for the same reason. */
+function migrateTriage(...flags) {
+  return execFileSync(
+    process.execPath,
+    ['server/scripts/score-migrate.mjs', '--triage', String(TRIAGE_ID), ...flags],
     { cwd: root, encoding: 'utf8' },
   )
 }
@@ -254,33 +265,60 @@ check('coverage was recomputed and stored',
   Number.isFinite(JSON.parse(a3.criteria).coverage),
   String(JSON.parse(a3.criteria).coverage))
 
-// ------------------------------------------------------- the quote check ---
+// ------------------------------------------------ Search is NOT checked ---
 
-section('A quote that is not in the CV is downgraded')
+section('A Search quote is deliberately left alone')
+
+/*
+ * This is a refusal, not an omission, and it is the most damaging thing the
+ * adversarial review caught.
+ *
+ * The model was not shown candidates.cv_text. It was shown a redacted
+ * dossier: the CV with the candidate's name, email and phone replaced by
+ * [redacted], and their profile summary and employment history pasted on
+ * the front. Checking a stored quote against cv_text therefore fails for
+ * reasons that have nothing to do with whether the model invented anything.
+ * A candidate called Lee has every "Leeds" in their CV rewritten to
+ * "[redacted]ds" in the text they were quoted from; the quote is honest and
+ * the lookup still misses. Run over the whole table that downgrades correct
+ * verdicts wholesale, and it damages hardest the rows with the most
+ * evidence in them.
+ *
+ * So Search quotes are checked at ANALYSIS time, in ai.js, against the
+ * exact string the model was handed - and the migration, which no longer
+ * has that string, does not guess.
+ */
 
 const CAND_C = JOB_ID + 3
 seedCandidate(CAND_C, `Invented ${RUN}`)
 const invented = verdicts({ r4: 'meets', r4quote: 'led a team of forty engineers in Berlin' })
 const storedC = seedAnalysis(CAND_C, invented)
 
-const outC = migrate('--run')
+migrate('--run')
 const c3 = v3(CAND_C)
-
-check('the migration reports the downgrade',
-  /verdicts downgraded on quote\s*:\s*[1-9]/.test(outC),
-  outC.split('\n').find((l) => l.includes('downgraded on quote'))?.trim())
-
 const cVerdicts = JSON.parse(c3.criteria).verdicts
-const r4 = cVerdicts.find((row) => row.id === 'r4')
 
-check('the unsupported verdict became no_evidence', r4.status === 'no_evidence',
-  `${r4.status} — the quote was not in the CV`)
-check('and it kept the quote, flagged, so the change can be looked at',
-  r4.quoteUnverified === true && r4.quote.length > 0)
-check('while the supported verdicts were left alone',
-  cVerdicts.find((row) => row.id === 'r3').status === 'meets',
-  'the CV really does say "Ran SQL against the transaction database daily"')
-check('so the score is lower than it was', c3.fit < storedC, `${storedC} -> ${c3.fit}`)
+check('the invented quote survives the migration untouched',
+  cVerdicts.find((row) => row.id === 'r4').status === 'meets',
+  'not because the quote is real, but because this script cannot tell')
+check('and nothing was flagged on the way past',
+  cVerdicts.every((row) => row.quoteUnverified === undefined))
+
+const migrateSource = readFileSync(
+  fileURLToPath(new URL('../server/scripts/score-migrate.mjs', import.meta.url)), 'utf8')
+const aiSource = readFileSync(
+  fileURLToPath(new URL('../server/src/ai.js', import.meta.url)), 'utf8')
+
+check('the Search half says so out loud', /checkTheQuotes: false/.test(migrateSource))
+check('and names the reason, so nobody turns it on again',
+  /redacted dossier/.test(migrateSource))
+check('while the live path checks against what the model was actually shown',
+  /const shown = dossier\(/.test(aiSource)
+  && /checkQuotes\(answer\.criteria, shown\)/.test(aiSource),
+  'ai.js is the only place that still holds that string')
+
+check('the score still moved, on the silence rule rather than the quote',
+  c3.fit < storedC, `${storedC} -> ${c3.fit}`)
 
 // ------------------------------------------------------------- the revert ---
 
@@ -297,11 +335,91 @@ check('and the version-2 rows are exactly as they were',
   `).get(CAND_A, JOB_ID).fit === storedA,
   'they were never touched, which is the point of doing it additively')
 
+// -------------------------------------------------- Triage IS checked ---
+
+section('A Triage quote that is not in the CV is downgraded')
+
+/*
+ * Triage is checked, because triageQueue passes the applicant as
+ * { id, display_name, location, cv_text: extracted_text } with no name,
+ * email or phone for the dossier to redact - so the string the model quoted
+ * from is, character for character, the string this reads back.
+ *
+ * Placed after the revert on purpose: --revert undoes the most recent
+ * un-reverted run whatever its scope, so a Triage run started before the
+ * Search revert would be the one that revert undid.
+ */
+const stamp = new Date().toISOString()
+
+db.prepare(`
+  INSERT INTO triages (id, company_id, recruiter_id, title, raw_jd, status,
+                       lifecycle, ledger_id, charged_cvs, created_at, updated_at)
+  VALUES (?, ?, NULL, ?, 'seeded', 'completed', 'closed', NULL, 1, ?, ?)
+`).run(TRIAGE_ID, TRIAGE_ID, `score-migration-check ${RUN}`, stamp, stamp)
+
+const triageVerdicts = verdicts({ r4: 'meets', r4quote: 'led a team of forty engineers in Berlin' })
+const triageStored = oldFit(triageVerdicts)
+
+const applicantId = Number(db.prepare(`
+  INSERT INTO triage_applicants (
+    triage_id, file_name, stored_name, parse_status, deep_status,
+    absolute_fit, criteria, scoring_version, extracted_text, created_at
+  ) VALUES (?, ?, ?, 'parsed', 'scored', ?, ?, '2', ?, ?)
+`).run(
+  TRIAGE_ID, `${RUN}-triage.pdf`, `${RUN}-triage.pdf`, triageStored,
+  JSON.stringify({ verdicts: triageVerdicts, coverage: 50, confidence: 'high', items: [] }),
+  CV_TEXT, stamp,
+).lastInsertRowid)
+
+const triageOut = migrateTriage('--run')
+
+check('the migration reports the downgrade',
+  /verdicts downgraded on quote\s*:\s*[1-9]/.test(triageOut),
+  triageOut.split('\n').filter((l) => l.includes('downgraded on quote')).join(' / ').trim())
+
+const applicant = () => db.prepare(
+  `SELECT absolute_fit AS fit, criteria, scoring_version AS v FROM triage_applicants WHERE id = ?`,
+).get(applicantId)
+
+const afterRow = applicant()
+const afterCriteria = JSON.parse(afterRow.criteria)
+const r4 = afterCriteria.verdicts.find((row) => row.id === 'r4')
+
+check('the unsupported verdict became no_evidence', r4.status === 'no_evidence',
+  `${r4.status} - "led a team of forty engineers in Berlin" is nowhere in the CV`)
+check('and it kept the quote, flagged, so somebody can look at it',
+  r4.quoteUnverified === true && r4.quote.length > 0)
+check('while the supported verdicts were left alone',
+  afterCriteria.verdicts.find((row) => row.id === 'r3').status === 'meets',
+  'the CV really does say "Ran SQL against the transaction database daily"')
+check('so the score is lower than it was', afterRow.fit < triageStored,
+  `${triageStored} -> ${afterRow.fit}`)
+check('the row moved to the new version', afterRow.v === '3')
+check('and the highlights were recomputed, not carried',
+  Array.isArray(afterCriteria.strengths)
+  && !afterCriteria.strengths.some((line) => /fraud tooling/i.test(line)),
+  'carrying them would leave a requirement under Strengths whose only evidence '
+  + 'this same run had just thrown out')
+
+section('Reverting the Triage run')
+
+migrateTriage('--revert', '--run')
+
+const restored = applicant()
+check('the applicant is back at version 2', restored.v === '2')
+check('with its original score', restored.fit === triageStored,
+  `${restored.fit} vs ${triageStored}`)
+check('and its original verdicts, invented quote and all',
+  JSON.parse(restored.criteria).verdicts.find((row) => row.id === 'r4').status === 'meets',
+  'a revert that improved the data would not be a revert')
+
 // ---------------------------------------------------------------- cleanup ---
 
 section('Cleanup')
 
 db.prepare(`DELETE FROM candidate_job_analyses WHERE job_id = ?`).run(JOB_ID)
+db.prepare(`DELETE FROM triage_applicants WHERE triage_id = ?`).run(TRIAGE_ID)
+db.prepare(`DELETE FROM triages WHERE id = ?`).run(TRIAGE_ID)
 for (const id of [CAND_A, CAND_B, CAND_C]) {
   db.prepare(`DELETE FROM candidates WHERE id = ? AND email LIKE ?`).run(id, `%${RUN}@example.com`)
 }
@@ -322,6 +440,9 @@ check('test data removed',
   db.prepare(`SELECT COUNT(*) AS n FROM candidate_job_analyses WHERE job_id = ?`).get(JOB_ID).n === 0
   && db.prepare(`SELECT COUNT(*) AS n FROM candidates WHERE email LIKE ?`)
     .get(`%${RUN}@example.com`).n === 0
+  && db.prepare(`SELECT COUNT(*) AS n FROM triages WHERE id = ?`).get(TRIAGE_ID).n === 0
+  && db.prepare(`SELECT COUNT(*) AS n FROM triage_applicants WHERE triage_id = ?`)
+    .get(TRIAGE_ID).n === 0
   && newBackups().length === 0)
 
 db.close()
