@@ -754,6 +754,32 @@ export function setLifecycle({ triageId, to }) {
   return { ok: true, changed: true, from, to, purgeAfter: kept ?? null }
 }
 
+/**
+ * Adding CVs to a session reopens it.
+ *
+ * The alternative was refusing and telling the recruiter to reopen it first,
+ * which is a step that exists for the product's benefit rather than theirs —
+ * somebody choosing files for a pile has already said what they want. It
+ * also refused every Triage that finished before the lifecycle column
+ * existed, because those read as closed, and those are the ones this button
+ * is for.
+ *
+ * The deletion clock stops with it. A session somebody is adding to is not
+ * one whose CVs should be swept ninety days from a date it was closed on.
+ */
+export function reopenForCvs(triageId) {
+  const row = db.prepare(`SELECT lifecycle, purge_after FROM triages WHERE id = ?`).get(triageId)
+  if (!row) return false
+  if (row.lifecycle === 'open' && row.purge_after === null) return false
+
+  db.prepare(`
+    UPDATE triages SET lifecycle = 'open', closed_at = NULL, purge_after = NULL, updated_at = ?
+    WHERE id = ?
+  `).run(now(), triageId)
+
+  return true
+}
+
 /** How many sessions this organization has open. The cap in 4.7 counts these. */
 export function openSessions(companyId) {
   /*

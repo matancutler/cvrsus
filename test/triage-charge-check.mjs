@@ -219,17 +219,71 @@ check('and the refused files are not left on disk', strays.length === 0, strays.
 db.prepare(`UPDATE companies SET triage_cv_balance = ? WHERE id = ?`)
   .run(BALANCE - START - SECOND, org.company.id)
 
+section('A finished Triage takes more CVs, and reopens itself')
+
+/*
+ * The failure a recruiter actually hit. A Triage that finished before the
+ * lifecycle column existed reads as closed, and the route refused it with
+ * "reopen it first" — on every session in production, which is precisely the
+ * set this button exists for. Adding is the reopening now.
+ */
+const closedId = (await json(await fetch(`${BASE}/api/hr/triage`, {
+  method: 'POST', headers: H(org.token), body: '{}',
+}))).triage.id
+
+await json(await fetch(`${BASE}/api/hr/triage/${closedId}`, {
+  method: 'PATCH', headers: H(org.token),
+  body: JSON.stringify({ jd: JD, title: `${MARK} closed` }),
+}))
+
+const closedPile = new FormData()
+closedPile.append('cvs', new Blob([await cv('Closed', 800)], { type: 'application/pdf' }), 'c0.pdf')
+await json(await fetch(`${BASE}/api/hr/triage/${closedId}/files`, {
+  method: 'POST', headers: { authorization: `Bearer ${org.token}` }, body: closedPile,
+}))
+await fetch(`${BASE}/api/hr/triage/${closedId}/launch`, {
+  method: 'POST', headers: H(org.token), body: '{}',
+})
+await settle(closedId)
+
+/* Put it in the state every production Triage is in: finished, and with no
+   lifecycle of its own because it predates the column. */
+db.prepare(`
+  UPDATE triages SET lifecycle = NULL, status = 'completed',
+                     closed_at = ?, purge_after = ? WHERE id = ?
+`).run(new Date().toISOString(), new Date(Date.now() + 90 * 86400000).toISOString(), closedId)
+
+const reopened = await addCvs(closedId, [
+  { name: 'after-close.pdf', bytes: await cv('Latecomer', 810) },
+])
+check('a finished Triage accepts them', reopened.status === 201, `HTTP ${reopened.status}`)
+
+const after = db.prepare(`SELECT lifecycle AS l, purge_after AS p FROM triages WHERE id = ?`)
+  .get(closedId)
+check('and reopens itself', after.l === 'open', String(after.l))
+check('with the deletion clock stopped', after.p === null, String(after.p))
+
+const settledAgain = await settle(closedId)
+check('the new CV is analysed and in the list', settledAgain.total === 2,
+  `${settledAgain.total} results`)
+
 section('A draft cannot be topped up through this route')
 
 const draft2 = await json(await fetch(`${BASE}/api/hr/triage`, {
   method: 'POST', headers: H(org.token), body: '{}',
 }))
+/* Read now rather than computed from the constants at the top: sections
+   above this one spend capacity, and an assertion that hardcodes a total
+   fails the next time one is inserted, for a reason that has nothing to do
+   with what it is testing. */
+const beforeDraft = balanceNow()
 const notStarted = await addCvs(draft2.triage.id, [
   { name: 'draft.pdf', bytes: await cv('Drafted', 300) },
 ])
 check('a session that has not started refuses', notStarted.status === 409,
   `HTTP ${notStarted.status}`)
-check('and is charged nothing', balanceNow() === BALANCE - START - SECOND, `balance ${balanceNow()}`)
+check('and is charged nothing', balanceNow() === beforeDraft,
+  `balance ${balanceNow()}, was ${beforeDraft}`)
 
 // ------------------------------------------------------ the same person ---
 

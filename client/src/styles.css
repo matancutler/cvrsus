@@ -10523,3 +10523,40 @@ html:has(.workspace-shell) { scrollbar-gutter: auto; }
 }
 .triage-add-note { font-size: 0.85rem; }
 
+/* The list between choosing and committing. Deliberately plain: it is a
+   receipt to check, not a thing to admire. */
+.triage-add { margin-bottom: 1rem; }
+.triage-staged {
+  border: 1px solid var(--line, #e2d7d2);
+  border-radius: var(--radius, 7px);
+  background: var(--surface-2);
+  padding: 0.75rem 0.9rem;
+  margin-top: 0.5rem;
+}
+.triage-staged-list {
+  list-style: none;
+  margin: 0 0 0.6rem;
+  padding: 0;
+  max-height: 14rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.triage-staged-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  font-size: 0.85rem;
+}
+.triage-staged-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.triage-staged-size { flex: none; font-variant-numeric: tabular-nums; }
+.triage-staged-cost { margin: 0 0 0.7rem; font-size: 0.88rem; }
+.triage-staged-actions { display: flex; align-items: center; gap: 0.9rem; flex-wrap: wrap; }
+

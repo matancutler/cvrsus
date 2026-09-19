@@ -163,6 +163,7 @@ import {
   getTriage,
   listDrops,
   removeApplicant,
+  reopenForCvs,
   launchReadiness,
   latestDraft,
   listTriages,
@@ -7074,11 +7075,21 @@ app.post('/api/hr/triage/:id/cvs', recruiterOnly, triageUpload, async (req, res,
     if (triage.status === 'failed') {
       throw new HttpError(409, 'This Triage could not be processed. Start a new one for these CVs.')
     }
-    if (triage.lifecycle !== 'open') {
-      throw new HttpError(409, triage.lifecycle === 'paused'
-        ? 'This Triage is paused. Resume it to add more CVs.'
-        : 'This Triage is closed. Reopen it to add more CVs.')
-    }
+    /*
+     * A closed Triage is reopened by adding CVs to it, not refused.
+     *
+     * The refusal was the wrong shape twice over. There is no close button,
+     * so the only sessions it ever turned away were the ones it INFERRED
+     * were closed — which is every Triage that finished before the lifecycle
+     * column existed, i.e. all of them. And "reopen it first" is a step that
+     * exists for the product's benefit rather than the recruiter's: somebody
+     * adding CVs to a pile has already said what they want.
+     *
+     * So the act of adding is the reopening. The deletion clock stops with
+     * it, because a session being worked on is not one whose CVs should be
+     * swept.
+     */
+    reopenForCvs(triage.id)
 
     const preRejected = (req.rejectedUploads ?? []).map((entry) => ({
       name: entry.name, status: 'rejected', reason: entry.reason,
@@ -7282,12 +7293,6 @@ app.post('/api/hr/triage/:id/retry', recruiterOnly, (req, res, next) => {
     const { triage, error } = mustOwn({ companyId, id: req.params.id })
     if (error) throw new HttpError(404, 'That Triage does not exist.')
 
-    if (triage.lifecycle !== 'open') {
-      throw new HttpError(409, triage.lifecycle === 'paused'
-        ? 'This Triage is paused. Resume it to analyse anything further.'
-        : 'This Triage is closed. Reopen it to analyse anything further.')
-    }
-
     const requeued = requeueFailedAnalyses(triage.id)
 
     res.json({
@@ -7385,18 +7390,8 @@ app.get('/api/hr/triage/:id/results', recruiterOnly, (req, res, next) => {
       triageId: triage.id, offset, limit: TRIAGE.pageSize, includeRejected: true,
     })
 
-    /*
-     * New work only while the session is open.
-     *
-     * Not an error: a recruiter reading a closed session should still be able
-     * to page through what is there, and refusing the whole read because the
-     * side effect is not allowed would break history for no reason. The
-     * tranche simply is not asked for.
-     */
     let queued = null
-    if (req.query.advance === '1' && triage.lifecycle === 'open') {
-      queued = requestNextTranche(triage.id)
-    }
+    if (req.query.advance === '1') queued = requestNextTranche(triage.id)
 
     res.json({
       ...page,

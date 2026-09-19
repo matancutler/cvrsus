@@ -915,6 +915,17 @@ function TriageResults({ id, initial, onBalanceChanged, folders = [], setFolders
   const [notice, setNotice] = useState('')
   const [adding, setAdding] = useState(null)
   const addInput = useRef(null)
+  /*
+   * Chosen, and not yet sent.
+   *
+   * Picking files used to submit them: the dialog closed and the charge
+   * happened, with no moment in between to see what had actually been
+   * selected. A folder picker returns whatever is in the folder, and
+   * "everything in Downloads" is a costly thing to find out about afterwards.
+   * So the choice and the commitment are two acts, and the list between them
+   * is the point.
+   */
+  const [staged, setStaged] = useState([])
 
   async function fileInto(applicantId, folderId) {
     try {
@@ -1005,9 +1016,25 @@ function TriageResults({ id, initial, onBalanceChanged, folders = [], setFolders
     onBalanceChanged?.().catch(() => { /* the balance catches up on the next read */ })
   }, [working, onBalanceChanged])
 
-  /** More CVs, into a Triage that is already running. */
-  async function addCvs(files) {
-    if (!files?.length) return
+  /** Adds what was picked to the list, without sending anything. */
+  function stage(files) {
+    const chosen = Array.from(files ?? [])
+    if (!chosen.length) return
+
+    setStaged((was) => {
+      /* The same file picked twice is one file. Matched on name and size
+         rather than identity, because two passes through the picker produce
+         two different File objects for the same thing on disk. */
+      const already = new Set(was.map((file) => `${file.name}:${file.size}`))
+      return [...was, ...chosen.filter((file) => !already.has(`${file.name}:${file.size}`))]
+    })
+    setNotice('')
+  }
+
+  /** And this is the moment it costs something. */
+  async function submitStaged() {
+    const files = staged
+    if (!files.length) return
     setAdding({ total: files.length, done: 0 })
     try {
       /* Chunked like the builder's upload, and for the same reason: a dropped
@@ -1021,7 +1048,9 @@ function TriageResults({ id, initial, onBalanceChanged, folders = [], setFolders
         added += data.added ?? 0
         setAdding({ total: files.length, done: Math.min(at + CHUNK, files.length) })
       }
-      setNotice(`${added} CV${added === 1 ? '' : 's'} added. They are being read now.`)
+      setStaged([])
+      setNotice(`${added} CV${added === 1 ? '' : 's'} added. They are being read and ranked now, `
+        + 'and will appear in the list in their place.')
       await refresh()
       onBalanceChanged?.().catch(() => {})
     } catch (err) {
@@ -1089,7 +1118,11 @@ function TriageResults({ id, initial, onBalanceChanged, folders = [], setFolders
         enabled={Boolean(state?.adding?.enabled)}
         room={state?.adding?.room ?? 0}
         balance={state?.adding?.balance ?? 0}
+        staged={staged}
         onPick={() => addInput.current?.click()}
+        onRemove={(at) => setStaged((was) => was.filter((_, i) => i !== at))}
+        onClear={() => setStaged([])}
+        onSubmit={submitStaged}
       />
 
       <input
@@ -1098,7 +1131,7 @@ function TriageResults({ id, initial, onBalanceChanged, folders = [], setFolders
         multiple
         accept=".pdf,.doc,.docx"
         className="visually-hidden"
-        onChange={(event) => addCvs(event.target.files)}
+        onChange={(event) => stage(event.target.files)}
       />
 
       <StatusNotice error={error} onDismiss={() => setError('')} />
@@ -1193,41 +1226,97 @@ function TriageResults({ id, initial, onBalanceChanged, folders = [], setFolders
 /**
  * More CVs, into a Triage that is already running.
  *
- * One button, because that is the whole of what this does: pick the files,
- * they are read, ranked against the same job description and slotted into
- * the list in their place by score, and each one comes off the
- * organization's CV balance. Scores already on screen do not move.
+ * Two steps, and the gap between them is the whole design.
  *
- * Offered only when pressing it would work. A button that answers "you have
- * no capacity" after the recruiter has chosen three hundred files is worse
- * than no button — they have already done the work by then — so the reason
- * it cannot be pressed is on the button itself, before it is.
+ * Picking used to be sending: choose a folder and the charge happened before
+ * anything was on screen. A folder picker returns whatever is in the folder,
+ * and "everything in Downloads" is an expensive thing to discover afterwards
+ * — every file in it read, analysed and billed. So the picker fills a list,
+ * the list says what it will cost, and Submit is the act that spends
+ * anything. Nothing is uploaded until then.
+ *
+ * Once submitted they are read, ranked against the same job description and
+ * slotted into the list in their place by score. Scores already on screen do
+ * not move, and a Triage that had finished starts working again.
  */
-function TriageAddCvs({ enabled, room, balance, adding, onPick }) {
+function TriageAddCvs({
+  enabled, room, balance, adding, staged, onPick, onRemove, onClear, onSubmit,
+}) {
   if (!enabled) return null
 
-  const cannot = room <= 0 ? 'This Triage is full.'
-    : balance <= 0 ? 'Your organization has no Triage capacity left.'
+  const chosen = staged.length
+  /* What would actually be charged. Both ceilings are the server's, and it
+     refuses on them too — this is so the number is on screen before the
+     press rather than in an error after it. */
+  const overRoom = Math.max(0, chosen - room)
+  const overBalance = Math.max(0, chosen - balance)
+
+  const stop = overRoom > 0
+    ? `This Triage has room for ${room} more.`
+    : overBalance > 0
+      ? `That is ${overBalance} more than your remaining capacity of ${balance}.`
       : null
 
+  if (adding) {
+    return (
+      <div className="triage-add-row">
+        <span className="muted">Uploading {adding.done} of {adding.total}…</span>
+      </div>
+    )
+  }
+
   return (
-    <div className="triage-add-row">
-      {adding ? (
-        <span className="muted">Adding {adding.done} of {adding.total}…</span>
-      ) : (
-        <>
-          <button
-            type="button"
-            className="btn btn-secondary"
-            onClick={onPick}
-            disabled={Boolean(cannot)}
-          >
-            Add more CVs
-          </button>
-          <span className="muted triage-add-note">
-            {cannot ?? `Room for ${room} more · ${balance} CVs of capacity left`}
-          </span>
-        </>
+    <div className="triage-add">
+      <div className="triage-add-row">
+        <button type="button" className="btn btn-secondary" onClick={onPick}>
+          {chosen ? 'Choose more' : 'Add more CVs'}
+        </button>
+        <span className="muted triage-add-note">
+          {chosen
+            ? `${chosen} file${chosen === 1 ? '' : 's'} ready to submit`
+            : `Room for ${room} more · ${balance} CVs of capacity left`}
+        </span>
+      </div>
+
+      {chosen > 0 && (
+        <div className="triage-staged">
+          <ul className="triage-staged-list">
+            {staged.map((file, at) => (
+              <li key={`${file.name}:${file.size}:${at}`}>
+                <span className="triage-staged-name" title={file.name}>{file.name}</span>
+                <span className="muted triage-staged-size">{formatBytes(file.size)}</span>
+                <button
+                  type="button"
+                  className="link-button"
+                  aria-label={`Remove ${file.name}`}
+                  onClick={() => onRemove(at)}
+                >
+                  Remove
+                </button>
+              </li>
+            ))}
+          </ul>
+
+          {/* Said before the press, not after it. This is the only screen
+              between choosing a folder and being charged for what was in it. */}
+          <p className={stop ? 'alert alert-error triage-staged-cost' : 'muted triage-staged-cost'}>
+            {stop ?? `Submitting will use ${chosen} of your ${balance} remaining CVs.`}
+          </p>
+
+          <div className="triage-staged-actions">
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={onSubmit}
+              disabled={Boolean(stop)}
+            >
+              Submit {chosen} CV{chosen === 1 ? '' : 's'}
+            </button>
+            <button type="button" className="link-button" onClick={onClear}>
+              Clear
+            </button>
+          </div>
+        </div>
       )}
     </div>
   )
