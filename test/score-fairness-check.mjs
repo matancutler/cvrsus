@@ -117,4 +117,82 @@ check('a strong field pushes a partial fit down', field.get('m') < alone.get('m'
 check('and the best reaches the top of the scale', field.get('a') === 100, `${field.get('a')}%`)
 check('while the weakest stays at the bottom', field.get('c') < field.get('m'))
 
+section('Silence is priced, so saying less cannot help')
+
+/*
+ * The arithmetic excluded no_evidence from both halves of the fraction,
+ * which made silence strictly better than evidence: a requirement nobody
+ * could check cost nothing, while the same requirement marked `partial`
+ * cost 0.4 of its weight. Two candidates, one demonstrably closer to the
+ * job, and the ranking preferred the one who said less.
+ */
+const { scoreAgainst, silenceFraction, quoteIsInText, checkQuotes, rescoreBreakdown } =
+  await import('../server/src/matching/score.js')
+
+const NINE = [
+  { id: 'r1', tier: 'must_have', text: 'card-not-present review' },
+  { id: 'r2', tier: 'must_have', text: 'chargebacks end to end' },
+  { id: 'r3', tier: 'must_have', text: 'SQL' },
+  { id: 'r4', tier: 'must_have', text: 'Hebrew and English' },
+  { id: 'r5', tier: 'preferred', text: 'fraud tooling' },
+  { id: 'r6', tier: 'preferred', text: 'rules engines' },
+  { id: 'r7', tier: 'preferred', text: 'PSP or acquirer' },
+  { id: 'r8', tier: 'contextual', text: 'small team' },
+  { id: 'r9', tier: 'contextual', text: 'multi-site' },
+]
+
+const REST = [
+  { requirement_id: 'r1', status: 'meets' }, { requirement_id: 'r3', status: 'meets' },
+  { requirement_id: 'r4', status: 'meets' }, { requirement_id: 'r5', status: 'partial' },
+  { requirement_id: 'r6', status: 'no_evidence' }, { requirement_id: 'r7', status: 'no_evidence' },
+  { requirement_id: 'r8', status: 'meets' }, { requirement_id: 'r9', status: 'no_evidence' },
+]
+
+const silent = scoreAgainst(NINE, [...REST, { requirement_id: 'r2', status: 'no_evidence' }])
+const partial = scoreAgainst(NINE, [...REST, { requirement_id: 'r2', status: 'partial' }])
+
+check('evidence beats silence on the same CV', partial.fit > silent.fit,
+  `unmentioned ${silent.fit}, partial ${partial.fit} — it used to be the other way round`)
+check('and coverage still counts silence as unchecked', partial.coverage > silent.coverage,
+  `${silent.coverage}% vs ${partial.coverage}% — fit and coverage answer different questions`)
+
+const oneOfNine = scoreAgainst(NINE, [{ requirement_id: 'r1', status: 'meets' }])
+check('one requirement of nine no longer scores 100', oneOfNine.fit < 60,
+  `${oneOfNine.fit}% on ${oneOfNine.coverage}% coverage`)
+
+check('silence sits between contradicted and partial',
+  silenceFraction() > 0 && silenceFraction() < 0.6, String(silenceFraction()))
+
+check('a CV nothing could be read from still has no opinion',
+  scoreAgainst(NINE, []).fit === null,
+  'null, not the silence fraction — a confident number for a document we failed to read')
+
+section('A quote that is not in the CV is not evidence')
+
+const CV = 'Served in the personal bureau of senior commanders, managing '
+  + 'high-priority schedules. Owned the dispute process end-to-end.'
+
+check('an exact quote passes', quoteIsInText('managing high-priority schedules', CV))
+check('punctuation and case do not matter',
+  quoteIsInText('OWNED THE DISPUTE PROCESS END TO END', CV),
+  'a model silently normalises dashes and quotes; the check is about the words')
+check('an invented quote fails', !quoteIsInText('led a team of forty engineers in Berlin', CV))
+check('something too short to judge passes', quoteIsInText('SQL', CV),
+  'generous on purpose — a false positive costs a real candidate a real place')
+
+const bad = checkQuotes([
+  { requirement: 'scheduling', tier: 'must_have', weight: 30, status: 'meets', quote: 'managing high-priority schedules' },
+  { requirement: 'Berlin', tier: 'must_have', weight: 30, status: 'meets', quote: 'led a team of forty engineers in Berlin' },
+], CV)
+
+check('the unsupported verdict is downgraded and counted',
+  bad.downgraded === 1 && bad.breakdown[1].status === 'no_evidence'
+  && bad.breakdown[0].status === 'meets')
+check('and it keeps its quote, so the downgrade can be looked at',
+  bad.breakdown[1].quote.length > 0 && bad.breakdown[1].quoteUnverified === true)
+
+check('a stored breakdown can be rescored with no requirements and no model',
+  rescoreBreakdown(bad.breakdown).fit !== null,
+  'each entry carries its own tier and weight — that is what makes the migration possible')
+
 finish()

@@ -173,6 +173,110 @@ function status_is_known(status) {
 }
 
 /**
+ * Checks that a quoted line is actually in the CV.
+ *
+ * Every verdict the model returns carries the sentence it read the claim
+ * out of. Nothing has ever checked that the sentence is there. A quote that
+ * is not in the document is one of two things, and both matter: the model
+ * invented the evidence, or it paraphrased — and a paraphrase presented as a
+ * quotation is the shape of an invention even when the conclusion is right.
+ *
+ * Compared after flattening everything that can differ without the meaning
+ * differing: case, every kind of whitespace, and the punctuation a model
+ * silently normalises. Curly quotes become straight, dashes become hyphens,
+ * and then all punctuation is dropped — so "end-to-end." matches "end to
+ * end" and the check is about the words rather than the typography.
+ *
+ * Deliberately generous. A false positive here downgrades a verdict that
+ * was correct, which costs a real candidate a real place in the ranking; a
+ * false negative lets a sloppy quote through, which costs nothing anybody
+ * can see. When in doubt this says yes.
+ */
+const PUNCTUATION = /[\u2018\u2019\u201c\u201d\u2013\u2014.,;:!?()[\]{}"'`/\\|&*_~^<>+=-]+/g
+
+export function flattenForQuote(text) {
+  return String(text ?? '')
+    .toLowerCase()
+    .replace(PUNCTUATION, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+export function quoteIsInText(quote, cvText) {
+  const needle = flattenForQuote(quote)
+  /* Nothing to check. A verdict with no quote is not a verdict claiming
+     evidence, and `meets` without a quote is a separate problem the schema
+     is responsible for. */
+  if (!needle) return true
+  /* Too short to be evidence of anything, and too short to fail honestly:
+     "sql" appears in half the CVs on the platform by accident. */
+  if (needle.length < 12) return true
+
+  const haystack = flattenForQuote(cvText)
+  if (!haystack) return true
+
+  return haystack.includes(needle)
+}
+
+/**
+ * Downgrades verdicts whose quote is not in the CV, and says how many.
+ *
+ * Applied to the breakdown rather than to the model's raw answer, so the
+ * migration can run it over verdicts stored months ago and get the same
+ * result as the live path gets on a fresh one.
+ *
+ * A downgraded verdict becomes `no_evidence` and keeps its quote and reason
+ * for the record — throwing them away would leave nothing to look at when
+ * somebody asks why a score moved, and the whole point of counting these is
+ * that somebody looks.
+ */
+export function checkQuotes(breakdown, cvText) {
+  let downgraded = 0
+  const examples = []
+
+  const checked = (breakdown ?? []).map((row) => {
+    if (row.status === UNKNOWN) return row
+    if (quoteIsInText(row.quote, cvText)) return row
+
+    downgraded += 1
+    if (examples.length < 3) {
+      examples.push({ requirement: row.requirement, was: row.status, quote: row.quote })
+    }
+    return { ...row, status: UNKNOWN, quoteUnverified: true }
+  })
+
+  return { breakdown: checked, downgraded, examples }
+}
+
+/**
+ * Fit and coverage from a breakdown that has already been scored once.
+ *
+ * scoreAgainst() needs the requirement list; this needs only the breakdown,
+ * because each entry already carries its tier and weight. That is what lets
+ * a score be recomputed from what is stored — no requirements to look up, no
+ * job description to re-read, and above all no model call.
+ */
+export function rescoreBreakdown(breakdown) {
+  let knownWeight = 0
+  let totalWeight = 0
+  let earned = 0
+
+  for (const row of breakdown ?? []) {
+    const weight = Number(row.weight) || TIER_WEIGHT[row.tier] || TIER_WEIGHT.contextual
+    totalWeight += weight
+    if (row.status !== UNKNOWN) knownWeight += weight
+    earned += (row.status === UNKNOWN ? SILENCE : (MULTIPLIER[row.status] ?? 0)) * weight
+  }
+
+  return {
+    fit: knownWeight === 0 ? null : Math.round((earned / totalWeight) * 100),
+    coverage: totalWeight === 0 ? 0 : Math.round((knownWeight / totalWeight) * 100),
+    knownWeight,
+    totalWeight,
+  }
+}
+
+/**
  * Strengths, gaps and evidence — derived from the verdicts rather than bought.
  *
  * The model used to be asked for all three by name, on top of the verdicts, and
