@@ -83,13 +83,30 @@ const EXTRACTION_SCHEMA = {
   additionalProperties: false,
   required: [
     'current_title', 'industry', 'seniority',
-    'skills', 'languages', 'education', 'employment_history', 'summary',
+    'skills', 'inferred_capabilities', 'languages', 'education',
+    'employment_history', 'summary',
   ],
   properties: {
     current_title: nullable('string'),
     industry: nullable('string'),
     seniority: nullable('string'),
     skills: { type: 'array', items: { type: 'string' } },
+    /*
+     * C2 — what the CV implies but never says.
+     *
+     * A skills list is what somebody thought to write down, and most people
+     * write down a handful. Somebody who ran a finance team's month-end
+     * close for six years plainly knows reconciliation, variance analysis
+     * and audit preparation, and will not have listed any of them — so a
+     * search for those words does not retrieve them, and the best candidate
+     * for the role is filtered out before anything reads them.
+     *
+     * Kept SEPARATE from `skills` and never merged, because the two have
+     * different standing: one is a claim the candidate made, the other is
+     * ours. Retrieval matches both; judgement is told the difference (see
+     * MATCH_SYSTEM) and is forbidden from treating an inference as evidence.
+     */
+    inferred_capabilities: { type: 'array', items: { type: 'string' } },
     languages: { type: 'array', items: { type: 'string' } },
     education: {
       type: 'array',
@@ -236,6 +253,8 @@ function normalizeExtraction(raw) {
     industry: trimOrNull(raw.industry),
     seniority: trimOrNull(raw.seniority),
     skills: uniqueStrings(raw.skills),
+    /* Separate field, separate standing. Never folded into skills. */
+    inferredCapabilities: uniqueStrings(raw.inferred_capabilities),
     languages: uniqueStrings(raw.languages),
     education: Array.isArray(raw.education) ? raw.education.slice(0, 20) : [],
     employment_history: Array.isArray(raw.employment_history) ? raw.employment_history.slice(0, 40) : [],
@@ -1224,6 +1243,14 @@ stay verbatim to be worth anything. Quote the shortest passage that carries the
 claim, and prefer one that does not name the employer where the CV gives you a
 choice.
 
+Some candidates arrive with an inferred capabilities list. Those are OUR
+hypotheses about what the person's work implies, not anything they claimed.
+They exist to decide who gets read, and they are not evidence. Treat each as
+a question to answer from the CV itself: if the document supports it, quote
+the document, never the list. If the document does not, the requirement is
+no_evidence. An inferred capability can never on its own make a requirement
+meet.
+
 NEVER quote a passage containing the candidate's name, email address, phone
 number, home address or a link to their profile anywhere. A CV puts all of those
 in the first lines, so a quote taken from the top of the document is the one
@@ -1846,7 +1873,7 @@ const JOB_PROFILE_SCHEMA = {
   additionalProperties: false,
   required: [
     'title', 'interpretation', 'industries', 'functions', 'specializations',
-    'hard_constraints', 'must_haves', 'preferred', 'contextual',
+    'hard_constraints', 'must_haves', 'preferred', 'contextual', 'expansions',
     'location', 'work_arrangement', 'languages_required',
   ],
   properties: {
@@ -1884,6 +1911,33 @@ const JOB_PROFILE_SCHEMA = {
         additionalProperties: false,
         required: ['requirement', 'quote'],
         properties: { requirement: { type: 'string' }, quote: { type: 'string' } },
+      },
+    },
+    /*
+     * C1 — the other ways people describe the same experience.
+     *
+     * Retrieval matches a candidate's own words against the job's own words,
+     * and the two are written by different people for different purposes. A
+     * JD asking for a "Revenue Operations Manager" does not retrieve the
+     * person whose CV says "Sales Operations Lead", and a JD asking for
+     * "chargebacks" does not retrieve "dispute resolution" — so the best
+     * candidate for the role is filtered out before any model ever judges
+     * them, and nothing on screen says it happened.
+     *
+     * Asked for on the call that already parses the job, so it costs one
+     * more short array and no extra round trip, and it is done ONCE per job
+     * rather than per candidate.
+     */
+    expansions: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['requirement', 'also_called'],
+        properties: {
+          requirement: { type: 'string' },
+          also_called: { type: 'array', items: { type: 'string' } },
+        },
       },
     },
     contextual: { type: 'array', items: { type: 'string' } },
@@ -1953,6 +2007,20 @@ quote — the quote proves the demand was made, not that it was made separately.
 
 interpretation: two or three sentences on what success in this role actually
 requires. Describe the work, not the advert.
+
+expansions: for each must-have and preferred requirement, the other ways the
+same experience is written on a CV. Give the alternative job titles it sits
+under, the adjacent function that does the same work under another name, what
+it was called in an older era or in a different industry, and the concrete
+skills that imply it without naming it. Four or five per requirement, short
+noun phrases, lowercase.
+
+This is for retrieval, not for judgement: it decides who is read, and a
+candidate whose CV never happens to use the recruiter's vocabulary is
+currently filtered out before anything reads them. Be generous with genuine
+synonyms and adjacent names. Do not include the requirement itself, do not
+include broader parent terms that would match half the market ("management",
+"operations", "software"), and do not invent a term nobody writes.
 
 industries, functions, specializations: short canonical nouns ("fintech",
 "data science", "machine learning"). Omit rather than guess.

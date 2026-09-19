@@ -287,8 +287,39 @@ export function scoreCandidate(candidate, criteria) {
   const requiredJudged = judgeable(requiredSkills)
   const preferredJudged = judgeable(preferredSkills)
 
-  const requiredCoverage = requiredJudged.map((s) => phraseCoverage(haystack, s))
-  const preferredCoverage = preferredJudged.map((s) => phraseCoverage(haystack, s))
+  /*
+   * C1 — a requirement is met by any of the names it goes by.
+   *
+   * The job says "chargebacks" and the CV says "dispute resolution"; the job
+   * says "Revenue Operations" and the CV says "Sales Operations". Matching
+   * the recruiter's vocabulary against the candidate's own words fails
+   * exactly where the two describe the same work differently, which is most
+   * of the time, and the candidate is dropped before anything reads them.
+   *
+   * The alternative names come from the job's own parse (see the expansions
+   * field), so this costs no extra call and the requirement keeps its
+   * original wording in everything the recruiter sees — only the lookup is
+   * widened. Best coverage wins: an alternative can rescue a requirement,
+   * never weaken one that already matched.
+   */
+  const alsoCalled = new Map()
+  for (const [requirement, terms] of Object.entries(criteria.expansions ?? {})) {
+    const key = canonicalize(requirement)
+    if (key) alsoCalled.set(key, (terms ?? []).map(canonicalize).filter(Boolean))
+  }
+
+  const bestCoverage = (s) => {
+    let best = phraseCoverage(haystack, s)
+    for (const alternative of alsoCalled.get(s) ?? []) {
+      if (best >= 1) break
+      if (!comparable(alternative, haystack)) continue
+      best = Math.max(best, phraseCoverage(haystack, alternative))
+    }
+    return best
+  }
+
+  const requiredCoverage = requiredJudged.map(bestCoverage)
+  const preferredCoverage = preferredJudged.map(bestCoverage)
 
   const matchedRequired = requiredJudged.filter((_, i) => requiredCoverage[i] >= MEETS_AT)
   const missingRequired = requiredJudged.filter((_, i) => requiredCoverage[i] < MEETS_AT)

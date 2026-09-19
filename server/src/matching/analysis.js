@@ -120,11 +120,19 @@ function deterministicFit({ candidate, matchProfile, cvText }) {
   const requiredSkills = (matchProfile.mustHaves ?? []).map((item) => item.requirement)
   const preferredSkills = (matchProfile.preferred ?? []).map((item) => item.requirement)
 
+  /* C1 — keyed by the requirement text, which is what scoreCandidate
+     canonicalises and looks up. Absent on a profile parsed before this
+     existed, and absent means "exact matching only", which is what it did. */
+  const expansions = Object.fromEntries(
+    (matchProfile.expansions ?? []).map((row) => [row.requirement, row.alsoCalled]),
+  )
+
   const result = scoreCandidate(
     { ...candidate, cv_text: cvText },
     {
       requiredSkills,
       preferredSkills,
+      expansions,
       title: matchProfile.title ?? '',
       jobDescription: matchProfile.interpretation ?? '',
       keywords: matchProfile.contextual ?? [],

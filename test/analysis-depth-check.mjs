@@ -103,6 +103,7 @@ reply = {
 }
 await extractProfileFields('x'.repeat(400))
 const extraction = systemText(lastRequest?.system)
+const extractionSchema = lastRequest?.output_config?.format?.schema ?? {}
 
 section('A CV is not read for who somebody is')
 for (const forbidden of ['age', 'date of birth', 'gender', 'marital', 'pregnancy',
@@ -133,5 +134,87 @@ check('an unknown location is neutral', bonus.uncertain === 0,
 check('and the whole span is small enough not to overturn fit',
   (bonus.local - bonus.international_relocation) <= 20,
   `${bonus.local - bonus.international_relocation} points across the entire ladder`)
+
+/* ------------------------------------------------- C1: the job side --- */
+
+section('C1 - the job is expanded once, on the call that already parses it')
+
+/*
+ * Retrieval matches the recruiter's vocabulary against the candidate's own
+ * words, and the two are written by different people. A job asking for
+ * "chargebacks" does not retrieve the CV that says "dispute resolution", so
+ * the best candidate is filtered out before anything reads them, and nothing
+ * on screen says it happened.
+ */
+const { analyseJobDescription } = await import('../server/src/ai.js')
+
+reply = {
+  title: 'Underwriter', interpretation: 'x',
+  industries: [], functions: [], specializations: [],
+  hard_constraints: [], must_haves: [], preferred: [], contextual: [],
+  expansions: [], location: null, work_arrangement: null, languages_required: [],
+}
+await analyseJobDescription({ jobDescription: 'Senior underwriter.', instruction: null })
+
+const jobPrompt = systemText(lastRequest?.system)
+const jobSchema = lastRequest?.output_config?.format?.schema ?? {}
+
+check('the job parse asks for the other names a requirement goes by',
+  /expansions/.test(jobPrompt) && /alternative job titles/.test(jobPrompt))
+check('and says it is for retrieval, not for judgement',
+  /decides who is read/.test(jobPrompt),
+  'a model told to expand for judgement widens what counts as met')
+check('and is told what not to expand into',
+  /would match half the market/.test(jobPrompt),
+  'an expansion to "management" retrieves everybody, which is the same as nobody')
+check('the schema requires the field, so an omission is a refusal rather than silence',
+  (jobSchema.required ?? []).includes('expansions'))
+check('and keeps it per requirement rather than as a bag of words',
+  (jobSchema.properties?.expansions?.items?.required ?? []).includes('requirement'),
+  'a recruiter asking why somebody surfaced should see which requirement matched')
+
+const { scoreCandidate } = await import('../server/src/match.js')
+const EXPANSION_CV = {
+  id: 1,
+  cv_text: 'Sales Operations Lead, 2019-2024. Led dispute resolution end to end.',
+}
+const EXPANSION_JOB = {
+  requiredSkills: ['revenue operations'], preferredSkills: [],
+  title: '', jobDescription: '', keywords: [],
+}
+
+const exact = scoreCandidate(EXPANSION_CV, EXPANSION_JOB)
+const widened = scoreCandidate(EXPANSION_CV, {
+  ...EXPANSION_JOB, expansions: { 'revenue operations': ['sales operations'] },
+})
+
+check('a CV that describes the work in other words now matches',
+  widened.matchedRequired.length > exact.matchedRequired.length,
+  `${exact.matchedRequired.length} of 1 exact, ${widened.matchedRequired.length} of 1 expanded`)
+check('and what is shown is still the wording the recruiter asked for',
+  !/sales/i.test(JSON.stringify(widened.matchedRequired)),
+  'only the lookup widens')
+check('a job with no expansions behaves exactly as it did',
+  JSON.stringify(scoreCandidate(EXPANSION_CV, { ...EXPANSION_JOB, expansions: {} }))
+  === JSON.stringify(exact),
+  'which is every job parsed before this field existed')
+
+/* ------------------------------------------- C2: the candidate side --- */
+
+section('C2 - what a CV implies is stored, and is never evidence')
+
+check('extraction asks for it', (extractionSchema.required ?? []).includes('inferred_capabilities'))
+check('kept separate from the skills the candidate wrote',
+  Boolean(extractionSchema.properties?.inferred_capabilities)
+  && Boolean(extractionSchema.properties?.skills),
+  'one is a claim they made, the other is ours; merging them loses the difference')
+
+check('judgement is told an inference is a hypothesis',
+  /hypothes|question to answer from the CV/i.test(prompt))
+check('and that it can never carry a requirement on its own',
+  /can never on its own make a requirement/i.test(prompt),
+  'the whole risk of inferring is that the inference becomes the evidence')
+check('and that the quote must come from the document, not from the list',
+  /quote\s+the document, never the list/i.test(prompt))
 
 finish()

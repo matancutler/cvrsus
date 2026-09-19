@@ -435,6 +435,20 @@ function buildLabels({ profile, cv }) {
     add(resolveConcept(skill), 0.6, `skill: ${skill}`, skill)
   }
 
+  /*
+   * C2 — inferred capabilities reach retrieval, at a lower confidence than
+   * anything the candidate actually wrote.
+   *
+   * 0.45 against 0.6 for a stated skill: enough to surface somebody whose CV
+   * describes the work without naming it, not enough to outrank a person who
+   * named it. The evidence string says plainly that this was inferred, so
+   * anything that shows a recruiter why somebody surfaced does not present
+   * our guess as their claim.
+   */
+  for (const capability of profile.inferredCapabilities ?? []) {
+    add(resolveConcept(capability), 0.45, `inferred from the CV: ${capability}`, capability)
+  }
+
   for (const role of profile.employment_history ?? []) {
     const text = [role?.title, role?.company, role?.summary].filter(Boolean).join(' ')
     if (!text) continue
@@ -491,6 +505,12 @@ export function buildIntelligence(candidateId, { now = new Date() } = {}) {
     ...(profile.skills ?? []).map((skill) => ({
       type: 'skill', value: String(skill), raw: String(skill),
       evidence: 'skills detected in the CV', confidence: 0.6,
+    })),
+    /* Its own type, so nothing downstream can mistake it for something the
+       candidate wrote — see C2 in the extraction schema. */
+    ...(profile.inferredCapabilities ?? []).map((capability) => ({
+      type: 'inferred_capability', value: String(capability), raw: String(capability),
+      evidence: 'inferred from what the CV describes, not stated on it', confidence: 0.45,
     })),
   ]
 
