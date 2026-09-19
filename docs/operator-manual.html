@@ -1417,8 +1417,12 @@ node server/scripts/contact.mjs show <span class="c">&lt;id&gt;</span></pre>
             <tr>
               <th scope="row"><code>MATCH_COVERAGE_FLOOR</code></th>
               <td>50</td>
-              <td>Below this much of the job checked, a candidate card says <em>Needs review</em>
-                instead of a percentage. Purely a label: it changes no score and no ranking.</td>
+              <td>Below this much of the job checked, a candidate card shows an amber
+                <em>Needs review</em> chip; above it the card shows nothing and the percentage is
+                in the dialog. Purely a label: it changes no score and no ranking. Like the
+                silence fraction it is <strong>frozen into each row when the row is written</strong>,
+                so changing it relabels nothing already stored until you run
+                <code>npm run score:migrate -- --refresh --run</code>.</td>
             </tr>
             <tr>
               <th scope="row"><code>SCORE_MIGRATE_ON_BOOT</code></th>

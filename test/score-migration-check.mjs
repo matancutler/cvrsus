@@ -28,12 +28,30 @@ const db = new Database(fileURLToPath(new URL('../server/data/cking.db', import.
 const root = fileURLToPath(new URL('..', import.meta.url))
 
 const RUN = Date.now().toString(36)
-/* Far outside anything real, so a stray assertion cannot reach a live row. */
-const JOB_ID = 900000 + (Date.now() % 90000)
-const CAND_A = JOB_ID + 1
-const CAND_B = JOB_ID + 2
-const CAND_C = JOB_ID + 3
-const TRIAGE_ID = JOB_ID + 500
+
+/*
+ * Negative, and that is the whole point.
+ *
+ * This used to seed ids in a 900000-990000 band described as "far outside
+ * anything real". It was not. candidates.id is INTEGER PRIMARY KEY
+ * AUTOINCREMENT, so sqlite_sequence keeps the highest id ever used and never
+ * lets it fall — every run of this suite dragged the high-water mark up into
+ * its own reserved band, and the next real candidate signing up was issued
+ * an id inside it. On the development database the sequence had already
+ * reached 976108. The band was reserved against a table that was being
+ * pushed into it by the act of reserving it.
+ *
+ * A negative id cannot collide with a real row now or ever, and cannot move
+ * the sequence, because AUTOINCREMENT only tracks the maximum. SQLite is
+ * perfectly happy with them.
+ */
+const BASE = -(900000 + (Date.now() % 90000))
+const JOB_ID = BASE
+const CAND_A = BASE - 1
+const CAND_B = BASE - 2
+const CAND_C = BASE - 3
+const CAND_D = BASE - 4
+const TRIAGE_ID = BASE - 500
 
 const CV_TEXT = 'Served in the personal bureau of senior commanders, managing high-priority '
   + 'schedules and sensitive information flow. Owned the dispute process end-to-end. '
@@ -477,7 +495,6 @@ section('A changed silence fraction reaches scores that are already stored')
  * gap between two different arithmetics and would be added back as though
  * it were geography.
  */
-const CAND_D = JOB_ID + 4
 seedCandidate(CAND_D, `Refresh ${RUN}`)
 
 const dialled = verdicts()

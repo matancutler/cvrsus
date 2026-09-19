@@ -4034,7 +4034,28 @@ input:focus, select:focus, textarea:focus, .chip-input:focus-within {
   flex-direction: column;
   align-items: flex-end;
   gap: 0.35rem;
+  /*
+   * A ceiling, so the corner can never grow across the person.
+   *
+   * This strip is positioned from the right edge, so anything that makes it
+   * wider than expected extends LEFT — over the name, the tags and the
+   * avatar — and it stops click propagation, so the part lying over the name
+   * swallows the tap that would open the candidate. Nothing bounded it: the
+   * reservations that keep the name clear were arithmetic done by hand
+   * against the strip's contents at the time, and the next chip added to it
+   * silently invalidated them. A coverage chip did exactly that.
+   *
+   * 60% leaves the identity column its 40%, which at the narrowest card is
+   * still the avatar plus a readable name. Chips inside are allowed to
+   * shrink and ellipsise into it rather than push past it.
+   */
+  max-width: 60%;
+  min-width: 0;
 }
+
+/* So the ceiling above can actually bite: a nowrap chip refuses to shrink
+   past its text without this, and overflows the box instead of clipping. */
+.result-side .chip { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
 /*
  * What the person says about themselves, across the card.
@@ -4075,6 +4096,8 @@ input:focus, select:focus, textarea:focus, .chip-input:focus-within {
   display: flex;
   align-items: center;
   gap: 0.1rem;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .result-main:has(.result-reveal) .result-spacer { padding-right: 9rem; }
@@ -10792,6 +10815,17 @@ html:has(.workspace-shell) { scrollbar-gutter: auto; }
  * this stylesheet, so it was painting the hardcoded fallback beside a
  * .chip-warn painting --warn-soft, which is four shades lighter.
  */
+/* The same amber as the chip that sent the recruiter here, so the warning
+   on the card and its explanation in the dialog read as one thing. */
+.triage-modal-thin {
+  margin: 0 0 0.7rem;
+  padding: 0.5rem 0.7rem;
+  border-radius: var(--radius-sm, 6px);
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-size: 0.88rem;
+}
+
 .chip-review {
   background: var(--warn-soft);
   color: var(--warn);

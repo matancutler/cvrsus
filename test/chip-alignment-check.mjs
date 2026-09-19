@@ -108,4 +108,71 @@ for (const [label, path] of [
 check('the named folder chip is gone from the stylesheet', !ruleBody('.chip-folder'))
 check('and so is its clipping wrapper', !ruleBody('.chip-clip'))
 
+section('The corner strip cannot grow across the person')
+
+/*
+ * The test that was missing, and the absence cost a measured bug.
+ *
+ * `.result-side` is positioned from the right edge of the card, so anything
+ * that makes it wider extends LEFT — over the tags, the name and eventually
+ * the avatar — and it calls stopPropagation, so the part lying over the name
+ * swallows the click that opens the candidate. What kept it clear was
+ * arithmetic done by hand against its contents at the time, written into
+ * three padding reservations elsewhere in the stylesheet. Adding one
+ * uncapped 156px chip to the strip invalidated all three silently: measured
+ * in a headless browser, the strip went from 165px to 322px and was painted
+ * across the whole identity row at every width up to about 900px.
+ *
+ * Hand arithmetic in one file that has to be kept in step with markup in
+ * another will go out of step. So the strip is bounded structurally instead,
+ * and this is what holds that bound in place.
+ */
+const side = ruleBody('.result-side')
+check('the strip has a ceiling', /max-width:/.test(side ?? ''),
+  'without one, the next chip somebody adds walks across the candidate name')
+check('and may shrink to reach it', /min-width:\s*0/.test(side ?? ''))
+
+const sideChip = ruleBody('.result-side .chip')
+check('its chips can shrink rather than push past it',
+  /min-width:\s*0/.test(sideChip ?? '') && /overflow:\s*hidden/.test(sideChip ?? ''),
+  '.chip is nowrap, so without this a long chip overflows the box instead of clipping')
+check('and clip with an ellipsis', /text-overflow:\s*ellipsis/.test(sideChip ?? ''))
+
+const menu = ruleBody('.result-menu')
+check('the row inside inherits the ceiling',
+  /min-width:\s*0/.test(menu ?? '') && /max-width:/.test(menu ?? ''),
+  'a flex row with default min-width:auto is as wide as its contents whatever its parent says')
+
+section('Coverage is a warning on the card, a sentence in the dialog')
+
+const coverageChip = read('../client/src/components/CoverageChip.jsx')
+
+check('the chip says nothing when there is nothing to warn about',
+  /if \(!needsReview\) return null/.test(coverageChip),
+  'a percentage on every row is a readout competing with the score beside it')
+check('and no card renders a percentage as its text',
+  !/Checked \{coverage\}%/.test(coverageChip),
+  'that string is what made the chip 156px wide; the number lives in the title now')
+check('what it does render is the amber warning',
+  /chip chip-review/.test(coverageChip) && /Needs review/.test(coverageChip))
+check('with the number in the title, for anyone who wants it',
+  /title=\{`Only \$\{coverage\}%/.test(coverageChip))
+
+for (const [label, path] of [
+  ['the search card', '../client/src/pages/HrPanel.jsx'],
+  ['the Triage card', '../client/src/components/TriageTab.jsx'],
+]) {
+  const source = read(path)
+  check(`${label} uses the shared component`, /<CoverageChip/.test(source))
+  check(`${label} does not keep a copy of it`,
+    !/Checked \{[a-zA-Z.?]*coverage\}% of the job/.test(source),
+    'two copies of this drifted once already, and the Triage one lost half its tooltip')
+}
+
+check('the search dialog spells the number out',
+  /% of the job's requirements could be checked/.test(read('../client/src/pages/HrPanel.jsx')))
+check('and so does the Triage dialog',
+  /% of the job's requirements could be checked/.test(read('../client/src/components/TriageTab.jsx')),
+  'it showed neither coverage nor confidence, so an amber chip there explained itself nowhere')
+
 finish()

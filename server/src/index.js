@@ -6268,11 +6268,14 @@ app.post('/api/hr/search/:sessionId/save', recruiterOnly, (req, res, next) => {
     /*
      * The row the recruiter was looking at when they pressed Save.
      *
-     * It has to come from the client, and that is worth justifying. The
-     * displayed score is not stored anywhere: it is normalised against the pool
-     * that was searched, computed per request, and the pool moves — so asking
-     * the server for it again would produce a different number from the one on
-     * screen, which is the one that made somebody save this person.
+     * It comes from the client, and that is worth justifying — though less
+     * than it used to. The displayed score WAS unstored: normalised against
+     * the pool that was searched, computed per request, and the pool moved,
+     * so asking the server again gave a different number from the one on
+     * screen. That is no longer true; the shown score is the stored absolute
+     * fit. What the snapshot still buys is a record of the reading that made
+     * somebody file this person, frozen against later re-analysis — which is
+     * a different and smaller claim than the one this comment used to make.
      *
      * What that buys is a record of a judgement, not a live figure, and the
      * dialog says so. What it costs is a value the client chose, so it is

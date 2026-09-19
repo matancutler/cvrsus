@@ -604,8 +604,9 @@ function recoveredReading(candidateId, folderId) {
   /* criteria_results holds the requirement-by-requirement assessment the score
      view already knows how to draw. "no evidence" against a stated requirement
      is a miss; anything else is a hit. */
-  let items = []
-  try { items = JSON.parse(row.criteria_results ?? '{}')?.items ?? [] } catch { items = [] }
+  let stored = {}
+  try { stored = JSON.parse(row.criteria_results ?? '{}') ?? {} } catch { stored = {} }
+  const items = stored.items ?? []
 
   const pick = (klass, missing) => items
     .filter((item) => item?.class === klass
@@ -621,6 +622,18 @@ function recoveredReading(candidateId, folderId) {
     scoredAt: null,
     analysis: {
       reasoning: row.explanation ?? null,
+      /*
+       * Carried, because a folder row is a candidate card like any other and
+       * was the one surface where the coverage warning could not appear. A
+       * score shown without it on one screen and with it on another is the
+       * same score making two different claims.
+       *
+       * Only on this path. A saved snapshot is a record of what the screen
+       * said the day somebody filed this person, and back-filling today's
+       * coverage into it would make it a record of something else.
+       */
+      coverage: Number.isFinite(stored.coverage) ? stored.coverage : null,
+      needsReview: stored.needsReview === true,
       matchedRequired: pick('must-have', false),
       missingRequired: pick('must-have', true),
       matchedPreferred: pick('preferred', false),

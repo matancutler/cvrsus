@@ -1544,9 +1544,9 @@ function TriageResultCard({
             {row.reviewedAt && <span className="chip chip-neutral">Opened</span>}
             {/*
               What the score rests on, not what the model thought of itself.
-              Confidence is still stored and still shown inside the applicant
-              dialog; it does not belong on a card a recruiter scans, and it
-              has never entered the score. See CoverageChip.
+              Only when it is low: see CoverageChip for why a percentage on
+              every row was the wrong trade. The number itself is in the
+              dialog, under the score.
             */}
             <CoverageChip
               coverage={row.analysis.coverage}
@@ -1767,6 +1767,29 @@ function TriageApplicantDialog({ row, triageId, onClose }) {
                   <span className="score-label">{analysis.fit ?? 'match'}</span>
                 </span>
               </div>
+
+              {/*
+                What the score rests on, in the one place there is room to
+                say it properly.
+                *
+                The card shows "Needs review" and nothing else, which is a
+                warning without a number. This is where the number belongs,
+                and it was missing here entirely: a Triage applicant flagged
+                on the card had no explanation anywhere in the product except
+                a hover title, while the same CV opened through Search got a
+                full sentence. The comment beside the card's chip used to
+                claim this dialog showed confidence. It never did.
+              */}
+              {Number.isFinite(analysis.coverage) && (
+                <p className={analysis.needsReview ? 'triage-modal-thin' : 'muted'}>
+                  {analysis.needsReview
+                    ? `Only ${analysis.coverage}% of this job could be checked against this CV, `
+                      + 'so this score is a judgement about that part of the role rather than '
+                      + 'the whole of it.'
+                    : `${analysis.coverage}% of the job's requirements could be checked against `
+                      + 'this CV. The rest are not mentioned either way.'}
+                </p>
+              )}
 
               {analysis.reasoning && <p className="triage-modal-reasoning">{analysis.reasoning}</p>}
 
