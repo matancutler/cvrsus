@@ -6,6 +6,7 @@ import FolderDialog from './FolderDialog.jsx'
 import Notice, { StatusNotice, useStandingNotice } from './Notice.jsx'
 import PopMenu from './PopMenu.jsx'
 import pastedImage from '../pastedImage.js'
+import personName from '../personName.js'
 import scoreBand from '../scoreBand.js'
 import { useExplanation } from '../explain.js'
 
@@ -1452,6 +1453,17 @@ function TriageResultCard({
 }) {
   const band = scoreBand(row.score)
 
+  /*
+   * Written the way names are written, not the way the document shouted it.
+   *
+   * A CV header is very often set in capitals, so the parser reads "MATAN
+   * CUTLER" and the card renders it beside twenty properly-written names —
+   * which reads as a bug in our product rather than as a fact about the
+   * document. Display only: the stored value is what the CV said, and this
+   * does not overwrite it. See personName for what it refuses to change.
+   */
+  const name = personName(row.name)
+
   const menuItems = [
     onFile && {
       key: 'folder',
@@ -1495,7 +1507,7 @@ function TriageResultCard({
           if (event.target !== event.currentTarget) return
           if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onOpen() }
         }}
-        title={`Open ${row.name}`}
+        title={`Open ${name}`}
       >
         <span className="result-lead">
           <span className="result-portrait">
@@ -1504,12 +1516,12 @@ function TriageResultCard({
               document, not a profile — so there is no src to pass and the
               component falls back to the letters, which is what it is for.
             */}
-            <Avatar firstName={row.name?.split(/\s+/)[0]} lastName={row.name?.split(/\s+/)[1]} />
+            <Avatar firstName={name?.split(/\s+/)[0]} lastName={name?.split(/\s+/)[1]} />
           </span>
 
           <div className="result-identity">
             <h3>
-              <span className="result-name">{row.name}</span>
+              <span className="result-name">{name}</span>
             </h3>
             {/*
               One field to a line, each with its label.
@@ -1580,7 +1592,7 @@ function TriageResultCard({
           <span className="result-menu" onClick={(event) => event.stopPropagation()}>
             <PopMenu
               vertical
-              label={`Actions for ${row.name}`}
+              label={`Actions for ${name}`}
               items={menuItems}
             />
           </span>
@@ -1644,7 +1656,9 @@ function TriageApplicantDialog({ row, triageId, onClose }) {
       <div className="modal triage-modal" onClick={(event) => event.stopPropagation()}>
         <header className="modal-head">
           <div>
-            <h2>{row.name}</h2>
+            {/* The same tidy as the card, so the dialog and the row it opened
+                from do not disagree about how somebody spells their name. */}
+            <h2>{personName(row.name)}</h2>
             {/* The same labelled lines as the card, for the same reason: two
                 of three fields joined by a dot is a guessing game. */}
             <dl className="result-contact">
@@ -1731,7 +1745,7 @@ function TriageApplicantDialog({ row, triageId, onClose }) {
               */}
               <dl className="triage-facts">
                 {[
-                  ['Name', row.name],
+                  ['Name', personName(row.name)],
                   ['Email', row.email],
                   ['Phone', row.phone],
                   ['Location', row.location],

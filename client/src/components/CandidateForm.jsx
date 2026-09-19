@@ -10,6 +10,7 @@ import DocumentPicker, {
 import InfoHint from './InfoHint.jsx'
 import LegalConsent from './LegalConsent.jsx'
 import PhotoUploader, { PHOTO_TYPES, PHOTO_TYPE_ERROR } from './PhotoUploader.jsx'
+import { onBlurName } from '../personName.js'
 import Req from './Req.jsx'
 import TagChips from './TagChips.jsx'
 import VerifiedField from './VerifiedField.jsx'
@@ -782,6 +783,19 @@ export default function CandidateForm({
         </div>
       )}
 
+      {/*
+        Tidied on blur, not on every keystroke.
+
+        A CV parser reading a shouted document header, and somebody typing
+        fast, both produce MATAN CUTLER — and a recruiter's screen showing
+        that beside twenty properly-written names reads as a formatting bug in
+        our product rather than as how the candidate filled in a form.
+
+        On blur because capitalising as somebody types fights them: press "m"
+        for McDonald and it becomes "M" before the "c" arrives, so the word is
+        mixed-case by the third keystroke and the rule that protects deliberate
+        capitals starts protecting a half-typed one. See personName.
+      */}
       <div className="grid-3">
         <Field label="First name" required>
           {/* Named so the Apply link at the foot of the page can point at it. */}
@@ -790,15 +804,25 @@ export default function CandidateForm({
             required
             value={form.firstName}
             onChange={(e) => update('firstName', e.target.value)}
+            onBlur={onBlurName((tidied) => update('firstName', tidied))}
           />
         </Field>
         {shown(form.middleName) && (
           <Field label="Middle name">
-            <input value={form.middleName} onChange={(e) => update('middleName', e.target.value)} />
+            <input
+              value={form.middleName}
+              onChange={(e) => update('middleName', e.target.value)}
+              onBlur={onBlurName((tidied) => update('middleName', tidied))}
+            />
           </Field>
         )}
         <Field label="Last name" required>
-          <input required value={form.lastName} onChange={(e) => update('lastName', e.target.value)} />
+          <input
+            required
+            value={form.lastName}
+            onChange={(e) => update('lastName', e.target.value)}
+            onBlur={onBlurName((tidied) => update('lastName', tidied))}
+          />
         </Field>
       </div>
 

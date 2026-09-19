@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Link, useLocation, useSearchParams } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 
 import Avatar from '../components/Avatar.jsx'
 import CandidateForm, { CAPACITY_OPTIONS } from '../components/CandidateForm.jsx'
@@ -683,14 +683,39 @@ function ActivityBanner({ activity, reload, urgentOnly = false, confirmedOnly = 
 /**
  * The application confirmation, shown once on arrival.
  *
- * Read from router state rather than a query string so a refresh clears it —
- * "your profile is live" is true the moment you land and stale a minute later,
- * and a URL you could bookmark would keep insisting on it.
+ * Read from router state rather than a query string, so it cannot be
+ * bookmarked or shared — "your profile is live" is true the moment you land
+ * and stale a minute later.
+ *
+ * But router state is history state, and the browser RESTORES history state
+ * on a reload. So "shown once on arrival" was not what happened: every
+ * refresh of the portal, for as long as that history entry survived, brought
+ * back "Your profile is live. We read 2,850 characters…" as though the
+ * candidate had just applied again. The same trap the onboarding dialog fell
+ * into, and it was solved there the same way it is solved here — by making
+ * the arrival a thing that is consumed rather than a thing that is read.
+ *
+ * Cleared on the first render that sees it, with replace so no new history
+ * entry appears and the back button behaves. The banner survives that
+ * because `seen` holds what the state said, and only the first mount can
+ * ever set it.
  */
 function JustAppliedNote() {
-  const { state } = useLocation()
+  const { state, pathname } = useLocation()
+  const navigate = useNavigate()
   const [dismissed, setDismissed] = useState(false)
-  if (!state?.justApplied || dismissed) return null
+
+  /* Captured before the effect below wipes it. A ref rather than state: it is
+     read during render and must not cause a second one. */
+  const seen = useRef(state?.justApplied ? state : null)
+
+  useEffect(() => {
+    if (!state?.justApplied) return
+    navigate(pathname, { replace: true, state: null })
+  }, [state, pathname, navigate])
+
+  const arrival = seen.current
+  if (!arrival || dismissed) return null
 
   return (
     /*
@@ -702,10 +727,10 @@ function JustAppliedNote() {
       <div>
         <strong>Your profile is live.</strong>{' '}
         <span className="muted">
-          We read {Number(state.charactersRead ?? 0).toLocaleString()} characters from your CV
-          {state.documents > 1 ? ` and stored ${state.documents} documents` : ''}. Your reference is{' '}
-          <strong>#{state.reference}</strong>. You are signed in: no password to remember, and you
-          can change anything below at any time.
+          We read {Number(arrival.charactersRead ?? 0).toLocaleString()} characters from your CV
+          {arrival.documents > 1 ? ` and stored ${arrival.documents} documents` : ''}. Your
+          reference is <strong>#{arrival.reference}</strong>. You are signed in: no password to
+          remember, and you can change anything below at any time.
         </span>
       </div>
     </Notice>
