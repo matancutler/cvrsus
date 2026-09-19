@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { del, downloadFile, get, patch, post, sendForm } from '../api.js'
 import Avatar from './Avatar.jsx'
+import CoverageChip from './CoverageChip.jsx'
 import FolderDialog from './FolderDialog.jsx'
 import Notice, { StatusNotice, useStandingNotice } from './Notice.jsx'
 import PopMenu from './PopMenu.jsx'
@@ -1543,31 +1544,14 @@ function TriageResultCard({
             {row.reviewedAt && <span className="chip chip-neutral">Opened</span>}
             {/*
               What the score rests on, not what the model thought of itself.
-              Coverage is computed from the verdicts — the weighted share of
-              the job the CV let us check — and confidence was the model
-              marking its own homework. Confidence is still stored and still
-              shown inside the applicant dialog; it does not belong on a card
-              a recruiter scans, and it has never entered the score.
+              Confidence is still stored and still shown inside the applicant
+              dialog; it does not belong on a card a recruiter scans, and it
+              has never entered the score. See CoverageChip.
             */}
-            {Number.isFinite(row.analysis.coverage) && (
-              row.analysis.needsReview ? (
-                <span
-                  className="chip chip-review"
-                  title={`Only ${row.analysis.coverage}% of this job could be checked `
-                    + 'against this CV.'}
-                >
-                  Needs review
-                </span>
-              ) : (
-                <span
-                  className="chip chip-neutral"
-                  title={`${row.analysis.coverage}% of the job's requirements could be `
-                    + 'checked against this CV.'}
-                >
-                  Checked {row.analysis.coverage}% of the job
-                </span>
-              )
-            )}
+            <CoverageChip
+              coverage={row.analysis.coverage}
+              needsReview={row.analysis.needsReview}
+            />
             {row.analysis.source === 'deterministic' && (
               <span
                 className="chip chip-neutral"
