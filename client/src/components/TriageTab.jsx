@@ -1491,9 +1491,9 @@ function TriageResultCard({
           <div className="result-identity">
             <h3 className="result-headline">
               <span className="result-name">{name}</span>
-              {/* Two on a row, and a count for the rest — the same rule the
-                  search card follows, because it is the same card. */}
-              <TagStrip tags={tags} limit={2} />
+              {/* All of them — the same rule the search card follows,
+                  because it is the same card. */}
+              <TagStrip tags={tags} />
             </h3>
             {/*
               One field to a line, each with its label.

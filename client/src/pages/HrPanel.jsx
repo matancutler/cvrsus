@@ -5598,12 +5598,11 @@ function ResultCard({
                 out whether the person is around. */}
             <ActivityDot activity={result.activity} />
             {result.unread > 0 && <span className="badge">{result.unread}</span>}
-            {/* Two on a row, and a count for the rest.
-                Five fit the dialog, which is the width of the screen; a row
-                sits in a panel that can be 330px wide, where two chips and a
-                name are already most of the line. The whole set is in the
-                "+3" title and in the panel the + opens. */}
-            <TagStrip tags={result.tags ?? []} limit={2} />
+            {/* All of them, always. Five small chips are the width two
+                large ones were, and a "+3" is three tags a recruiter has to
+                open a panel to read — they tagged somebody five times
+                because all five matter. */}
+            <TagStrip tags={result.tags ?? []} />
           </h3>
           <p className="muted">
             {[candidate.location, candidate.availability].filter(Boolean).join(' · ')}
@@ -5863,10 +5862,25 @@ function ResultCard({
 
           {/* Claude's read of the profile replaces the keyword summary when it
               ran — its reasoning is the thing worth reading. */}
-          {result.analysis ? (
-            /* Two sentences. The rest is in the Score tab, where there is room
-               for it — on a card a four-line paragraph makes every row a
-               different height and the list stops being scannable. */
+          {/*
+            What the candidate says about themselves, not what the model said
+            about them.
+
+            The reading was here, and it is the wrong thing for a collapsed
+            row: it is written about one job description, so a person filed
+            in a folder or listed in the reveal log carried a sentence about
+            a search they were not being looked at through. Their own summary
+            says who they are on every screen. The reading is one click away
+            in the Score tab, in full.
+
+            Falls back to the reading when there is no summary — a Triage
+            applicant has no marketplace profile and so has nothing else.
+          */}
+          {candidate.summary ? (
+            <p className="result-summary" title={candidate.summary}>
+              {twoSentences(candidate.summary)}
+            </p>
+          ) : result.analysis ? (
             <p className="reasoning-line" title={result.analysis.reasoning}>
               {twoSentences(result.analysis.reasoning)}
             </p>

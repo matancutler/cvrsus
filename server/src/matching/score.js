@@ -33,8 +33,45 @@ const MULTIPLIER = {
   contradicted: 0,
 }
 
-/** Unknown requirements are excluded from fit and counted against coverage. */
+/** Unknown requirements are excluded from coverage and earn SILENCE below. */
 const UNKNOWN = 'no_evidence'
+
+/**
+ * What a requirement nobody could check is worth.
+ *
+ * It used to be worth nothing at all — excluded from both halves of the
+ * fraction — and that made silence strictly better than evidence. A CV that
+ * never mentioned chargebacks scored higher than the same CV with adjacent
+ * chargeback experience marked `partial`, because the first took the
+ * requirement out of the denominator and the second paid 0.6 of it. Two
+ * candidates, one of them demonstrably closer to the job, and the ranking
+ * preferred the one who said less.
+ *
+ * Worse at the top of the scale: a CV meeting one requirement of nine and
+ * mentioning nothing else scored 100 — one for one — and could sit above a
+ * candidate who met seven.
+ *
+ * So silence is priced. 0.35 sits above `contradicted`, which is a proven
+ * failure, and below `partial`, which is real evidence of something — the
+ * order is the claim, and it is the one the old arithmetic got backwards.
+ * The number itself is a starting point and is tuned in the eval; it is a
+ * setting so that tuning does not need a deploy.
+ *
+ * COVERAGE is untouched by this and still counts silence as not checked.
+ * That is the whole reason the two numbers exist separately: fit says how
+ * good the case is, coverage says how much of the job the case rests on, and
+ * folding the second into the first is what this fraction is carefully not
+ * doing.
+ */
+const SILENCE = (() => {
+  const raw = Number(process.env.MATCH_SILENCE_FRACTION ?? 0.35)
+  return Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : 0.35
+})()
+
+/** Exported so the migration and the eval can price old verdicts the same way. */
+export function silenceFraction() {
+  return SILENCE
+}
 
 /**
  * What a requirement is worth, by how the job description framed it.
@@ -100,16 +137,30 @@ export function scoreAgainst(requirements, verdicts) {
       reason: verdict?.reason ?? '',
     })
 
-    if (status === UNKNOWN) continue
-
-    knownWeight += weight
-    earned += (MULTIPLIER[status] ?? 0) * weight
+    /*
+     * Everything counts towards fit now, including silence.
+     *
+     * The denominator is the whole job rather than the part of it the CV
+     * happened to address — which is what stops a candidate improving their
+     * score by saying less. `knownWeight` still counts only what was
+     * genuinely judged, because that is coverage's question and it has not
+     * changed.
+     */
+    if (status !== UNKNOWN) knownWeight += weight
+    earned += (status === UNKNOWN ? SILENCE : (MULTIPLIER[status] ?? 0)) * weight
   }
 
   return {
-    /* Nothing checkable means no opinion, not a zero — a zero here would rank
-       an unreadable CV below a bad one, which is a claim we cannot support. */
-    fit: knownWeight === 0 ? null : Math.round((earned / knownWeight) * 100),
+    /*
+     * Nothing checkable at all means no opinion, not 35.
+     *
+     * With silence priced, a CV nobody could read anything out of would
+     * otherwise land on exactly the silence fraction — a confident-looking
+     * number for a document we failed to read. `null` is the honest answer
+     * and the callers already handle it; this is the same guard the old
+     * arithmetic had, kept for the same reason.
+     */
+    fit: knownWeight === 0 ? null : Math.round((earned / totalWeight) * 100),
     coverage: totalWeight === 0 ? 0 : Math.round((knownWeight / totalWeight) * 100),
     knownWeight,
     totalWeight,

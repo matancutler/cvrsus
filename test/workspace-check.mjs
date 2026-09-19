@@ -1257,7 +1257,8 @@ check('the folder dot says which folder on hover',
 
 check('and it is a round pink dot rather than a pill',
   /\.chip-folder-dot\{[^}]*border-radius:50%/.test(css)
-  && /\.chip-folder-dot\{[^}]*width:9px/.test(css))
+  && /\.chip-folder-dot\{[^}]*width:18px/.test(css),
+  'big enough to be a target rather than a speck')
 
 /*
  * Two sentences on the card, the whole reading in the Score tab.
@@ -1338,13 +1339,20 @@ check('the page carries them in one query rather than one per row',
 
 section('Two tags on a row, five in the dialog')
 
-check('the row shows two and counts the rest',
-  /<TagStrip tags=\{result\.tags \?\? \[\]\} limit=\{2\} \/>/.test(card)
-  && /<TagStrip tags=\{tags\} limit=\{2\} \/>/.test(triageRow),
-  'a row can sit in a 330px panel where two chips and a name are the whole line')
-
-check('the dialog shows all five, because it has the width',
-  /<TagStrip tags=\{tags\} \/>/.test(dialog))
+/*
+ * All five, everywhere, and never a count.
+ *
+ * The row showed two and a "+3" while the chips were 5.5rem wide. Small
+ * enough and five fit the same space two did — and a "+3" is three tags a
+ * recruiter has to open a panel to read, when they tagged somebody five
+ * times because all five matter.
+ */
+check('every surface shows all of them, with no count standing in',
+  /<TagStrip tags=\{result\.tags \?\? \[\]\} \/>/.test(card)
+  && /<TagStrip tags=\{tags\} \/>/.test(triageRow)
+  && /<TagStrip tags=\{tags\} \/>/.test(dialog)
+  && !/limit=\{2\}/.test(card) && !/limit=\{2\}/.test(triageRow),
+  'a "+3" is three tags you have to open a panel to read')
 
 check('the row reserves the corner it cannot see',
   /\.result-headline\{[^}]*padding-right:clamp\(/.test(css),
@@ -1358,6 +1366,30 @@ check('the provenance chip says two words, not the whole job description',
   />\s*From triage\s*<\/span>/.test(card)
   && /Uploaded to the "\$\{result\.fromTriage\.title\}" Triage/.test(card),
   'a Triage is titled with its JD, which is a sentence')
+
+section('A collapsed row shows the person, not the reading')
+
+/*
+ * The reading is written about one job description. A person filed in a
+ * folder, or listed in the reveal log, carried a sentence about a search
+ * they were not being looked at through — and on the search results
+ * themselves it repeated what the score already said. Their own summary is
+ * true on every screen.
+ */
+check('the row shows the candidate\'s own summary',
+  /candidate\.summary \? \([\s\S]{0,200}className="result-summary"/.test(card),
+  'the reading belongs to a job description; the summary belongs to the person')
+
+check('and falls back to the reading when there is no summary',
+  /candidate\.summary \?[\s\S]{0,400}result\.analysis \?[\s\S]{0,200}reasoning-line/.test(card),
+  'a Triage applicant has no marketplace profile and so has nothing else')
+
+check('two sentences of it, clamped to two lines',
+  /twoSentences\(candidate\.summary\)/.test(card)
+  && /\.result-summary\{[^}]*-webkit-line-clamp:2/.test(css))
+
+check('and the whole of it on hover',
+  /className="result-summary" title=\{candidate\.summary\}/.test(card))
 
 section('The name is never the thing that gives way')
 
@@ -1381,10 +1413,9 @@ check('the dialog never abbreviates the name',
   && /\.candidate-head-lead \.result-headline \.result-name\{[^}]*text-overflow:clip/.test(css),
   'this screen IS the click that the row truncates in favour of')
 
-check('and wraps its tags onto a second line instead of squeezing them',
-  /\.candidate-head-lead \.tag-strip\{[^}]*flex-wrap:wrap/.test(css)
-  && /\.candidate-head-lead \.tag-strip\{[^}]*max-width:18rem/.test(css),
-  'about three to a line, the rest underneath')
+check('and keeps its tags on one line, as the row does',
+  /\.candidate-head-lead \.tag-strip\{[^}]*flex-wrap:nowrap/.test(css),
+  'they wrapped while the chips were 5.5rem wide; at 3.5rem they fit')
 
 check('saving a tag closes the panel',
   /onChange\?\.\(data\.tags\)[\s\S]{0,400}setOpen\(false\)/.test(
@@ -1421,7 +1452,7 @@ check('up to five of them, which is as many as a candidate can have',
   /^const MAX = 5$/m.test(tagSource),
   'the strip showed one and a "+4" while the score was in the way; it is not now')
 check('every frame the same width, its text cut rather than wrapped',
-  /\.tag-strip \.tag\{[^}]*flex:0 1 5\.5rem/.test(css)
+  /\.tag-strip \.tag\{[^}]*flex:0 1 3\.5rem/.test(css)
   && /\.tag-strip \.tag\{[^}]*text-overflow:ellipsis/.test(css)
   && /\.tag-strip \.tag\{[^}]*white-space:nowrap/.test(css),
   'chips sized to their own text are a ragged edge that changes on every row; '
