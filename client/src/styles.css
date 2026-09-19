@@ -3900,11 +3900,24 @@ input:focus, select:focus, textarea:focus, .chip-input:focus-within {
  * entirely. A row where the tags survive and the name does not would be the
  * wrong way round.
  */
+/*
+ * The corner is absolutely positioned, so nothing in flow knows it is there.
+ *
+ * Putting the tags on the name's line ran them straight under it: on a narrow
+ * panel the strip crossed the reveal chip and the two drew on top of each
+ * other. Reserved here rather than by putting .result-side back in flow,
+ * which is a bigger change to a layout three screens depend on.
+ *
+ * The reserve is generous at narrow widths and proportional after that: the
+ * corner holds a dot, up to two chips, a +, a comment icon and a ⋮, and it is
+ * widest exactly when the card is narrowest and the chips wrap least.
+ */
 .result-headline {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   min-width: 0;
+  padding-right: clamp(7rem, 30%, 11.5rem);
 }
 .result-headline .result-name {
   min-width: 0;
@@ -3912,7 +3925,9 @@ input:focus, select:focus, textarea:focus, .chip-input:focus-within {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.result-headline .tag-strip { flex: 0 1 auto; overflow: hidden; }
+/* Never more than half the line: the name is what the row is for, and a
+   heavily tagged candidate must not push their own name out of view. */
+.result-headline .tag-strip { flex: 0 1 auto; overflow: hidden; max-width: 52%; }
 
 /*
  * The folder, as a dot.
@@ -3925,6 +3940,9 @@ input:focus, select:focus, textarea:focus, .chip-input:focus-within {
 .chip-folder-dot {
   display: inline-block;
   flex: none;
+  /* Off the edge of the control strip rather than flush with it: hard against
+     the chips it read as part of the reveal pill beside it. */
+  margin-right: 0.15rem;
   width: 9px;
   height: 9px;
   border-radius: 50%;
@@ -9348,9 +9366,15 @@ html:has(.workspace-shell) { scrollbar-gutter: auto; }
  * a tag, it is how many were not shown, and padding it to the width of one
  * would make it look like the biggest tag on the row.
  */
+/*
+ * `0 1` rather than `0 0`: the same width when there is room, and narrower
+ * when there is not, rather than pushing the row wider than the card. The
+ * floor keeps a squeezed chip readable — below about four characters plus
+ * the ellipsis it says nothing at all and is worse than the count.
+ */
 .tag-strip .tag {
-  flex: 0 0 5.5rem;
-  min-width: 0;
+  flex: 0 1 5.5rem;
+  min-width: 3.2rem;
   display: block;
   padding-inline: 0.45rem;
   overflow: hidden;

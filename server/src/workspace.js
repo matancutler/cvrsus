@@ -832,6 +832,120 @@ export const setTags = db.transaction(({ companyId, candidateId, tags }) => {
   return listTags({ companyId, candidateId })
 })
 
+/* ------------------------------------------- the same, for a Triage row ---
+ *
+ * A Triage applicant is not a candidate — different table, different life,
+ * and one never becomes the other — so these are their own functions over
+ * their own tables rather than a candidateId that sometimes means something
+ * else. The shapes match deliberately: the editor and the popover on the
+ * front end are the same components, and they should not have to know which
+ * kind of person they are annotating.
+ */
+
+/** Every Triage tag this company has written, by applicant id. */
+export function triageTagIndex(companyId) {
+  const index = new Map()
+  for (const row of db.prepare(`
+    SELECT triage_applicant_id AS id, label, colour FROM triage_applicant_tags
+    WHERE company_id = ? ORDER BY position, id
+  `).all(companyId)) {
+    if (!index.has(row.id)) index.set(row.id, [])
+    index.get(row.id).push({ label: row.label, colour: row.colour })
+  }
+  return index
+}
+
+export function listTriageTags({ companyId, applicantId }) {
+  return db.prepare(`
+    SELECT label, colour FROM triage_applicant_tags
+    WHERE company_id = ? AND triage_applicant_id = ?
+    ORDER BY position, id
+  `).all(companyId, applicantId)
+}
+
+export const setTriageTags = db.transaction(({ companyId, applicantId, tags }) => {
+  db.prepare(`
+    DELETE FROM triage_applicant_tags WHERE company_id = ? AND triage_applicant_id = ?
+  `).run(companyId, applicantId)
+
+  const now = new Date().toISOString()
+  const seen = new Set()
+  let position = 0
+
+  for (const tag of tags) {
+    const label = String(tag?.label ?? '').replace(/\s+/g, ' ').trim().slice(0, 40)
+    if (!label) continue
+    const key = label.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+
+    const colour = TAG_COLOURS.includes(tag?.colour) ? tag.colour : 'grey'
+    db.prepare(`
+      INSERT INTO triage_applicant_tags
+        (company_id, triage_applicant_id, label, colour, position, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(companyId, applicantId, label, colour, position, now)
+
+    position += 1
+    if (position >= MAX_TAGS) break
+  }
+
+  return listTriageTags({ companyId, applicantId })
+})
+
+/** One team's notes on one applicant, oldest first, with who wrote them. */
+export function listTriageComments({ companyId, applicantId }) {
+  return db.prepare(`
+    SELECT c.id, c.body, c.created_at AS at, c.recruiter_id AS recruiterId,
+           TRIM(COALESCE(r.first_name, '') || ' ' || COALESCE(r.last_name, '')) AS author
+    FROM triage_applicant_comments c
+    LEFT JOIN recruiters r ON r.id = c.recruiter_id
+    WHERE c.company_id = ? AND c.triage_applicant_id = ?
+    ORDER BY c.created_at, c.id
+  `).all(companyId, applicantId)
+}
+
+export function addTriageComment({ companyId, applicantId, recruiterId, body }) {
+  const text = String(body ?? '').trim().slice(0, 2000)
+  if (!text) return listTriageComments({ companyId, applicantId })
+
+  db.prepare(`
+    INSERT INTO triage_applicant_comments
+      (company_id, triage_applicant_id, recruiter_id, body, created_at)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(companyId, applicantId, recruiterId, text, new Date().toISOString())
+
+  return listTriageComments({ companyId, applicantId })
+}
+
+/**
+ * Only the person who wrote it may remove it.
+ *
+ * The same rule the candidate comments follow: a note is somebody's opinion
+ * with their name on it, and a colleague deleting it changes what the team
+ * appears to have thought without leaving a trace that it did.
+ */
+export function deleteTriageComment({ companyId, applicantId, commentId, recruiterId }) {
+  db.prepare(`
+    DELETE FROM triage_applicant_comments
+    WHERE id = ? AND company_id = ? AND triage_applicant_id = ? AND recruiter_id = ?
+  `).run(commentId, companyId, applicantId, recruiterId)
+
+  return listTriageComments({ companyId, applicantId })
+}
+
+/** How many notes exist per applicant, for the dot on the comment button. */
+export function triageCommentIndex(companyId) {
+  const index = new Map()
+  for (const row of db.prepare(`
+    SELECT triage_applicant_id AS id, COUNT(*) AS n
+    FROM triage_applicant_comments WHERE company_id = ? GROUP BY triage_applicant_id
+  `).all(companyId)) {
+    index.set(row.id, row.n)
+  }
+  return index
+}
+
 // -------------------------------------------------------------- comments ---
 
 /**

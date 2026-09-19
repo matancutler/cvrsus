@@ -888,6 +888,7 @@ function Workspace({ me, onReload, onSignOut }) {
           {tab === 'triage' && (
             <TriageTab
               opens={triageOpens}
+              meId={me?.recruiter?.id ?? null}
               balance={wallet?.triage?.balance ?? 0}
               admin={admin}
               /*
@@ -5597,9 +5598,12 @@ function ResultCard({
                 out whether the person is around. */}
             <ActivityDot activity={result.activity} />
             {result.unread > 0 && <span className="badge">{result.unread}</span>}
-            {/* What this team calls them, on the name's line. Five frames of
-                one width, cut by ellipsis, never wrapping — see TagStrip. */}
-            <TagStrip tags={result.tags ?? []} />
+            {/* Two on a row, and a count for the rest.
+                Five fit the dialog, which is the width of the screen; a row
+                sits in a panel that can be 330px wide, where two chips and a
+                name are already most of the line. The whole set is in the
+                "+3" title and in the panel the + opens. */}
+            <TagStrip tags={result.tags ?? []} limit={2} />
           </h3>
           <p className="muted">
             {[candidate.location, candidate.availability].filter(Boolean).join(' · ')}
@@ -5667,16 +5671,21 @@ function ResultCard({
               says so, and it names the Triage rather than saying "Triage",
               because which pile a CV came out of is the useful half.
             */}
+            {/* Two words, and the session's name on hover.
+                A Triage is titled with the job description, which is a
+                sentence — "From An operational and organizational partner
+                working directly with…" took the whole card and told the
+                recruiter only what the chip's two words already do. Which
+                Triage is a question you ask occasionally; that this came
+                from one is what the chip is for. */}
             {result.fromTriage && (
               <span
                 className="chip chip-triage"
                 title={result.fromTriage.title
-                  ? `Uploaded to the ${result.fromTriage.title} Triage`
+                  ? `Uploaded to the "${result.fromTriage.title}" Triage`
                   : 'Uploaded to a Triage'}
               >
-                {result.fromTriage.title
-                  ? `From ${result.fromTriage.title}`
-                  : 'From a Triage'}
+                From triage
               </span>
             )}
             {result.revealed && (

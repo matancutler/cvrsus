@@ -1281,6 +1281,84 @@ check('which folder, in words, on the one screen with room for it',
   /\{inFolder && \([\s\S]{0,300}Folder: <strong>\{inFolder\.name\}/.test(dialog),
   'and absent entirely when they are not filed — "Folder: none" says nothing')
 
+section('A Triage applicant can be tagged and noted too')
+
+/*
+ * An applicant is not a candidate — its own table, its own life, and it
+ * never becomes one — so candidate_tags and candidate_comments cannot hold
+ * a note about it: both declare candidate_id NOT NULL, and widening a live
+ * table's NOT NULL in SQLite means rebuilding it.
+ *
+ * Two mirrored tables instead, and the SAME two components pointed at them
+ * through a basePath. A recruiter should not meet two different controls for
+ * the same act.
+ */
+const serverIndex = read('../server/src/index.js')
+const serverSchema = read('../server/src/schema.js')
+const tagSourceShared = read('../client/src/components/CandidateTags.jsx')
+const commentSource = read('../client/src/components/CommentsPopover.jsx')
+
+check('the applicant tables exist and cascade with the CV',
+  /CREATE TABLE IF NOT EXISTS triage_applicant_tags/.test(serverSchema)
+  && /CREATE TABLE IF NOT EXISTS triage_applicant_comments/.test(serverSchema)
+  && (serverSchema.match(/REFERENCES triage_applicants\(id\) ON DELETE CASCADE/g) ?? []).length >= 2,
+  'a deleted CV must not leave notes about somebody behind')
+
+check('and the four routes are there',
+  /app\.get\('\/api\/hr\/triage\/:id\/applicants\/:applicantId\/tags'/.test(serverIndex)
+  && /app\.put\('\/api\/hr\/triage\/:id\/applicants\/:applicantId\/tags'/.test(serverIndex)
+  && /app\.get\('\/api\/hr\/triage\/:id\/applicants\/:applicantId\/comments'/.test(serverIndex)
+  && /app\.post\('\/api\/hr\/triage\/:id\/applicants\/:applicantId\/comments'/.test(serverIndex))
+
+check('each one checks the Triage belongs to the caller first',
+  /function ownedApplicant\(req\)/.test(serverIndex)
+  && /mustOwn\(\{ companyId, id: req\.params\.id \}\)/.test(
+    serverIndex.slice(serverIndex.indexOf('function ownedApplicant')),
+  ),
+  'an applicant id from another company must reach nothing')
+
+check('only the author may delete their own note',
+  /DELETE FROM triage_applicant_comments[\s\S]{0,200}AND recruiter_id = \?/.test(
+    read('../server/src/workspace.js'),
+  ),
+  'a colleague deleting it changes what the team appears to have thought')
+
+check('the same components serve both, through a basePath',
+  /basePath = candidateId == null \? null : `\/api\/hr\/candidates\/\$\{candidateId\}`/.test(tagSourceShared)
+  && /basePath = candidateId == null \? null : `\/api\/hr\/candidates\/\$\{candidateId\}`/.test(commentSource),
+  'defaulted, so every existing call site is unchanged')
+
+check('and the Triage row points them at the applicant',
+  /basePath=\{`\/api\/hr\/triage\/\$\{triageId\}\/applicants\/\$\{row\.id\}`\}/.test(triageRow))
+
+check('the page carries them in one query rather than one per row',
+  /tagged: Object\.fromEntries\(triageTagIndex\(companyId\)\)/.test(serverIndex)
+  && /commented: Object\.fromEntries\(triageCommentIndex\(companyId\)\)/.test(serverIndex),
+  'twenty-five rows would otherwise be twenty-five requests')
+
+section('Two tags on a row, five in the dialog')
+
+check('the row shows two and counts the rest',
+  /<TagStrip tags=\{result\.tags \?\? \[\]\} limit=\{2\} \/>/.test(card)
+  && /<TagStrip tags=\{tags\} limit=\{2\} \/>/.test(triageRow),
+  'a row can sit in a 330px panel where two chips and a name are the whole line')
+
+check('the dialog shows all five, because it has the width',
+  /<TagStrip tags=\{tags\} \/>/.test(dialog))
+
+check('the row reserves the corner it cannot see',
+  /\.result-headline\{[^}]*padding-right:clamp\(/.test(css),
+  '.result-side is absolutely positioned, so the tags ran underneath it')
+
+check('and the strip never takes more than half the line',
+  /\.result-headline \.tag-strip\{[^}]*max-width:52%/.test(css),
+  'the name is what the row is for')
+
+check('the provenance chip says two words, not the whole job description',
+  />\s*From triage\s*<\/span>/.test(card)
+  && /Uploaded to the "\$\{result\.fromTriage\.title\}" Triage/.test(card),
+  'a Triage is titled with its JD, which is a sentence')
+
 section('What your team calls a candidate')
 const tagSource = read('../client/src/components/CandidateTags.jsx')
 
@@ -1310,10 +1388,11 @@ check('up to five of them, which is as many as a candidate can have',
   /^const MAX = 5$/m.test(tagSource),
   'the strip showed one and a "+4" while the score was in the way; it is not now')
 check('every frame the same width, its text cut rather than wrapped',
-  /\.tag-strip \.tag\{[^}]*flex:0 0 5\.5rem/.test(css)
+  /\.tag-strip \.tag\{[^}]*flex:0 1 5\.5rem/.test(css)
   && /\.tag-strip \.tag\{[^}]*text-overflow:ellipsis/.test(css)
   && /\.tag-strip \.tag\{[^}]*white-space:nowrap/.test(css),
-  'chips sized to their own text are a ragged edge that changes on every row')
+  'chips sized to their own text are a ragged edge that changes on every row; '
+  + '0 1 rather than 0 0 so a narrow panel squeezes them instead of overflowing')
 check('what is held back is counted, not dropped',
   /\+\{rest\.length\}/.test(tagSource) && /title=\{rest\.map\(/.test(tagSource))
 

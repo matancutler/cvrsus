@@ -5,6 +5,8 @@ import Avatar from './Avatar.jsx'
 import FolderDialog from './FolderDialog.jsx'
 import Notice, { StatusNotice, useStandingNotice } from './Notice.jsx'
 import PopMenu from './PopMenu.jsx'
+import TagEditor, { TagStrip } from './CandidateTags.jsx'
+import CommentsPopover from './CommentsPopover.jsx'
 import pastedImage from '../pastedImage.js'
 import personName from '../personName.js'
 import scoreBand from '../scoreBand.js'
@@ -45,6 +47,9 @@ const CHUNK = 40
 
 export default function TriageTab({
   balance, onBalanceChanged, onBuy, admin, opens, folders = [], setFolders = () => {},
+  /* Who is looking, so a note can say "you" rather than your own name back
+     at you — the same thing the search card does with it. */
+  meId = null,
 }) {
   /*
    * null is the list. { id } is one Triage — and { id: null } is one that is
@@ -86,6 +91,7 @@ export default function TriageTab({
    */
   return (
     <TriageWorkspace
+      meId={meId}
       /*
        * A fresh workspace for every instruction from the rail.
        *
@@ -203,7 +209,8 @@ function TriageStatus({ triage }) {
  * text being typed and the caret with it.
  */
 function TriageWorkspace({
-  id: initialId, balance, onBalanceChanged, onBuy, admin, folders = [], setFolders = () => {},
+  id: initialId, balance, onBalanceChanged, onBuy, admin, meId = null,
+  folders = [], setFolders = () => {},
 }) {
   const [id, setId] = useState(initialId)
   const [state, setState] = useState(null)
@@ -254,6 +261,7 @@ function TriageWorkspace({
     ? (
       <TriageResults
         id={id}
+        meId={meId}
         initial={state}
         onBalanceChanged={onBalanceChanged}
         folders={folders}
@@ -900,7 +908,7 @@ async function filesFromDrop(dataTransfer) {
  * for the next tranche — which is the whole progressive design, and the reason
  * this component never needs to know that a tranche is twenty-five.
  */
-function TriageResults({ id, initial, onBalanceChanged, folders = [], setFolders }) {
+function TriageResults({ id, initial, onBalanceChanged, meId = null, folders = [], setFolders }) {
   const [state, setState] = useState(null)
   const [rows, setRows] = useState([])
   const [error, setError] = useState('')
@@ -910,6 +918,11 @@ function TriageResults({ id, initial, onBalanceChanged, folders = [], setFolders
      workspace's — passed in — because the rail's count and the Folders tab read
      the same state, and a folder created here has to appear in both. */
   const [filed, setFiled] = useState({})
+  /* What the team has said about each applicant. Held here rather than
+     fetched per row: a page is twenty-five rows and the alternative is
+     twenty-five requests to find out that most of them have nothing. */
+  const [tagged, setTagged] = useState({})
+  const [commented, setCommented] = useState({})
   /* Which applicant the folder dialog is open for, if any. */
   const [filing, setFiling] = useState(null)
   const [notice, setNotice] = useState('')
@@ -944,6 +957,8 @@ function TriageResults({ id, initial, onBalanceChanged, folders = [], setFolders
       const data = await post(`/api/hr/folders/${target}/triage-items`, { applicantId }, 'recruiter')
       if (data.folders) setFolders(data.folders)
       if (data.filed) setFiled(data.filed)
+      if (data.tagged) setTagged(data.tagged)
+      if (data.commented) setCommented(data.commented)
     } catch (err) {
       setError(err.message)
     } finally {
@@ -1170,6 +1185,12 @@ function TriageResults({ id, initial, onBalanceChanged, folders = [], setFolders
                 onOpen={() => setOpen(row)}
                 folder={filed[row.id] ?? null}
                 onFile={() => setFiling(row.id)}
+                tags={tagged[row.id] ?? []}
+                comments={commented[row.id] ?? 0}
+                meId={meId}
+                onTagsChanged={(applicantId, next) => setTagged(
+                  (was) => ({ ...was, [applicantId]: next }),
+                )}
               />
             ))}
           </ol>
@@ -1401,7 +1422,10 @@ function TriageFailures({ failures }) {
  * The score keeps the corner it has everywhere else, and the CV download joins
  * the ⋮ rather than sitting beside the number as a second loud thing.
  */
-function TriageResultCard({ row, triageId, onOpen, onFile, folder = null }) {
+function TriageResultCard({
+  row, triageId, onOpen, onFile, folder = null,
+  tags = [], comments = 0, meId = null, onTagsChanged = null,
+}) {
   const band = scoreBand(row.score)
 
   /*
@@ -1467,6 +1491,9 @@ function TriageResultCard({ row, triageId, onOpen, onFile, folder = null }) {
           <div className="result-identity">
             <h3 className="result-headline">
               <span className="result-name">{name}</span>
+              {/* Two on a row, and a count for the rest — the same rule the
+                  search card follows, because it is the same card. */}
+              <TagStrip tags={tags} limit={2} />
             </h3>
             {/*
               One field to a line, each with its label.
@@ -1528,6 +1555,28 @@ function TriageResultCard({ row, triageId, onOpen, onFile, folder = null }) {
           </div>
 
           <span className="result-menu" onClick={(event) => event.stopPropagation()}>
+            {/*
+              What your team calls this applicant, and what it has said about
+              them — the same two controls the search card carries.
+
+              `basePath` is what lets the same components annotate somebody
+              who is not a candidate: a Triage applicant lives in its own
+              table and never becomes one, but a tag on either means the same
+              thing and a recruiter should not meet two different controls.
+            */}
+            <TagEditor
+              candidateId={row.id}
+              tags={tags}
+              basePath={`/api/hr/triage/${triageId}/applicants/${row.id}`}
+              onChange={(next) => onTagsChanged?.(row.id, next)}
+              label={`Tags for ${name}`}
+            />
+            <CommentsPopover
+              candidateId={row.id}
+              meId={meId}
+              basePath={`/api/hr/triage/${triageId}/applicants/${row.id}`}
+              label={comments > 0 ? `${comments} note(s) on ${name}` : `Notes on ${name}`}
+            />
             <PopMenu
               vertical
               label={`Actions for ${name}`}

@@ -240,6 +240,13 @@ import {
   createFolder,
   deleteFolder,
   FOLDER_STATUSES,
+  addTriageComment,
+  deleteTriageComment,
+  listTriageComments,
+  listTriageTags,
+  setTriageTags,
+  triageCommentIndex,
+  triageTagIndex,
   folderIndex,
   getFolder,
   isFolderStatus,
@@ -7367,6 +7374,108 @@ app.delete('/api/hr/triage/:id/applicants/:applicantId', recruiterOnly, (req, re
 })
 
 /**
+ * What your team calls an applicant, and what it has said about them.
+ *
+ * The same two things the search card carries, over their own tables — see
+ * the note in schema.js for why an applicant is not a candidate. The URLs
+ * mirror the candidate ones closely enough that the front end can point the
+ * same components at either by changing one string.
+ *
+ * Everything here is the company's, not the recruiter's: a colleague working
+ * the same pile should see the tag you put on somebody rather than re-read
+ * the CV. Deleting a note is the exception, and it is the author's alone.
+ */
+function ownedApplicant(req) {
+  const companyId = companyIdFor(req.session.id)
+  const { triage, error } = mustOwn({ companyId, id: req.params.id })
+  if (error) throw new HttpError(404, 'That Triage does not exist.')
+
+  const applicantId = Number(req.params.applicantId)
+  const exists = db.prepare(
+    `SELECT id FROM triage_applicants WHERE id = ? AND triage_id = ?`,
+  ).get(applicantId, triage.id)
+  if (!exists) throw new HttpError(404, 'That CV is not in this Triage.')
+
+  return { companyId, triage, applicantId }
+}
+
+app.get('/api/hr/triage/:id/applicants/:applicantId/tags', recruiterOnly, (req, res, next) => {
+  try {
+    const { companyId, applicantId } = ownedApplicant(req)
+    res.json({
+      tags: listTriageTags({ companyId, applicantId }),
+      max: MAX_TAGS,
+      colours: TAG_COLOURS,
+    })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.put('/api/hr/triage/:id/applicants/:applicantId/tags', recruiterOnly, (req, res, next) => {
+  try {
+    const { companyId, applicantId } = ownedApplicant(req)
+    const wanted = Array.isArray(req.body?.tags) ? req.body.tags : []
+    if (wanted.length > MAX_TAGS) throw new HttpError(400, `${MAX_TAGS} tags is the maximum.`)
+
+    res.json({
+      tags: setTriageTags({ companyId, applicantId, tags: wanted }),
+      max: MAX_TAGS,
+      colours: TAG_COLOURS,
+    })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.get('/api/hr/triage/:id/applicants/:applicantId/comments', recruiterOnly, (req, res, next) => {
+  try {
+    const { companyId, applicantId } = ownedApplicant(req)
+    res.json({ comments: listTriageComments({ companyId, applicantId }), meId: req.session.id })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.post('/api/hr/triage/:id/applicants/:applicantId/comments', recruiterOnly, (req, res, next) => {
+  try {
+    const { companyId, applicantId } = ownedApplicant(req)
+    const body = String(req.body?.body ?? '').trim()
+    if (!body) throw new HttpError(400, 'Write something first.')
+
+    res.json({
+      comments: addTriageComment({
+        companyId, applicantId, recruiterId: req.session.id, body,
+      }),
+      meId: req.session.id,
+    })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.delete(
+  '/api/hr/triage/:id/applicants/:applicantId/comments/:commentId',
+  recruiterOnly,
+  (req, res, next) => {
+    try {
+      const { companyId, applicantId } = ownedApplicant(req)
+      res.json({
+        comments: deleteTriageComment({
+          companyId,
+          applicantId,
+          commentId: Number(req.params.commentId),
+          recruiterId: req.session.id,
+        }),
+        meId: req.session.id,
+      })
+    } catch (error) {
+      next(error)
+    }
+  },
+)
+
+/**
  * A page of scored applicants.
  *
  * `advance` on the query string is how the client says "I have reached the end
@@ -7430,6 +7539,10 @@ app.get('/api/hr/triage/:id/results', recruiterOnly, (req, res, next) => {
        * week's. Said here so the page can say it.
        */
       limits: analysisLimit(triage.id),
+      /* What the team has said about each of them. One query for the page
+         rather than one per row, exactly as the search results do it. */
+      tagged: Object.fromEntries(triageTagIndex(companyId)),
+      commented: Object.fromEntries(triageCommentIndex(companyId)),
       /* Where each applicant is filed, so a row can wear the folder chip the
          search results wear. Company-wide and sent with the page rather than
          fetched per row: a folder is shared, so a colleague's filing shows up

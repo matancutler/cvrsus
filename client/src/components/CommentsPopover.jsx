@@ -21,7 +21,19 @@ import { del, get, post } from '../api.js'
 import { setCommentCount, useCommentCount } from '../commented.js'
 import { StatusNotice } from './Notice.jsx'
 
-export default function CommentsPopover({ candidateId, label = 'Comments', meId = null }) {
+/*
+ * `basePath` is how the same popover annotates two different kinds of person.
+ *
+ * A Triage applicant is not a candidate — different table, different life —
+ * but a tag on one means exactly what a tag on the other means, and the
+ * recruiter should not meet two different controls. So the caller supplies
+ * the collection and this stays ignorant of which it is. Defaulted, so every
+ * existing call site is unchanged.
+ */
+export default function CommentsPopover({
+  candidateId, label = 'Comments', meId = null,
+  basePath = candidateId == null ? null : `/api/hr/candidates/${candidateId}`,
+}) {
   const [open, setOpen] = useState(false)
   const [comments, setComments] = useState(null)
   const [writing, setWriting] = useState(false)
@@ -102,7 +114,7 @@ export default function CommentsPopover({ candidateId, label = 'Comments', meId 
 
   useEffect(() => {
     if (!open) return
-    get(`/api/hr/candidates/${candidateId}/comments`, 'recruiter')
+    get(`${basePath}/comments`, 'recruiter')
       .then((data) => {
         setComments(data.comments)
         /* The list just read is the truth; the shared count may predate a
@@ -120,7 +132,7 @@ export default function CommentsPopover({ candidateId, label = 'Comments', meId 
     setSending(true)
     setError('')
     try {
-      const data = await post(`/api/hr/candidates/${candidateId}/comments`, { body }, 'recruiter')
+      const data = await post(`${basePath}/comments`, { body }, 'recruiter')
       setComments(data.comments)
       setCommentCount(candidateId, data.comments.length)
       setDraft('')
@@ -144,7 +156,7 @@ export default function CommentsPopover({ candidateId, label = 'Comments', meId 
     if (!window.confirm('Delete this comment? Your team will no longer see it.')) return
     setError('')
     try {
-      const data = await del(`/api/hr/candidates/${candidateId}/comments/${comment.id}`, 'recruiter')
+      const data = await del(`${basePath}/comments/${comment.id}`, 'recruiter')
       setComments(data.comments)
       setCommentCount(candidateId, data.comments.length)
     } catch (err) {

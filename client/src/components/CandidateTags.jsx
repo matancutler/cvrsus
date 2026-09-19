@@ -71,7 +71,19 @@ export function TagStrip({ tags, limit = MAX }) {
  * default and editing is a pencil away: crosses that are always live are
  * crosses that get pressed by accident on a list you are scrolling.
  */
-export default function TagEditor({ candidateId, tags, onChange, label = 'Tags' }) {
+/*
+ * `basePath` is how the same editor annotates two different kinds of person.
+ *
+ * A Triage applicant is not a candidate — different table, different life —
+ * but a tag on one means exactly what a tag on the other means, and the
+ * recruiter should not meet two different controls. So the caller supplies
+ * the collection and this stays ignorant of which it is. Defaulted, so every
+ * existing call site is unchanged.
+ */
+export default function TagEditor({
+  candidateId, tags, onChange, label = 'Tags',
+  basePath = candidateId == null ? null : `/api/hr/candidates/${candidateId}`,
+}) {
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState([])
@@ -159,7 +171,7 @@ export default function TagEditor({ candidateId, tags, onChange, label = 'Tags' 
      * drawn.
      */
     setDraft(tags ?? [])
-    get(`/api/hr/candidates/${candidateId}/tags`, 'recruiter')
+    get(`${basePath}/tags`, 'recruiter')
       .then((data) => { setDraft(data.tags); onChange?.(data.tags) })
       .catch((err) => setError(err.message))
   }, [open, candidateId]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -182,7 +194,7 @@ export default function TagEditor({ candidateId, tags, onChange, label = 'Tags' 
     setSaving(true)
     setError('')
     try {
-      const data = await put(`/api/hr/candidates/${candidateId}/tags`, { tags: draft }, 'recruiter')
+      const data = await put(`${basePath}/tags`, { tags: draft }, 'recruiter')
       setDraft(data.tags)
       onChange?.(data.tags)
       setEditing(false)

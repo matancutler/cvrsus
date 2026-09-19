@@ -982,6 +982,42 @@ export const SCHEMA = `
   /* Where each recruiter had got to, so "new since you looked" is per person
      rather than per session. A colleague opening it does not mark your
      arrivals as read. */
+  /* ------------------------------ notes and tags on a Triage applicant ---
+     Their own tables rather than a nullable column on candidate_tags and
+     candidate_comments, and the reason is not squeamishness about a JOIN:
+     both of those declare candidate_id NOT NULL, and widening a live table's
+     NOT NULL in SQLite means rebuilding it. Two small tables that mirror the
+     shape cost nothing and risk nothing.
+
+     They are also genuinely different things. A Triage applicant is somebody
+     who applied to one company for one role; a candidate is somebody on the
+     marketplace. An applicant never becomes a candidate, so a note written
+     about one has no second life. */
+  CREATE TABLE IF NOT EXISTS triage_applicant_tags (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id          INTEGER NOT NULL,
+    triage_applicant_id INTEGER NOT NULL REFERENCES triage_applicants(id) ON DELETE CASCADE,
+    label               TEXT NOT NULL,
+    colour              TEXT NOT NULL DEFAULT 'grey',
+    position            INTEGER NOT NULL DEFAULT 0,
+    created_at          TEXT NOT NULL
+  );
+
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_triage_tags_unique
+    ON triage_applicant_tags(company_id, triage_applicant_id, label);
+
+  CREATE TABLE IF NOT EXISTS triage_applicant_comments (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id          INTEGER NOT NULL,
+    triage_applicant_id INTEGER NOT NULL REFERENCES triage_applicants(id) ON DELETE CASCADE,
+    recruiter_id        INTEGER NOT NULL,
+    body                TEXT NOT NULL,
+    created_at          TEXT NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_triage_comments
+    ON triage_applicant_comments(company_id, triage_applicant_id, created_at);
+
   CREATE TABLE IF NOT EXISTS triage_views (
     triage_id    INTEGER NOT NULL,
     recruiter_id INTEGER NOT NULL,
