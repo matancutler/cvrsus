@@ -198,6 +198,14 @@ export default function TagEditor({
       setDraft(data.tags)
       onChange?.(data.tags)
       setEditing(false)
+      /*
+       * And the panel goes away.
+       *
+       * It stayed open on the saved list, which is the one view nobody needs:
+       * the tags are on the card behind it, under the panel that is covering
+       * them. Saving is the end of the task, so it ends the task.
+       */
+      setOpen(false)
     } catch (err) {
       setError(err.message)
     } finally {

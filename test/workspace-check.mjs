@@ -1359,6 +1359,39 @@ check('the provenance chip says two words, not the whole job description',
   && /Uploaded to the "\$\{result\.fromTriage\.title\}" Triage/.test(card),
   'a Triage is titled with its JD, which is a sentence')
 
+section('The name is never the thing that gives way')
+
+/*
+ * Both the name and the tag strip beside it can shrink, and flexbox shares
+ * the shortfall in proportion to flex-shrink — so with both at 1 a long name
+ * and a full strip each lost about half and the row showed neither properly.
+ */
+check('the strip absorbs the shortfall, the name does not',
+  /\.result-headline \.result-name\{[^}]*flex-shrink:1/.test(css)
+  && /\.result-headline \.tag-strip\{[^}]*flex-shrink:12/.test(css),
+  'a row whose tags survived and whose name did not would be the wrong way round')
+
+check('the count is never cut',
+  /\.tag-strip \.tag-more\{[^}]*flex:0 0 auto/.test(css)
+  && /\.tag-strip \.tag-more\{[^}]*text-overflow:clip/.test(css),
+  'a clipped "+" says nothing, and saying how many are hidden is its whole job')
+
+check('the dialog never abbreviates the name',
+  /\.candidate-head-lead \.result-headline \.result-name\{[^}]*white-space:normal/.test(css)
+  && /\.candidate-head-lead \.result-headline \.result-name\{[^}]*text-overflow:clip/.test(css),
+  'this screen IS the click that the row truncates in favour of')
+
+check('and wraps its tags onto a second line instead of squeezing them',
+  /\.candidate-head-lead \.tag-strip\{[^}]*flex-wrap:wrap/.test(css)
+  && /\.candidate-head-lead \.tag-strip\{[^}]*max-width:18rem/.test(css),
+  'about three to a line, the rest underneath')
+
+check('saving a tag closes the panel',
+  /onChange\?\.\(data\.tags\)[\s\S]{0,400}setOpen\(false\)/.test(
+    read('../client/src/components/CandidateTags.jsx'),
+  ),
+  'it stayed open on the saved list, covering the card that shows it')
+
 section('What your team calls a candidate')
 const tagSource = read('../client/src/components/CandidateTags.jsx')
 

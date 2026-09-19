@@ -3235,6 +3235,52 @@ input:focus, select:focus, textarea:focus, .chip-input:focus-within {
 .modal-title { display: flex; flex-direction: column; gap: 0.15rem; min-width: 0; }
 /* The name, and the dot that says whether they are around. */
 .modal-title h2 { overflow-wrap: anywhere; display: flex; align-items: center; gap: 0.45rem; }
+
+/*
+ * In the dialog the name is never abbreviated.
+ *
+ * On a row it truncates, because a row is one line in a list and the whole
+ * of it is one click away. This IS that click: a recruiter who opened
+ * somebody to write to them is entitled to the name they are writing to, and
+ * "Matan Matany…" is the one place that is useless.
+ *
+ * So the row's rule is undone here rather than inherited. The name takes what
+ * it needs and wraps if it must; the tags take what is left.
+ */
+.candidate-head-lead .result-headline {
+  flex-wrap: wrap;
+  /* No corner to reserve: the dialog's controls are a sibling grid track, not
+     an absolutely-positioned overlay. */
+  padding-right: 0;
+}
+.candidate-head-lead .result-headline .result-name {
+  flex: 0 1 auto;
+  flex-shrink: 0;
+  min-width: 0;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+/*
+ * Three to a line, the rest underneath.
+ *
+ * The row keeps everything on one line because its height has to be uniform
+ * down a list. A dialog has no such constraint and one clipped line of five
+ * tags tells a recruiter less than two honest lines do — so here the strip
+ * wraps, and three is what fits beside a name without pushing it down.
+ */
+.candidate-head-lead .tag-strip {
+  /* Beside the name, not under it — and capped at about three chips wide, so
+     a fourth and fifth wrap onto a second line rather than squeezing five
+     into the width of three. */
+  flex: 0 1 auto;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  max-width: 18rem;
+  row-gap: 0.3rem;
+}
+.candidate-head-lead .tag-strip .tag { flex: 0 0 5.5rem; min-width: 0; }
 .modal-head .btn-quiet { margin-left: auto; font-size: 1.3rem; line-height: 1; }
 
 .modal-body { display: flex; flex-direction: column; gap: 1rem; }
@@ -3919,7 +3965,19 @@ input:focus, select:focus, textarea:focus, .chip-input:focus-within {
   min-width: 0;
   padding-right: clamp(7rem, 30%, 11.5rem);
 }
+/*
+ * The name gives way last.
+ *
+ * Both of these can shrink, and flexbox shares the shortfall in proportion to
+ * flex-shrink — so with both at 1 a long name and a full strip each lost
+ * about half, and the row ended up showing neither properly. Weighted 1
+ * against 12, the strip absorbs almost all of it and the name is the last
+ * thing to be cut. A row whose tags survived and whose name did not would be
+ * the wrong way round.
+ */
 .result-headline .result-name {
+  flex: 0 1 auto;
+  flex-shrink: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3927,7 +3985,12 @@ input:focus, select:focus, textarea:focus, .chip-input:focus-within {
 }
 /* Never more than half the line: the name is what the row is for, and a
    heavily tagged candidate must not push their own name out of view. */
-.result-headline .tag-strip { flex: 0 1 auto; overflow: hidden; max-width: 52%; }
+.result-headline .tag-strip {
+  flex: 0 1 auto;
+  flex-shrink: 12;
+  overflow: hidden;
+  max-width: 52%;
+}
 
 /*
  * The folder, as a dot.
@@ -4020,7 +4083,15 @@ input:focus, select:focus, textarea:focus, .chip-input:focus-within {
  * all the candidate had written. They are not part of the identity; they are
  * what the row is for.
  */
+/*
+ * Closer to the name than it was.
+ *
+ * The reading sat a full line below the contact block, which on a card whose
+ * left column is now avatar-over-score left a band of empty card between the
+ * person and what is said about them. They belong together.
+ */
 .result-say {
+  margin-top: -0.35rem;
   grid-column: 1 / -1;
   /* Under the name rather than under the photograph: the portrait is 46px and
      the lead's gap is 1rem, so the text starts where the name starts. */
@@ -9382,9 +9453,20 @@ html:has(.workspace-shell) { scrollbar-gutter: auto; }
   white-space: nowrap;
   text-align: center;
 }
+/*
+ * The count is the one chip that must never be cut.
+ *
+ * It inherited the strip's shrink and its 3.2rem floor, so on a narrow row
+ * "+3" came out as a clipped "+" — which says nothing at all, and the whole
+ * reason it exists is to say how many are not shown. It keeps its own size,
+ * refuses to shrink, and overrides the ellipsis it does not need.
+ */
 .tag-strip .tag-more {
   flex: 0 0 auto;
-  padding-inline: 0.4rem;
+  min-width: 0;
+  padding-inline: 0.45rem;
+  overflow: visible;
+  text-overflow: clip;
 }
 /* Wide enough for a couple of words, capped so one long tag cannot take the
    whole strip and leave no room for the count. */
