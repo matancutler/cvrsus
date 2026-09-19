@@ -10782,11 +10782,19 @@ html:has(.workspace-shell) { scrollbar-gutter: auto; }
 .triage-staged-actions { display: flex; align-items: center; gap: 0.9rem; flex-wrap: wrap; }
 
 
-/* Coverage below the floor. Amber rather than red: a thin CV is a reason to
-   read carefully, not an incident. */
+/*
+ * Coverage below the floor. Amber rather than red: a thin CV is a reason to
+ * read carefully, not an incident.
+ *
+ * The same three tokens .chip-warn uses, and for the same reason — the two
+ * say "caution" about different things and must not be two different
+ * ambers. It was written with a --warn-bg that does not exist anywhere in
+ * this stylesheet, so it was painting the hardcoded fallback beside a
+ * .chip-warn painting --warn-soft, which is four shades lighter.
+ */
 .chip-review {
-  background: var(--warn-bg, #f6ecd9);
-  color: var(--warn, #8a5a12);
-  border-color: transparent;
-  font-weight: var(--w-semi, 600);
+  background: var(--warn-soft);
+  color: var(--warn);
+  border-color: var(--warn-border);
+  font-weight: var(--w-semi);
 }

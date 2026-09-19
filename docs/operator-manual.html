@@ -1205,7 +1205,9 @@ node server/scripts/contact.mjs show <span class="c">&lt;id&gt;</span></pre>
           <p class="what">
             Dry run. Shows how many stored analyses the current scoring version would rescore,
             how far their numbers move, and how many verdicts cite a quote that is not in the CV.
-            Writes nothing.
+            Writes nothing. Says <em>&ldquo;Nothing to do&rdquo;</em> if the migration has already
+            run, which is the ordinary answer &mdash; the server runs it itself on the first boot
+            after a scoring-version bump, so by the time you type this it is usually done.
           </p>
           <p class="when">
             After changing the scoring arithmetic, before letting it near anything.
@@ -1223,8 +1225,11 @@ node server/scripts/contact.mjs show <span class="c">&lt;id&gt;</span></pre>
             updated in place.
           </p>
           <p class="when">
-            Once after a scoring-version bump. Without it the bump hides every stored analysis
-            and the next search pays a model to recompute what is already there.
+            Rarely, because the server already does it: <code>index.js</code> runs this before
+            it accepts the first request, and skips it on every boot after. Type it yourself only
+            if the boot log said the migration failed, or after a revert. Add <code>--force</code>
+            to run it again once it has run, and <code>--job 42</code> or <code>--triage 7</code>
+            to do one first and look at the result.
           </p>
         </article>
 
@@ -1234,7 +1239,11 @@ node server/scripts/contact.mjs show <span class="c">&lt;id&gt;</span></pre>
             <span class="risk risk-write">Writes</span>
           </div>
           <p class="what">
-            Removes the rows the migration added and puts Triage back from its backup.
+            Undoes exactly one run and nothing else. Every row the migration wrote is recorded
+            &mdash; the key of each Search row it inserted, the previous contents of each Triage
+            applicant it overwrote &mdash; so this removes those and restores those, and leaves
+            alone every analysis written by ordinary use since. Both tables are copied to a
+            timestamped backup on the way back as well as on the way out.
           </p>
           <p class="when">
             If the new scores are wrong. Then set <code>MATCH_V_SCORING=2</code> and restart &mdash;
@@ -1368,6 +1377,28 @@ node server/scripts/contact.mjs show <span class="c">&lt;id&gt;</span></pre>
               <td>claude-sonnet-5</td>
               <td>Writes the paragraph and interview questions when a recruiter opens a candidate.
                 A writing job, not a judgement, which is why it is the cheaper model.</td>
+            </tr>
+            <tr>
+              <th scope="row"><code>MATCH_SILENCE_FRACTION</code></th>
+              <td>0.35</td>
+              <td>What an unanswered requirement earns, as a share of its weight. A CV that does
+                not mention Kubernetes is not a CV saying the candidate cannot do it, so silence
+                costs something rather than everything. Raise it and thin CVs climb; lower it and
+                only what a CV actually evidences counts. <strong>It applies to analyses written
+                after the change, not to ones already stored</strong>.</td>
+            </tr>
+            <tr>
+              <th scope="row"><code>MATCH_COVERAGE_FLOOR</code></th>
+              <td>50</td>
+              <td>Below this much of the job checked, a candidate card says <em>Needs review</em>
+                instead of a percentage. Purely a label: it changes no score and no ranking.</td>
+            </tr>
+            <tr>
+              <th scope="row"><code>SCORE_MIGRATE_ON_BOOT</code></th>
+              <td>on</td>
+              <td>Set to <code>off</code> to stop the server rescoring stored analyses at
+                startup. Only worth doing if a migration is misbehaving and you want the site up
+                while you look at it.</td>
             </tr>
             <tr>
               <th scope="row"><code>MATCH_DAILY_CAP</code></th>
