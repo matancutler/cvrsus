@@ -7,6 +7,10 @@
  *   npm run score:migrate -- --run             do it
  *   npm run score:migrate -- --job 42 --run    one job first, to look at
  *   npm run score:migrate -- --revert --run    put it back
+ *   npm run score:migrate -- --force --run     run it again once it has run
+ *
+ * It also runs itself on every boot (index.js), and does nothing on all but
+ * the first — see the gate below.
  *
  * ---
  *
@@ -307,6 +311,62 @@ const blank = () => ({
 })
 const searchStats = blank()
 const triageStats = blank()
+
+/*
+ * Having already run is the ordinary case, and it has to cost nothing.
+ *
+ * This runs on every boot (see the call in index.js), and almost every boot
+ * has no work: the rows moved on the deploy that raised the version and
+ * stayed moved. Falling through would write a full copy of both tables to
+ * the disk on every restart, which on a 5 GB volume is a slow way to run
+ * out of room for CVs — and would rewrite every migrated row's created_at,
+ * which workspace.js orders a folder's scores by.
+ *
+ * The gate is the recorded run, not a count of what is left at the old
+ * version. Counting looks like the obvious test and is wrong: the Search
+ * half is ADDITIVE, so its version-2 rows are still there afterwards and
+ * always will be — that is what makes the revert a setting rather than a
+ * restore. A count would say "116 to do" forever and re-migrate on every
+ * boot. Nor can the count be fixed by looking for rows with no version-3
+ * twin, because the loop deliberately skips rows whose candidate has been
+ * re-profiled since, and those never get one.
+ *
+ * Once the app writes version 3 it never writes another version-2 row, so
+ * the migration is a once-per-bump event and "has it been done" is exactly
+ * the right question. A revert clears reverted_at and it becomes due again.
+ */
+const FORCE = has('force')
+
+const SCOPED = ONLY_JOB !== null || ONLY_TRIAGE !== null
+
+const alreadyRun = SCOPED || FORCE ? null : db.prepare(`
+  SELECT id, created_at FROM score_migration_runs
+  WHERE from_version = ? AND to_version = ? AND reverted_at IS NULL AND scope = ?
+  ORDER BY id DESC LIMIT 1
+`).get(FROM, TARGET, JSON.stringify({ job: null, triage: null }))
+
+if (alreadyRun) {
+  console.log(`Run ${alreadyRun.id} already moved ${FROM} -> ${TARGET} on ${alreadyRun.created_at}.`)
+  console.log('Nothing to do. --force runs it again; --revert --run undoes it.\n')
+  process.exit(0)
+}
+
+/* And a database with nothing at the old version at all — a fresh install,
+   or one that was never on version 2 — needs no run recorded to skip. */
+const pending = (ONLY_TRIAGE !== null ? 0 : db.prepare(`
+  SELECT COUNT(*) AS n FROM candidate_job_analyses
+  WHERE scoring_version = ? ${ONLY_JOB === null ? '' : 'AND job_id = ?'}
+`).get(...(ONLY_JOB === null ? [FROM] : [FROM, ONLY_JOB])).n)
+  + (ONLY_JOB !== null ? 0 : db.prepare(`
+    SELECT COUNT(*) AS n FROM triage_applicants
+    WHERE criteria IS NOT NULL AND (scoring_version IS NULL OR scoring_version = ?)
+      ${ONLY_TRIAGE === null ? '' : 'AND triage_id = ?'}
+  `).get(...(ONLY_TRIAGE === null ? [FROM] : [FROM, ONLY_TRIAGE])).n)
+
+if (pending === 0) {
+  console.log(`Nothing at version ${FROM} to migrate.\n`)
+  process.exit(0)
+}
 
 if (RUN) backup('')
 

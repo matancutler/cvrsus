@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -8271,7 +8272,74 @@ function reportMissingUploads() {
  */
 const CHECKIN_SWEEP_MS = 24 * 60 * 60 * 1000
 
+/*
+ * Stored scores are moved to the current arithmetic before the first request.
+ *
+ * `scoring_version` is in the primary key of candidate_job_analyses and in
+ * the WHERE clause of every cache read, so raising it turns every stored
+ * analysis into a miss. The next recruiter to open a folder they have opened
+ * fifty times pays for a fresh model call on every candidate in it, and so
+ * does the one after that — a version bump on its own is a re-analysis wave
+ * that costs real money and changes nothing a recruiter can see.
+ *
+ * It does not have to be. criteria_results already stores each requirement's
+ * tier, weight, verdict and quote, which is everything the new arithmetic
+ * needs: the rows can be moved with no model call at all. That is what
+ * score-migrate.mjs does, and this runs it.
+ *
+ * Here rather than in the start command because the failure modes are
+ * different. A migration wired into `npm start` that exits nonzero takes the
+ * site down; this one is caught, logged and stepped over, and the worst case
+ * of stepping over it is the wave we would have had anyway.
+ *
+ * Spawned rather than imported because there must be exactly one
+ * implementation of this arithmetic. A second copy inlined here is two
+ * scorers one bug apart, and the bug would be invisible: both would produce
+ * a plausible number.
+ *
+ * Idempotent and cheap when idle — the script counts the rows at the old
+ * version and exits before touching anything if there are none, so a restart
+ * costs one process and two COUNTs.
+ */
+function migrateStoredScores() {
+  if (process.env.SCORE_MIGRATE_ON_BOOT === 'off') {
+    console.log('  score migration on boot is off (SCORE_MIGRATE_ON_BOOT=off)')
+    return
+  }
+  const script = fileURLToPath(new URL('../scripts/score-migrate.mjs', import.meta.url))
+  try {
+    const out = execFileSync(process.execPath, [script, '--run'], {
+      encoding: 'utf8',
+      /* Long enough for a table far larger than this one — it is paged, 500
+         rows to a transaction, and makes no network calls. Short enough that
+         a wedged migration does not hold the first request forever. */
+      timeout: 10 * 60 * 1000,
+    })
+    /* Silent on the ordinary boot. The script says so in one of two ways:
+       it has run before, or there was never anything at the old version. */
+    if (/Nothing to do\.|Nothing at version/.test(out)) return
+    for (const line of out.split('\n')) if (line.trim()) console.log(`  ${line}`)
+  } catch (error) {
+    /*
+     * Loud, and then carry on.
+     *
+     * Stored scores staying at the old version is a cost problem. A server
+     * that will not boot is an outage, and the second is worse than the
+     * first by a long way.
+     */
+    console.error('  score migration on boot FAILED — stored scores are still on the old')
+    console.error('  arithmetic and will be re-analysed on demand. Run it by hand:')
+    console.error('    npm run score:migrate            (what it would do)')
+    console.error('    npm run score:migrate -- --run   (do it)')
+    console.error(`  ${error?.message ?? error}`)
+    const said = String(error?.stdout ?? '') + String(error?.stderr ?? '')
+    for (const line of said.split('\n').slice(-12)) if (line.trim()) console.error(`    ${line}`)
+  }
+}
+
 app.listen(PORT, async () => {
+  migrateStoredScores()
+
   const swept = sweepOrphanUploads()
   const missing = reportMissingUploads()
 
