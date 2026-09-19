@@ -2587,6 +2587,21 @@ input:focus, select:focus, textarea:focus, .chip-input:focus-within {
 .result-tags { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.15rem; }
 
 /*
+ * The model's reading, cut to two sentences and clamped to two lines.
+ *
+ * twoSentences() does the cutting, because a preview that ends mid-clause
+ * reads as broken rather than as abbreviated. The clamp is the backstop for
+ * two very long sentences: without it one card in twenty is four lines tall
+ * and the list stops being scannable. The whole of it is in the Score tab.
+ */
+.reasoning-line {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/*
  * Two sentences of the candidate's own summary, under the name.
  *
  * Clamped as well as previewed. The preview is cut to about two sentences in
@@ -3028,10 +3043,18 @@ input:focus, select:focus, textarea:focus, .chip-input:focus-within {
 }
 /* Person, score, actions — the score between two equal flexible tracks, which
    puts it on the dialog's centre line whatever the name's length. */
+/*
+ * Two tracks, not three.
+ *
+ * The middle one existed to centre a 2.15rem score between the person and
+ * the buttons — which made the number read as the dialog's title rather than
+ * as a property of the person. It has moved under the portrait, where the
+ * row already puts it, so the header is the person and the controls.
+ */
 .candidate-head-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-  align-items: center;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
   gap: 0.8rem;
 }
 /*
@@ -3045,11 +3068,21 @@ input:focus, select:focus, textarea:focus, .chip-input:focus-within {
  */
 .candidate-head-lead {
   display: flex;
-  align-items: center;
-  gap: 0.8rem;
+  /* Top, not centre: the left column is avatar over score, which is taller
+     than the name and the lines under it. */
+  align-items: flex-start;
+  gap: 0.9rem;
   min-width: 0;
   align-self: start;
 }
+
+/*
+ * Wider than the row's, because the dialog has the room and this is the
+ * number the profile was opened to read. Still framed rather than filled —
+ * the colour bands carry the meaning; the frame says "measurement".
+ */
+.candidate-head-figure { width: 76px; }
+.candidate-head-figure .score-value { font-size: 1.15rem; }
 /*
  * stretch, not end.
  *
@@ -3070,6 +3103,10 @@ input:focus, select:focus, textarea:focus, .chip-input:focus-within {
    follows, because it is a fact about the team rather than about the candidate.
    One line: broken over two it read as a paragraph under the name rather than
    as a footnote to it, and pushed the tabs down with it. */
+/* Each on its own line: "Revealed by me on 13 Sept 2026" and "Folder:
+   Shortlist" are two different facts and running them together with a dot
+   reads as one. */
+.candidate-head-meta { display: flex; flex-direction: column; gap: 0.1rem; align-items: flex-start; }
 .candidate-revealed-by {
   font-size: 0.78rem;
   color: var(--ink-3);
@@ -3093,12 +3130,8 @@ input:focus, select:focus, textarea:focus, .chip-input:focus-within {
  * header is laid out differently. The point is that both put the number on the
  * capacity line, so opening a card does not move it.
  */
-.candidate-head-score {
-  margin: 5px 0 0;
-  justify-self: center;
-  align-self: start;
-}
-.candidate-head-score .score-value { font-size: 2.15rem; letter-spacing: -0.04em; }
+/* .candidate-head-score is gone with the middle track; the number is inside
+   .candidate-head-figure now. */
 
 /*
  * On a phone there is no room for three across.
@@ -3109,10 +3142,10 @@ input:focus, select:focus, textarea:focus, .chip-input:focus-within {
  */
 @media (max-width: 560px) {
   .candidate-head-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .candidate-head-figure { width: 60px; }
   .candidate-head-lead { grid-column: 1; grid-row: 1; }
   .candidate-head-row .modal-menu { grid-column: 2; grid-row: 1; }
   /* A line of its own, so there is nothing to sit on the baseline of. */
-  .candidate-head-score { grid-column: 1 / -1; grid-row: 2; margin-top: 0; align-self: auto; }
   .candidate-head-meta { display: block; }
   .candidate-revealed-by { display: block; }
 }
@@ -3823,6 +3856,82 @@ input:focus, select:focus, textarea:focus, .chip-input:focus-within {
  * the middle of the side column it always had.
  */
 .result-main { position: relative; }
+
+/*
+ * The left column: who they are, and how they scored, stacked.
+ *
+ * The number used to sit in the top-right corner under the action buttons,
+ * which put it as far from the name as the card is wide and on the same line
+ * as the controls — so a column of scores was read by hunting, and the
+ * biggest number on the card belonged visually to the ⋮ beside it. Under the
+ * avatar it is part of the person: the eye lands on the portrait, drops to
+ * the number, and moves right to the name.
+ *
+ * Framed lightly rather than filled. The colour bands already carry the
+ * meaning; a solid block would make a 41% shout as loudly as a 98%, and the
+ * frame is there to say "this is a measurement" rather than to rank it.
+ */
+.result-portrait {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  /* Fixed, so the identity column starts at the same x on every row however
+     wide the number is — 9% and 100% must not move the name. */
+  flex: none;
+  width: 46px;
+}
+.result-portrait .score {
+  min-width: 0;
+  width: 100%;
+  padding: 0.12rem 0.1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--surface-2, transparent);
+}
+.result-portrait .score-value { font-size: 0.9rem; letter-spacing: -0.02em; }
+
+/*
+ * The name, then the tags, on one line.
+ *
+ * The name takes what it needs and gives the rest up: `min-width: 0` on the
+ * name is what lets it truncate instead of shoving the strip off the card,
+ * and the strip is `flex: 0 1 auto` so it shrinks before the name disappears
+ * entirely. A row where the tags survive and the name does not would be the
+ * wrong way round.
+ */
+.result-headline {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+.result-headline .result-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.result-headline .tag-strip { flex: 0 1 auto; overflow: hidden; }
+
+/*
+ * The folder, as a dot.
+ *
+ * It was a chip carrying the folder's name, which on a card with a reveal
+ * chip and a triage chip beside it was three worded pills competing with the
+ * person. The fact worth seeing at a glance is "this one is filed"; which
+ * folder is a hover away, and a click away in the dialog.
+ */
+.chip-folder-dot {
+  display: inline-block;
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--accent-soft-strong, #e5a0b4);
+  border: 1px solid rgb(0 0 0 / 12%);
+  cursor: help;
+}
 /*
  * The number sits ON the capacity line — the same baseline as "Tel Aviv ·
  * Immediately", not centred against the pair of lines above it.
@@ -5423,9 +5532,16 @@ select:required:invalid option { color: var(--text); }
 }
 
 /* Dot and photo as one unit, in one grid cell. */
-.result-portrait { display: flex; align-items: center; gap: 0.5rem; }
 /* The left of the card: face and name, read as one. */
-.result-lead { display: flex; align-items: center; gap: 1rem; min-width: 0; }
+.result-lead {
+  display: flex;
+  /* Top, not centre. The left column is now avatar + score, which is taller
+     than the name and city beside it — centring hung the name in the middle
+     of the pair and left the city floating. */
+  align-items: flex-start;
+  gap: 0.85rem;
+  min-width: 0;
+}
 
 .activity-dot {
   /* inline-block, not the span default: width and height do nothing to an
@@ -9217,6 +9333,34 @@ html:has(.workspace-shell) { scrollbar-gutter: auto; }
   gap: 0.25rem;
   max-width: 100%;
   min-width: 0;
+}
+
+/*
+ * Every frame the same width, whatever is written in it.
+ *
+ * A strip of chips sized to their own text is a ragged edge that changes on
+ * every row, and the eye reads the ragged edge rather than the words. Fixed
+ * at 5.5rem — wide enough for "screened" and "shortlist", narrow enough that
+ * five of them plus a name fit a card — with anything longer cut by ellipsis
+ * and the whole of it in the title attribute.
+ *
+ * `flex: 0 0 auto` on the counter so "+3" keeps its own small size: it is not
+ * a tag, it is how many were not shown, and padding it to the width of one
+ * would make it look like the biggest tag on the row.
+ */
+.tag-strip .tag {
+  flex: 0 0 5.5rem;
+  min-width: 0;
+  display: block;
+  padding-inline: 0.45rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+}
+.tag-strip .tag-more {
+  flex: 0 0 auto;
+  padding-inline: 0.4rem;
 }
 /* Wide enough for a couple of words, capped so one long tag cannot take the
    whole strip and leave no room for the count. */

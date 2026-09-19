@@ -368,6 +368,12 @@ function DemoCard({ card, onOpen, onReveal }) {
                 name on a 320px screen — and `.avatar-placeholder` has never had
                 a rule of its own to correct it. */}
             <span className="result-avatar avatar-empty"><PersonIcon /></span>
+            {/* Under the portrait, as everywhere else in the product. The
+                demo shares the stylesheet, and the comment above the lead
+                says why that only helps if the markup matches too. */}
+            <span className={`score score-${band}`}>
+              <span className="score-value">{Math.round(card.score)}%</span>
+            </span>
           </span>
 
           {/* Name and availability only. What the person says and how they
@@ -435,9 +441,6 @@ function DemoCard({ card, onOpen, onReveal }) {
             above the lead says it — sharing a stylesheet only prevents drift if
             the markup underneath matches — and this is where it had drifted.
           */}
-          <div className={`score score-${band}`}>
-            <span className="score-value">{Math.round(card.score)}%</span>
-          </div>
         </div>
 
         {/* What the row is for, across its whole width. */}

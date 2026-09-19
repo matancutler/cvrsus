@@ -663,10 +663,11 @@ section('The result card says one thing per line')
 check('no rank number beside the name', !/className="result-rank"/.test(panel))
 check('the score is a percentage', /\{result\.score\}%/.test(panel))
 check('with no label under it', !/className="score-label"/.test(panel))
-const cardHeading = card.slice(card.indexOf('<h3>'), card.indexOf('</h3>'))
+/* `<h3` rather than `<h3>`: the heading carries a class now — it is the row
+   that holds the name and the tags beside it. */
+const cardHeading = card.slice(card.indexOf('<h3'), card.indexOf('</h3>'))
 check('availability sits with the name, not on the photograph',
-  cardHeading.includes('<ActivityDot')
-  && !/result-portrait[\s\S]{0,160}<ActivityDot/.test(card))
+  cardHeading.includes('<ActivityDot'))
 check('no Save button on the card',
   !/\{saving \? 'Saving…' : 'Save'\}/.test(panel))
 /* Bounded by the corner itself: it holds a tag editor and a comment button as
@@ -721,9 +722,11 @@ check('no document chips on the card',
   && !/\+\{extras\} document/.test(card))
 /* The folder chip sits with the reveal it belongs beside, not under the
    summary two lines away. */
-check('the folder chip is in the corner, before the reveal chip',
-  card.indexOf('chip chip-folder') > card.indexOf('className="result-menu"')
-  && card.indexOf('chip chip-folder') < card.indexOf('chip chip-revealed'))
+check('the folder is a dot in the corner, before the reveal chip',
+  card.indexOf('chip-folder-dot') > card.indexOf('className="result-menu"')
+  && card.indexOf('chip-folder-dot') < card.indexOf('chip chip-revealed'),
+  'a worded folder chip beside a worded reveal chip was two pills competing '
+  + 'with the person; which folder is a hover away')
 /* The folder chip now precedes it in the corner, so the slice runs the other
    way: from the reveal chip to the end of the corner rather than to the folder
    chip that used to sit two lines below the summary. */
@@ -831,7 +834,7 @@ check('and Score is not offered when there is no score to show',
   'a folder has no job description behind it, and `result` being present is not the same as a score')
 check('the three are Profile, Score and Messages',
   /\['profile', 'Profile'\]/.test(dialog) && /\['messages', 'Messages'\]/.test(dialog))
-const profileHeading = dialog.slice(dialog.indexOf('<h2>'), dialog.indexOf('</h2>'))
+const profileHeading = dialog.slice(dialog.indexOf('<h2'), dialog.indexOf('</h2>'))
 check('availability is the dot beside the name, as on the card',
   profileHeading.includes('<ActivityDot activity={data.activity}'))
 check('with the worded chip kept only for somebody who asked not to be approached',
@@ -972,14 +975,24 @@ check('who paid sits beside the person they paid for',
   /className="candidate-revealed-by"/.test(dialog)
   && !/className="alert alert-ok"[\s\S]{0,80}Revealed by/.test(dialog),
   'it was a banner across the body — a lot of screen for a fact about the name')
-check('the score is in the header, centred, and big',
-  /className=\{scored \? `candidate-head-score/.test(dialog)
-  && /\.candidate-head-row\{[^}]*grid-template-columns:minmax\(0,1fr\) auto minmax\(0,1fr\)/.test(css)
-  && /\.candidate-head-score \.score-value\{font-size:2\.15rem/.test(css))
+/*
+ * The number has moved out of the middle of the header and under the
+ * portrait, where the row already puts it.
+ *
+ * Centred between the person and the buttons it read as the dialog's title
+ * rather than as a property of the person, and it made the header a
+ * three-track grid whose middle track existed only to hold it.
+ */
+check('the score is under the portrait, not centred in the header',
+  /candidate-head-figure/.test(dialog)
+  && !/candidate-head-score/.test(dialog)
+  && /\.candidate-head-row\{[^}]*grid-template-columns:minmax\(0,1fr\) auto[;}]/.test(css),
+  'two tracks now: the person, and the controls')
 check('the tabs are centred on the dialog too',
   /\.dialog-tabs\{[^}]*justify-self:center/.test(css))
-check('and the score cell is rendered even without a score, so the menu stays put',
-  /'candidate-head-score'\}>[\s\S]{0,200}\{scored && <span className="score-value"/.test(dialog))
+check('and it is absent rather than empty when there is no score',
+  /\{scored && \([\s\S]{0,200}score score-\$\{scoreBand/.test(dialog),
+  'a profile opened from a folder has no job description behind it')
 
 section('A menu opened from a dialog is above the dialog')
 /*
@@ -1171,31 +1184,136 @@ section('A surname is shown once it is paid for, and never before')
  */
 check('the row reads display_name and nothing else',
   /<span className="result-name">\{candidate\.display_name\}<\/span>/.test(card))
-check('and so does the profile',
-  /<span className="result-name">[\s\S]{0,80}candidate \? candidate\.display_name : 'Loading…'/.test(dialog)
-  && !/candidate\.name \?\? candidate\.display_name/.test(dialog))
+/*
+ * The profile shows the WHOLE name once it has been paid for.
+ *
+ * display_name is still the masking rule and the row still reads nothing
+ * else — but the parts arrive with the reveal, and this is the screen a
+ * recruiter is on when they are about to write to somebody. fullName falls
+ * back to display_name on its own before the reveal, because the parts are
+ * not in the payload then.
+ */
+check('and the profile shows every part of it once revealed',
+  /fullName\(candidate\) \?\? candidate\.display_name/.test(dialog)
+  && !/candidate\.name \?\? candidate\.display_name/.test(dialog),
+  'the middle name is on the CV and this is the screen with room for it')
+check('and the parts only arrive with the reveal',
+  read('../server/src/schema.js').includes("'name', 'first_name', 'middle_name', 'last_name'"),
+  'ON_REVEAL_FIELDS — before that there is nothing to build a full name from')
 check('which the server masks until the reveal',
   read('../server/src/schema.js').includes('view.display_name = maskedDisplayName(candidate.first_name)')
   && read('../server/src/schema.js').includes('if (full) view.display_name = full'))
+
+section('One candidate card, everywhere')
+
+/*
+ * The same four things on every surface a recruiter meets a candidate on:
+ * the score under the portrait, the tags on the name's line, the folder as a
+ * dot, and the model's reading cut to two sentences.
+ *
+ * Asserted across the shared card AND the Triage row, because the Triage row
+ * is a hand-copy of the same markup rather than the same component — which
+ * is exactly the arrangement that drifts.
+ */
+const triageRow = (triageTab.split('function TriageResultCard')[1] ?? '').split('\nfunction ')[0]
+const demoRow = read('../client/src/components/LiveDemo.jsx')
+
+/* Asserted by ORDER rather than by a character window: these blocks carry
+   long comments, and a window wide enough to clear them is wide enough to
+   pass on markup that has drifted. Between the portrait opening and the
+   identity that follows it is the column, whatever is written in between. */
+const between = (source, from, to) => {
+  const start = source.indexOf(from)
+  const end = source.indexOf(to, start)
+  return start >= 0 && end > start ? source.slice(start, end) : ''
+}
+
+check('the score is inside the portrait column, not the corner',
+  between(card, 'result-portrait">', 'result-identity').includes('score score-')
+  && between(triageRow, 'result-portrait">', 'result-identity').includes('score score-')
+  && between(demoRow, 'result-portrait">', 'Name and availability').includes('score score-'),
+  'the number belonged visually to the ⋮ it sat under')
+
+check('and the corner no longer draws one',
+  !/className=\{`score score-\$\{band\}`\}>[\s\S]{0,120}result-side/.test(card)
+  && !/<div className="result-side">[\s\S]{0,400}score-value/.test(triageRow))
+
+check('the portrait column is a fixed width, so names start at the same place',
+  /\.result-portrait\{[^}]*width:46px/.test(css)
+  && /\.result-portrait\{[^}]*flex-direction:column/.test(css),
+  '9% and 100% must not move the name')
+
+check('the score is framed rather than filled',
+  /\.result-portrait \.score\{[^}]*border:1px solid/.test(css),
+  'a solid block would make a 41% shout as loudly as a 98%')
+
+check('the Triage row shows the folder as a dot too',
+  /chip-folder-dot/.test(triageRow) && !/chip chip-folder"/.test(triageRow))
+
+check('the folder dot says which folder on hover',
+  /chip-folder-dot[\s\S]{0,200}title=\{`Saved in your \$\{/.test(card)
+  && /chip-folder-dot[\s\S]{0,200}title=\{`Saved in your \$\{/.test(triageRow),
+  'a dot nobody can interrogate is a dot that means nothing')
+
+check('and it is a round pink dot rather than a pill',
+  /\.chip-folder-dot\{[^}]*border-radius:50%/.test(css)
+  && /\.chip-folder-dot\{[^}]*width:9px/.test(css))
+
+/*
+ * Two sentences on the card, the whole reading in the Score tab.
+ *
+ * The cut happens in JavaScript because a preview that ends mid-clause reads
+ * as broken; the clamp is the backstop for two very long sentences, so one
+ * card in twenty cannot be four lines tall.
+ */
+check('the card cuts the reading to two sentences',
+  /twoSentences\(result\.analysis\.reasoning\)/.test(card),
+  'a four-line paragraph makes every row a different height')
+check('with the whole of it a hover away as well',
+  /className="reasoning-line" title=\{result\.analysis\.reasoning\}/.test(card))
+check('and clamped as a backstop',
+  /\.reasoning-line\{[^}]*-webkit-line-clamp:2/.test(css))
+check('while the Score tab shows all of it',
+  /if \(analysis\?\.reasoning\) lines\.push\(analysis\.reasoning\)/.test(panel),
+  'uncut — the tab is where there is room')
+
+check('which folder, in words, on the one screen with room for it',
+  /\{inFolder && \([\s\S]{0,300}Folder: <strong>\{inFolder\.name\}/.test(dialog),
+  'and absent entirely when they are not filed — "Folder: none" says nothing')
 
 section('What your team calls a candidate')
 const tagSource = read('../client/src/components/CandidateTags.jsx')
 
 check('the + stands beside the comments, on the row and in the profile',
   /<TagEditor/.test(card) && /<TagEditor/.test(dialog))
-/* The strip moved down with the balancing column that used to hold it: it is
-   among the chips under the summary, which is where the other things this team
-   said about this candidate already are. */
-check('the tag strip is among the chips under the summary',
-  /<div className="result-tags">[\s\S]{0,400}<TagStrip/.test(card)
-  && /className="modal-menu"[\s\S]{0,260}<TagStrip/.test(dialog))
+/*
+ * The strip sits on the name's line, on the row and in the profile alike.
+ *
+ * Under the summary it was below the thing it describes and two lines from
+ * the name; in the profile it was over in the right-hand cluster between the
+ * score and the buttons, which is where the things you DO to a candidate
+ * live. A tag is something somebody has already said about them.
+ */
+check('the tag strip is on the name line, on the row and in the profile',
+  between(card, '<h3 className="result-headline">', '</h3>').includes('<TagStrip')
+  && between(dialog, '<h2 className="result-headline">', '</h2>').includes('<TagStrip'))
+check('and not in the corner with the buttons',
+  !/className="modal-menu"[\s\S]{0,260}<TagStrip/.test(dialog))
 check('and disappears entirely when there is nothing to say',
   /if \(!tags \|\| tags\.length === 0\) return null/.test(tagSource),
   'an empty box is furniture')
 check('the row keeps one line however many tags there are',
   /\.tag-strip\{[^}]*flex-wrap:nowrap/.test(css)
-  && /export function TagStrip\(\{ tags, limit = 1 \}\)/.test(tagSource),
+  && /export function TagStrip\(\{ tags, limit = MAX \}\)/.test(tagSource),
   'a row whose height depends on how much somebody has annotated it is a list that jumps about')
+check('up to five of them, which is as many as a candidate can have',
+  /^const MAX = 5$/m.test(tagSource),
+  'the strip showed one and a "+4" while the score was in the way; it is not now')
+check('every frame the same width, its text cut rather than wrapped',
+  /\.tag-strip \.tag\{[^}]*flex:0 0 5\.5rem/.test(css)
+  && /\.tag-strip \.tag\{[^}]*text-overflow:ellipsis/.test(css)
+  && /\.tag-strip \.tag\{[^}]*white-space:nowrap/.test(css),
+  'chips sized to their own text are a ragged edge that changes on every row')
 check('what is held back is counted, not dropped',
   /\+\{rest\.length\}/.test(tagSource) && /title=\{rest\.map\(/.test(tagSource))
 

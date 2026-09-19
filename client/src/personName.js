@@ -112,3 +112,24 @@ export function onBlurName(handler) {
     if (tidied !== event.target.value) handler(tidied)
   }
 }
+
+/**
+ * Every part of a person's name, for the one screen entitled to all of it.
+ *
+ * `display_name` is first and last — the server builds it that way and every
+ * card in the product reads it, so widening it there would put a middle name
+ * on every row of every list. The detail view has room and a reason: it is
+ * the screen a recruiter is on when they are about to write to somebody, and
+ * the name on the CV is the name to use.
+ *
+ * Returns null when the parts are not there. Before a reveal the server does
+ * not send them at all, which is the point — so the caller falls back to
+ * whatever it was showing before rather than rendering an empty heading.
+ */
+export function fullName(candidate) {
+  const parts = [candidate?.first_name, candidate?.middle_name, candidate?.last_name]
+    .map((part) => String(part ?? '').trim())
+    .filter(Boolean)
+
+  return parts.length > 0 ? personName(parts.join(' ')) : null
+}

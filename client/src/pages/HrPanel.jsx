@@ -13,6 +13,8 @@ import { PencilIcon, TickIcon } from '../components/EditIcons.jsx'
 import PopMenu from '../components/PopMenu.jsx'
 import CommentsPopover from '../components/CommentsPopover.jsx'
 import TagEditor, { TagStrip } from '../components/CandidateTags.jsx'
+import twoSentences from '../twoSentences.js'
+import { fullName } from '../personName.js'
 import AddPhotoIcon from '../components/AddPhotoIcon.jsx'
 import Notice, { StatusNotice, useStandingNotice } from '../components/Notice.jsx'
 import scoreBand from '../scoreBand.js'
@@ -5565,15 +5567,29 @@ function ResultCard({
             what puts the score on the card's centre line. With the avatar in a
             track of its own the score was pushed past centre by its width. */}
         <span className="result-lead">
+          {/*
+            The person and their score, stacked.
+
+            The number was in the top-right corner under the buttons, which put
+            it as far from the name as the card is wide and made the biggest
+            figure on the card belong visually to the ⋮ beside it. Under the
+            portrait it belongs to the person: the eye lands on the face, drops
+            to the number, and moves right to the name.
+          */}
           <span className="result-portrait">
             <CandidateAvatar candidate={candidate} />
+            {Number.isFinite(result.score) && (
+              <span className={`score score-${band}`}>
+                <span className="score-value">{result.score}%</span>
+              </span>
+            )}
           </span>
 
           <div className="result-identity">
-          <h3>
-            {/* Truncated rather than wrapped: the score sits on the card's
-                centre line, so the name has half the card and a long one would
-                otherwise push the dot onto a line of its own. */}
+          <h3 className="result-headline">
+            {/* Truncated rather than wrapped, and it is the thing that gives
+                way: min-width:0 here and a shrinkable strip beside it mean a
+                long name loses its tail before the tags lose their place. */}
             <span className="result-name">{candidate.display_name}</span>
             {/* Availability, beside the name it describes. It sat on the photo,
                 where it read as a property of the picture — and a recruiter
@@ -5581,6 +5597,9 @@ function ResultCard({
                 out whether the person is around. */}
             <ActivityDot activity={result.activity} />
             {result.unread > 0 && <span className="badge">{result.unread}</span>}
+            {/* What this team calls them, on the name's line. Five frames of
+                one width, cut by ellipsis, never wrapping — see TagStrip. */}
+            <TagStrip tags={result.tags ?? []} />
           </h3>
           <p className="muted">
             {[candidate.location, candidate.availability].filter(Boolean).join(' · ')}
@@ -5630,9 +5649,12 @@ function ResultCard({
                 not announce itself as a reveal either. The title still spells it
                 out for anyone who needs it. */}
             {result.folder && (
-              <span className="chip chip-folder" title={`Saved in your ${result.folder.name} folder`}>
-                <span className="chip-clip">{result.folder.name}</span>
-              </span>
+              <span
+                className="chip-folder-dot"
+                role="img"
+                aria-label={`Saved in your ${result.folder.name} folder`}
+                title={`Saved in your ${result.folder.name} folder`}
+              />
             )}
             {/*
               Where this row came from, when it did not come from a search.
@@ -5769,14 +5791,11 @@ function ResultCard({
             now that folders hold those too. Absent is the honest rendering of
             absent; the alternative is a 0% that says something false.
           */}
-          {corner ?? (Number.isFinite(result.score) && (
-            <div className={`score score-${band}`}>
-              {/* Out of a hundred, said as such. A bare 82 beside a name is a
-                  number of something unstated, and the label under it said
-                  "match" — which is the axis, not the unit. */}
-              <span className="score-value">{result.score}%</span>
-            </div>
-          ))}
+          {/* The score has moved under the portrait. What is left here is
+              whatever a caller puts in its place — the reveal log passes a
+              date, which is that screen's answer to "how did this row get
+              here" and has nothing to do with a match. */}
+          {corner ?? null}
         </div>
 
         {/*
@@ -5824,17 +5843,24 @@ function ResultCard({
             distinguish from having gone quiet, and the words this team put on
             this person themselves.
           */}
-          <div className="result-tags">
-            {result.activity?.state === 'deactivated' && (
+          {/* The tags have gone up to the name's line. What is left is the
+              one thing a colour cannot say: somebody who has asked not to be
+              approached needs words. */}
+          {result.activity?.state === 'deactivated' && (
+            <div className="result-tags">
               <ActivityChip activity={result.activity} />
-            )}
-            <TagStrip tags={result.tags ?? []} />
-          </div>
+            </div>
+          )}
 
           {/* Claude's read of the profile replaces the keyword summary when it
               ran — its reasoning is the thing worth reading. */}
           {result.analysis ? (
-            <p className="reasoning-line">{result.analysis.reasoning}</p>
+            /* Two sentences. The rest is in the Score tab, where there is room
+               for it — on a card a four-line paragraph makes every row a
+               different height and the list stops being scannable. */
+            <p className="reasoning-line" title={result.analysis.reasoning}>
+              {twoSentences(result.analysis.reasoning)}
+            </p>
           ) : result.missingRequired.length > 0 ? (
             <p className="gap-line">Missing: {result.missingRequired.join(', ')}</p>
           ) : result.matchedRequired.length > 0 ? (
@@ -7180,21 +7206,49 @@ function CandidateDialog({
         <header className="modal-head candidate-head">
           <div className="candidate-head-row">
             <div className="candidate-head-lead">
-              {candidate && <CandidateAvatar candidate={candidate} enlargeable />}
+              {/* The person and their score, stacked — the same left column
+                  the row uses, so opening a candidate does not rearrange
+                  them. It was a 2.15rem number in the middle of the header,
+                  which read as the dialog's title rather than as a property
+                  of the person. */}
+              <span className="result-portrait candidate-head-figure">
+                {candidate && <CandidateAvatar candidate={candidate} enlargeable />}
+                {scored && (
+                  <span className={`score score-${scoreBand(result.score)}`}>
+                    <span className="score-value">{result.score}%</span>
+                  </span>
+                )}
+              </span>
               <div className="modal-title">
-              <h2>
+              <h2 className="result-headline">
                 {/* display_name is the whole rule: the server masks it to a
                     first name until the reveal and swaps in the full one after.
                     Reading `name` first was a second path to the same answer —
                     and one that would print a surname the moment anything else
                     put that field in the payload. */}
+                {/*
+                  The whole name, once it has been paid for.
+
+                  display_name is first and last — the server builds it that
+                  way (schema.js, candidateForRecruiter) and every card reads
+                  it, so widening it there would put a middle name on every
+                  row in the list. Here there is room, and this is the screen
+                  where a recruiter is about to write to somebody: the name on
+                  their CV is the name to use. Before the reveal the parts are
+                  not in the payload at all, so it falls back on its own.
+                */}
                 <span className="result-name">
-                  {candidate ? candidate.display_name : 'Loading…'}
+                  {candidate ? (fullName(candidate) ?? candidate.display_name) : 'Loading…'}
                 </span>
                 {/* Availability, beside the name, exactly as the result card
                     says it. It was a worded chip below — two ways of saying one
                     thing across two screens. */}
                 {data?.activity && <ActivityDot activity={data.activity} />}
+                {/* On the name's line, as on the row. It was over in the
+                    right-hand cluster between the score and the buttons,
+                    which is where the things you DO to a candidate live —
+                    a tag is something you have already said about them. */}
+                <TagStrip tags={tags} />
               </h2>
               <p className="muted candidate-head-meta">
                 {[candidate?.location, candidate?.availability].filter(Boolean).join(' · ')}
@@ -7209,6 +7263,15 @@ function CandidateDialog({
                     </strong>
                     {' on '}
                     {new Date(data.revealedBy.at).toLocaleDateString(DATE_LOCALE, { dateStyle: 'medium' })}
+                  </span>
+                )}
+                {/* Which folder, in words — the row shows a dot because it has
+                    no room, and this is the screen that does. Absent entirely
+                    when they are not filed: "Folder: none" is a line that
+                    says nothing. */}
+                {inFolder && (
+                  <span className="candidate-revealed-by">
+                    Folder: <strong>{inFolder.name}</strong>
                   </span>
                 )}
               </p>
@@ -7228,17 +7291,7 @@ function CandidateDialog({
               shove it off centre. The cell is here even when there is no score,
               so the menu stays in the corner on a profile opened from a folder.
             */}
-            {/* The cell stays either way — it is the middle track of three and
-                what centres the number — but it is empty rather than empty and
-                coloured when there is no score. */}
-            <p className={scored ? `candidate-head-score score-${scoreBand(result.score)}` : 'candidate-head-score'}>
-              {scored && <span className="score-value">{result.score}%</span>}
-            </p>
-
             <span className="modal-menu">
-              {/* Between the number and the buttons, as on the row — with room
-                  for one more, since a dialog header is wider than a card. */}
-              <TagStrip tags={tags} limit={2} />
               {/* The same eye, in the same place it took on the row: a struck
                   eye under the name announced the state and left the way out of
                   it inside the ⋮ menu. Reveal is already in that menu and stays

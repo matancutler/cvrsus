@@ -25,16 +25,21 @@ const COLOURS = ['grey', 'red', 'amber', 'green', 'blue', 'purple']
 /**
  * The strip. Nothing at all when there are no tags — an empty box is furniture.
  *
- * `limit` because this lives in a narrow column beside a score: five tags is
- * five lines on a list row, and a row whose height depends on how much somebody
- * has annotated it is a list that jumps about.
+ * Five at a time, beside the name, each in a frame of the same width with its
+ * text cut by ellipsis if it does not fit. It used to show ONE and a "+n",
+ * because it sat in a narrow column beside a score where two tags were two
+ * five-letter stumps. The score has moved under the avatar and the strip has
+ * moved onto the name's line, so there is room for the whole set — and a
+ * recruiter who tagged somebody "phone screened" and "wants remote" can see
+ * both without opening anything.
  *
- * One at a time on a row, because the column holds about a hundred pixels and
- * two tags in it are two five-letter stumps — "Phone…" and "Want…" say less
- * than one whole tag and a count does. What is held back is named in the title
- * and shown in full in the panel, which is one press away.
+ * Fixed width rather than content width, and never wrapping: a strip whose
+ * height depended on how much a team had annotated a candidate would make
+ * every row in the list a different height, which is the one thing a list
+ * being scanned cannot afford. What is held back past five is named in the
+ * title of the "+n" and shown in full in the panel, one press away.
  */
-export function TagStrip({ tags, limit = 1 }) {
+export function TagStrip({ tags, limit = MAX }) {
   if (!tags || tags.length === 0) return null
 
   const shown = tags.slice(0, limit)

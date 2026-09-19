@@ -1449,6 +1449,9 @@ function TriageResultCard({ row, triageId, onOpen, onFile, folder = null }) {
         title={`Open ${name}`}
       >
         <span className="result-lead">
+          {/* The person and their score, stacked — the same left column the
+              search card uses, so a candidate looks the same wherever a
+              recruiter meets them. */}
           <span className="result-portrait">
             {/*
               Initials, always. An applicant has no photograph — a CV is a
@@ -1456,10 +1459,13 @@ function TriageResultCard({ row, triageId, onOpen, onFile, folder = null }) {
               component falls back to the letters, which is what it is for.
             */}
             <Avatar firstName={name?.split(/\s+/)[0]} lastName={name?.split(/\s+/)[1]} />
+            <span className={`score score-${band}`}>
+              <span className="score-value">{row.score}%</span>
+            </span>
           </span>
 
           <div className="result-identity">
-            <h3>
+            <h3 className="result-headline">
               <span className="result-name">{name}</span>
             </h3>
             {/*
@@ -1496,14 +1502,16 @@ function TriageResultCard({ row, triageId, onOpen, onFile, folder = null }) {
 
         <div className="result-side">
           <div className="result-chips">
-            {/* Where they are filed, in the slot the search card keeps for it. */}
+            {/* Where they are filed — a dot, as on the search card. The fact
+                worth a glance is "this one is filed"; which folder is a hover
+                away and a click away in the dialog. */}
             {folder && (
-              <span className="chip chip-folder" title={`Saved in your ${folder.name} folder`}>
-                {/* The name needs an element of its own: a bare text node in a
-                    flex container is an anonymous item, and text-overflow has
-                    nothing to apply to. */}
-                <span className="chip-clip">{folder.name}</span>
-              </span>
+              <span
+                className="chip-folder-dot"
+                role="img"
+                aria-label={`Saved in your ${folder.name} folder`}
+                title={`Saved in your ${folder.name} folder`}
+              />
             )}
             {row.reviewedAt && <span className="chip chip-neutral">Opened</span>}
             {row.analysis.confidence && (
@@ -1527,9 +1535,6 @@ function TriageResultCard({ row, triageId, onOpen, onFile, folder = null }) {
             />
           </span>
 
-          <div className={`score score-${band}`}>
-            <span className="score-value">{row.score}%</span>
-          </div>
         </div>
 
         {/*
