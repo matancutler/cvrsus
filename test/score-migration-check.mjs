@@ -115,13 +115,37 @@ function seedCandidate(id, name) {
   )
 }
 
+/*
+ * Scoped to this suite's own job, always.
+ *
+ * Without --job the script migrates every row on the machine, which is a
+ * large blast radius for a test asserting about four of its own — and it
+ * left other rows at a version its revert then had to undo. The scope flag
+ * exists for this and for a cautious first run against production.
+ */
 function migrate(...flags) {
   return execFileSync(
     process.execPath,
-    ['server/scripts/score-migrate.mjs', ...flags],
+    ['server/scripts/score-migrate.mjs', '--job', String(JOB_ID), ...flags],
     { cwd: root, encoding: 'utf8' },
   )
 }
+
+/*
+ * Which backup tables existed before this suite ran.
+ *
+ * A real migration leaves its own, and both the assertions and the cleanup
+ * have to tell those apart from the ones this test causes — asserting on
+ * "any backup exists" is wrong, and dropping every backup would destroy the
+ * one thing standing between a bad migration and a restore.
+ */
+const backupsBefore = new Set(db.prepare(`
+  SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%_pre_v3_%'
+`).all().map((r) => r.name))
+
+const newBackups = () => db.prepare(`
+  SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%_pre_v3_%'
+`).all().map((r) => r.name).filter((n) => !backupsBefore.has(n))
 
 const v3 = (candidateId) => db.prepare(`
   SELECT absolute_fit AS fit, criteria_results AS criteria FROM candidate_job_analyses
@@ -163,9 +187,7 @@ check('it reports the rows it would rescore', /rescored from verdicts\s*:\s*[1-9
   dry.split('\n').find((l) => l.includes('rescored from verdicts'))?.trim())
 check('and nothing was written',
   db.prepare(`SELECT COUNT(*) AS n FROM candidate_job_analyses`).get().n === before)
-check('and no backup was taken',
-  db.prepare(`SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name LIKE '%_pre_v3_%'`)
-    .get().n === 0,
+check('and no backup was taken', newBackups().length === 0,
   'a dry run that left tables behind would not be a dry run')
 
 // --------------------------------------------------------------- the run ---
@@ -175,14 +197,9 @@ section('The migration')
 const out = migrate('--run')
 
 check('a backup was taken of both tables',
-  db.prepare(`
-    SELECT COUNT(*) AS n FROM sqlite_master
-    WHERE type='table' AND name LIKE 'candidate_job_analyses_pre_v3_%'
-  `).get().n === 1
-  && db.prepare(`
-    SELECT COUNT(*) AS n FROM sqlite_master
-    WHERE type='table' AND name LIKE 'triage_applicants_pre_v3_%'
-  `).get().n === 1)
+  newBackups().some((n) => n.startsWith('candidate_job_analyses_pre_v3_'))
+  && newBackups().some((n) => n.startsWith('triage_applicants_pre_v3_')),
+  newBackups().join(', ') || 'none created by this run')
 
 check('the version-2 rows are untouched',
   db.prepare(`
@@ -289,21 +306,23 @@ for (const id of [CAND_A, CAND_B, CAND_C]) {
   db.prepare(`DELETE FROM candidates WHERE id = ? AND email LIKE ?`).run(id, `%${RUN}@example.com`)
 }
 
-/* The backup tables this run created, and only those: matched on the stamp
-   pattern AND checked for being empty of anything but what we seeded. */
-for (const row of db.prepare(`
-  SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%_pre_v3_%'
-`).all()) {
-  db.prepare(`DROP TABLE IF EXISTS ${row.name}`).run()
+/*
+ * Only the backups this run caused.
+ *
+ * Dropping every table matching the pattern would destroy the backup a real
+ * migration took — the one thing standing between a bad migration and a
+ * restore — because a test cleaning up is not a reason to delete somebody
+ * else's safety net.
+ */
+for (const name of newBackups()) {
+  db.prepare(`DROP TABLE IF EXISTS ${name}`).run()
 }
 
 check('test data removed',
   db.prepare(`SELECT COUNT(*) AS n FROM candidate_job_analyses WHERE job_id = ?`).get(JOB_ID).n === 0
   && db.prepare(`SELECT COUNT(*) AS n FROM candidates WHERE email LIKE ?`)
     .get(`%${RUN}@example.com`).n === 0
-  && db.prepare(`
-    SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name LIKE '%_pre_v3_%'
-  `).get().n === 0)
+  && newBackups().length === 0)
 
 db.close()
 finish()

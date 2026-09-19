@@ -6,6 +6,8 @@
  *   npm run score:migrate                 what it would do, and nothing else
  *   npm run score:migrate -- --run        do it
  *   npm run score:migrate -- --revert     put it back
+ *   npm run score:migrate -- --job 42     only that job's analyses
+ *   npm run score:migrate -- --triage 7   only that Triage's applicants
  *
  * ---
  *
@@ -72,6 +74,25 @@ const has = (f) => argv.includes(`--${f}`)
 const RUN = has('run')
 const REVERT = has('revert')
 
+/*
+ * Scope, for the test and for a cautious first run.
+ *
+ * Without it the only choice is the whole database, which made the test
+ * suite migrate every row on the machine in order to assert about four of
+ * its own — and a test with a blast radius that large is one nobody will
+ * run twice. Naming a job or a Triage also makes a real first run possible:
+ * migrate one, look at what moved, then do the rest.
+ *
+ * Absent means everything, which is the ordinary case.
+ */
+const valueOf = (name) => {
+  const at = argv.indexOf(`--${name}`)
+  return at === -1 ? null : argv[at + 1]
+}
+const ONLY_JOB = valueOf('job') === null ? null : Number(valueOf('job'))
+const ONLY_TRIAGE = valueOf('triage') === null ? null : Number(valueOf('triage'))
+const SCOPED = ONLY_JOB !== null || ONLY_TRIAGE !== null
+
 const db = (await import('../src/db.js')).default
 const { rescoreBreakdown, checkQuotes, silenceFraction } = await import('../src/matching/score.js')
 const { VERSIONS } = await import('../src/matching/config.js')
@@ -99,6 +120,10 @@ console.log('Cursus — rescoring stored analyses under the new arithmetic')
 console.log(`Target scoring version : ${TARGET}`)
 console.log(`Silence fraction       : ${silenceFraction()}`)
 console.log(`Mode                   : ${REVERT ? 'REVERT' : RUN ? 'WRITE' : 'dry run (nothing is written)'}`)
+console.log(`Scope                  : ${SCOPED
+  ? [ONLY_JOB !== null ? `job ${ONLY_JOB}` : null, ONLY_TRIAGE !== null ? `triage ${ONLY_TRIAGE}` : null]
+    .filter(Boolean).join(', ')
+  : 'every row'}`)
 console.log('')
 
 /* ------------------------------------------------------------- revert --- */
@@ -127,9 +152,11 @@ if (REVERT) {
       /* Only the rows this migration added come out. The v2 rows were never
          touched, so restoring the whole table would be a bigger claim than
          the change made and would undo anything written since. */
-      const removed = db.prepare(
-        `DELETE FROM candidate_job_analyses WHERE scoring_version = ?`,
-      ).run(TARGET).changes
+      const removed = ONLY_JOB === null
+        ? db.prepare(`DELETE FROM candidate_job_analyses WHERE scoring_version = ?`)
+          .run(TARGET).changes
+        : db.prepare(`DELETE FROM candidate_job_analyses WHERE scoring_version = ? AND job_id = ?`)
+          .run(TARGET, ONLY_JOB).changes
       console.log(`  removed ${removed} version-${TARGET} row(s); the version-2 rows were never touched`)
     }
     if (applicants[0]) {
@@ -153,6 +180,11 @@ if (REVERT) {
 
 /* ------------------------------------------------------------- backup --- */
 
+/*
+ * A scoped run backs up too. It is the same cost — CREATE TABLE AS SELECT
+ * over a few thousand rows — and a partial migration you cannot undo is
+ * worse than a whole one you can.
+ */
 if (RUN) {
   for (const table of ['candidate_job_analyses', 'triage_applicants']) {
     const name = backupName(table)
@@ -228,7 +260,9 @@ const analyses = db.prepare(`
   FROM candidate_job_analyses a
   LEFT JOIN candidates c ON c.id = a.candidate_id
   WHERE a.scoring_version <> ?
-`).all(TARGET)
+    ${ONLY_JOB === null ? '' : 'AND a.job_id = ?'}
+    ${ONLY_TRIAGE !== null && ONLY_JOB === null ? 'AND 0' : ''}
+`).all(...(ONLY_JOB === null ? [TARGET] : [TARGET, ONLY_JOB]))
 
 const searchStats = {
   seen: analyses.length, rescored: 0, carried: 0, clamped: 0,
@@ -303,7 +337,9 @@ const applicants = db.prepare(`
   SELECT id, absolute_fit, criteria, scoring_version, extracted_text
   FROM triage_applicants
   WHERE criteria IS NOT NULL AND (scoring_version IS NULL OR scoring_version <> ?)
-`).all(TARGET)
+    ${ONLY_TRIAGE === null ? '' : 'AND triage_id = ?'}
+    ${ONLY_JOB !== null && ONLY_TRIAGE === null ? 'AND 0' : ''}
+`).all(...(ONLY_TRIAGE === null ? [TARGET] : [TARGET, ONLY_TRIAGE]))
 
 const triageStats = {
   seen: applicants.length, rescored: 0, carried: 0, clamped: 0,
