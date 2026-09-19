@@ -80,46 +80,6 @@ export default function TriageRail({
                 >
                   <span className="chat-item-title">
                     {triage.title?.trim() || 'Untitled Triage'}
-                    {/*
-                      What has landed since YOU looked, as a count rather than
-                      a dot. A dot says "something"; the number is the thing
-                      that decides whether this is worth opening now.
-                    */}
-                    {triage.unread > 0 && (
-                      <span
-                        className="chat-item-unread"
-                        title={`${triage.unread} analysed since you last looked`}
-                      >
-                        {triage.unread > 99 ? '99+' : triage.unread}
-                      </span>
-                    )}
-                  </span>
-
-                  {/*
-                    What this session is and how much is in it.
-
-                    A list of titles cannot tell a closed 2026 report from a
-                    live shortlist, or a pile of four from a pile of four
-                    hundred — and both of those change whether you open it.
-                    Open is unlabelled on purpose: it is the ordinary case,
-                    and a badge on every row is a badge on none.
-                  */}
-                  <span className="chat-item-meta">
-                    {triage.lifecycle !== 'open' && (
-                      <span className={`chat-item-state chat-item-state-${triage.lifecycle}`}>
-                        {triage.lifecycle === 'closed' ? 'Closed' : 'Paused'}
-                      </span>
-                    )}
-                    {triage.counts?.total > 0 && (
-                      <span className="chat-item-count">
-                        {triage.counts.analysed} of {triage.counts.total} analysed
-                      </span>
-                    )}
-                    {triage.lastActivityAt && (
-                      <span className="chat-item-when">
-                        {new Date(triage.lastActivityAt).toLocaleDateString()}
-                      </span>
-                    )}
                   </span>
                   {/*
                     Whose it is, when it is not yours.

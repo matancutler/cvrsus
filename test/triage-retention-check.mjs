@@ -1,24 +1,18 @@
 /**
- * What a session is allowed to do, and when its CVs are let go of.
+ * When Triage CVs are let go of, and what happens when one is removed.
  *
- * Three things are being proved here and they are not the same thing.
- *
- * **The states.** open, paused and closed decide whether CVs can be added and
- * whether new analysis starts. The pipeline's own five states are untouched
- * and unread by any of it — a paused session whose last batch failed is both,
- * and a model that could not say so would force the queue to choose.
- *
- * **The migration that is not a migration.** Every Triage in production was
- * launched, charged and finished under the one-time model. Adding a column
- * with DEFAULT 'open' would turn all of them into live shortlists that can
- * take uploads and charges. So the column is nullable and NULL is answered
- * from the row's own state. That is tested against MADE-UP old sessions —
- * rows written here with lifecycle NULL, exactly as a pre-column row looks —
- * and never against anything real.
+ * Two things, and they are not the same thing.
  *
  * **Letting go.** Nothing in this product has ever deleted an applicant's CV.
- * The rule (Q6) and the sweep are tested on fixtures whose dates are set by
- * this file, so "90 days after closing" can be proved in a second.
+ * The retention rule and the sweep are tested on fixtures whose dates are set
+ * by this file, so "90 days after closing" can be proved in a second. The
+ * sweep does not delete unless it is told to, and that is asserted too.
+ *
+ * **Removing one.** The per-CV delete is what an erasure request needs, and
+ * it has two consequences that are easy to miss: the session has to notice it
+ * has nothing left to do, and the next delivery must not be numbered into the
+ * hole the deletion left — which is the failure that stranded CVs where
+ * nothing in the product could name them.
  *
  * Everything this suite creates carries one marker and is removed on the way
  * out. Nothing it did not create is touched.
@@ -119,10 +113,9 @@ await json(await fetch(`${BASE}/api/hr/triage/${id}/files`, {
   method: 'POST', headers: { authorization: `Bearer ${org.token}` }, body: form,
 }))
 
-section('A new session is open')
+section('A new session runs to the end')
 
-check('a draft starts open', draft.triage.lifecycle === 'open', String(draft.triage.lifecycle))
-check('with no closing date', draft.triage.purgeAfter === null, String(draft.triage.purgeAfter))
+check('with no deletion date yet', draft.triage.purgeAfter === null, String(draft.triage.purgeAfter))
 
 const launched = await fetch(`${BASE}/api/hr/triage/${id}/launch`, {
   method: 'POST', headers: H(org.token), body: '{}',
@@ -145,78 +138,10 @@ async function settle(sessionId, ms = 180000) {
 
 const done = await settle(id)
 check('the session finishes', done?.total === 4, `${done?.total} scored`)
-check('and is still open once the queue catches up',
+check('and stays available once the queue catches up',
   done.triage.lifecycle === 'open', String(done.triage.lifecycle))
 
 // ------------------------------------------------------------- the states ---
-
-const move = (to) => fetch(`${BASE}/api/hr/triage/${id}/lifecycle`, {
-  method: 'POST', headers: H(org.token), body: JSON.stringify({ state: to }),
-})
-
-const addOne = async () => {
-  const body = new FormData()
-  body.append('cvs', new Blob([await cv(90)], { type: 'application/pdf' }), 'late.pdf')
-  return fetch(`${BASE}/api/hr/triage/${id}/cvs`, {
-    method: 'POST', headers: { authorization: `Bearer ${org.token}` }, body,
-  })
-}
-
-section('Pausing stops new work and nothing else')
-
-const paused = await json(await move('paused'))
-check('the session pauses', paused.to === 'paused', String(paused.to))
-
-const whilePaused = await addOne()
-check('and takes no more CVs', whilePaused.status === 409, `HTTP ${whilePaused.status}`)
-check('with a message that says what to do',
-  /Resume it/.test(String((await whilePaused.json().catch(() => ({}))).error ?? '')))
-
-const retryPaused = await fetch(`${BASE}/api/hr/triage/${id}/retry`, {
-  method: 'POST', headers: H(org.token), body: '{}',
-})
-check('and starts no new analysis', retryPaused.status === 409, `HTTP ${retryPaused.status}`)
-
-const readPaused = await fetch(`${BASE}/api/hr/triage/${id}/results?advance=1`, { headers: H(org.token) })
-const readPausedBody = await readPaused.json()
-check('but can still be read', readPaused.ok && readPausedBody.total === 4,
-  `HTTP ${readPaused.status}, ${readPausedBody.total} results`)
-check('and asks for no further tranche', readPausedBody.queued === null,
-  JSON.stringify(readPausedBody.queued))
-
-const resumed = await json(await move('open'))
-check('resuming puts it back', resumed.to === 'open', String(resumed.to))
-
-section('Closing starts the clock; reopening stops it')
-
-const closed = await json(await move('closed'))
-check('the session closes', closed.to === 'closed', String(closed.to))
-check('and is given a date its CVs go', Boolean(closed.purgeAfter), String(closed.purgeAfter))
-
-const days = Math.round((Date.parse(closed.purgeAfter) - Date.now()) / DAY)
-check('ninety days out', days === 90 || days === 89, `${days} days`)
-
-const whileClosed = await addOne()
-check('a closed session takes no CVs', whileClosed.status === 409, `HTTP ${whileClosed.status}`)
-check('with a message that says what to do',
-  /Reopen it/.test(String((await whileClosed.json().catch(() => ({}))).error ?? '')))
-
-const stillReadable = await fetch(`${BASE}/api/hr/triage/${id}/results`, { headers: H(org.token) })
-check('and is still readable as history', stillReadable.ok, `HTTP ${stillReadable.status}`)
-
-const reopened = await json(await move('open'))
-check('reopening works', reopened.to === 'open', String(reopened.to))
-check('and takes the deletion date away', reopened.purgeAfter === null,
-  String(reopened.purgeAfter))
-check('which the stored row agrees with',
-  db.prepare(`SELECT purge_after AS at FROM triages WHERE id = ?`).get(id).at === null)
-
-const nonsense = await fetch(`${BASE}/api/hr/triage/${id}/lifecycle`, {
-  method: 'POST', headers: H(org.token), body: JSON.stringify({ state: 'archived' }),
-})
-check('a state that does not exist is refused', nonsense.status === 400, `HTTP ${nonsense.status}`)
-
-// ------------------------------------------------- sessions from before ---
 
 section('Sessions that predate the column read as what they are')
 
@@ -239,13 +164,6 @@ check('and none of them was given a deletion date behind our back',
   db.prepare(`
     SELECT COUNT(*) AS n FROM triages WHERE id IN (?, ?, ?) AND purge_after IS NOT NULL
   `).get(oldFinished, oldWorking, oldFailed).n === 0)
-
-const reopenedOld = await json(await fetch(`${BASE}/api/hr/triage/${oldFinished}/lifecycle`, {
-  method: 'POST', headers: H(org.token), body: JSON.stringify({ state: 'open' }),
-}))
-check('a finished one can be reopened', reopenedOld.to === 'open', String(reopenedOld.to))
-check('and the row now says so explicitly',
-  db.prepare(`SELECT lifecycle AS l FROM triages WHERE id = ?`).get(oldFinished).l === 'open')
 
 // ------------------------------------------------------------ retention ---
 
@@ -439,63 +357,6 @@ await fetch(`${BASE}/api/hr/triage/${strandId}/applicants/${settleDraft.id}`, {
 check('the session notices it has nothing left to do',
   db.prepare(`SELECT status AS s FROM triages WHERE id = ?`).get(strandId).s === 'completed',
   db.prepare(`SELECT status AS s FROM triages WHERE id = ?`).get(strandId).s)
-
-section('Pausing a closed session keeps the date it promised')
-
-const keepId = fakeSession({
-  status: 'completed',
-  lifecycle: 'closed',
-  closedAt: new Date().toISOString(),
-  purgeAfter: new Date(Date.now() + 90 * DAY).toISOString(),
-})
-const promised = db.prepare(`SELECT purge_after AS at FROM triages WHERE id = ?`).get(keepId).at
-
-await fetch(`${BASE}/api/hr/triage/${keepId}/lifecycle`, {
-  method: 'POST', headers: H(org.token), body: JSON.stringify({ state: 'paused' }),
-})
-check('pausing does not wipe it',
-  db.prepare(`SELECT purge_after AS at FROM triages WHERE id = ?`).get(keepId).at === promised,
-  String(db.prepare(`SELECT purge_after AS at FROM triages WHERE id = ?`).get(keepId).at))
-
-await fetch(`${BASE}/api/hr/triage/${keepId}/lifecycle`, {
-  method: 'POST', headers: H(org.token), body: JSON.stringify({ state: 'open' }),
-})
-check('reopening does', db.prepare(`SELECT purge_after AS at FROM triages WHERE id = ?`).get(keepId).at === null)
-
-section('A failed session is not reopened into limbo')
-
-const brokenId = fakeSession({ status: 'failed', lifecycle: 'closed' })
-const revive = await fetch(`${BASE}/api/hr/triage/${brokenId}/lifecycle`, {
-  method: 'POST', headers: H(org.token), body: JSON.stringify({ state: 'open' }),
-})
-check('it is refused', revive.status === 409, `HTTP ${revive.status}`)
-
-// ----------------------------------------------------------------- the cap ---
-
-section('An organization cannot leave unlimited sessions open')
-
-const { TRIAGE } = await import('../server/src/triage.js')
-const { openSessions } = await import('../server/src/triage.js')
-
-check('the cap is a number', TRIAGE.maxOpenSessions > 0, String(TRIAGE.maxOpenSessions))
-check('and open sessions are counted', openSessions(org.company.id) >= 1,
-  `${openSessions(org.company.id)} open`)
-
-/* Filled to the cap with made-up sessions rather than by launching two dozen
-   real ones — the cap is arithmetic, and paying for 25 Triages to prove it
-   would take minutes and real capacity. */
-while (openSessions(org.company.id) < TRIAGE.maxOpenSessions) {
-  fakeSession({ status: 'ready', lifecycle: 'open' })
-}
-
-const overCap = await fetch(`${BASE}/api/hr/triage/${justClosed}/lifecycle`, {
-  method: 'POST', headers: H(org.token), body: JSON.stringify({ state: 'open' }),
-})
-check('reopening one more is refused', overCap.status === 409, `HTTP ${overCap.status}`)
-check('and says why',
-  /which is the limit/.test(String((await overCap.json().catch(() => ({}))).error ?? '')))
-
-// ---------------------------------------------------------------- cleanup ---
 
 section('Cleanup')
 

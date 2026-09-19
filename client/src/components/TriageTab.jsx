@@ -912,21 +912,9 @@ function TriageResults({ id, initial, onBalanceChanged, folders = [], setFolders
   const [filed, setFiled] = useState({})
   /* Which applicant the folder dialog is open for, if any. */
   const [filing, setFiling] = useState(null)
-  /* Q8 — rejected applicants stay in the ranking and are hidden by default. */
-  const [showRejected, setShowRejected] = useState(false)
-  const [busy, setBusy] = useState('')
   const [notice, setNotice] = useState('')
   const [adding, setAdding] = useState(null)
   const addInput = useRef(null)
-  /*
-   * The arrivals banner is held rather than read live.
-   *
-   * The server answers "what is new since you last looked" and then moves the
-   * mark, so the very next poll reports zero — which is correct and would
-   * make the banner flash once and vanish before anybody read it. Captured on
-   * the first answer that has something in it, and dismissed by hand.
-   */
-  const [arrived, setArrived] = useState(0)
 
   async function fileInto(applicantId, folderId) {
     try {
@@ -975,16 +963,14 @@ function TriageResults({ id, initial, onBalanceChanged, folders = [], setFolders
    */
   const fetchPage = useCallback(async (offset, advance) => {
     const query = `offset=${offset}${advance ? '&advance=1' : ''}`
-      + (showRejected ? '&rejected=1' : '')
     return get(`/api/hr/triage/${id}/results?${query}`, 'recruiter')
-  }, [id, showRejected])
+  }, [id])
 
   const refresh = useCallback(async () => {
     try {
       const data = await fetchPage(0, false)
       setState(data)
       if (data.filed) setFiled(data.filed)
-      if (data.newSince?.count > 0) setArrived(data.newSince.count)
       /* Only the first page is re-read on a poll. Re-fetching everything the
          recruiter has scrolled through would reorder the list under their
          cursor every two and a half seconds. */
@@ -1019,41 +1005,7 @@ function TriageResults({ id, initial, onBalanceChanged, folders = [], setFolders
     onBalanceChanged?.().catch(() => { /* the balance catches up on the next read */ })
   }, [working, onBalanceChanged])
 
-  /** Pause, resume, close or reopen. */
-  async function move(to) {
-    setBusy(to)
-    try {
-      await post(`/api/hr/triage/${id}/lifecycle`, { state: to }, 'recruiter')
-      await refresh()
-      setNotice(to === 'closed'
-        ? 'Closed. It stays readable, and its CVs are deleted after the retention period.'
-        : to === 'paused' ? 'Paused. No more CVs and no new analysis until you resume.'
-          : 'Open again.')
-    } catch (err) {
-      setError(err.message)
-    } finally {
-      setBusy('')
-    }
-  }
-
-  /** The recruiter's call on one applicant. */
-  async function mark(applicantId, status) {
-    /* Moved in place first: a status is a click, and waiting for a round trip
-       to redraw the row makes the list feel like it did not hear you. Put
-       back by the refresh below if the server disagrees. */
-    setRows((was) => was.map((row) => (row.id === applicantId ? { ...row, status } : row)))
-    try {
-      await patch(`/api/hr/triage/${id}/applicants/${applicantId}/status`, { status }, 'recruiter')
-      /* Rejected disappears from the default view, so the list has to be
-         re-read rather than patched — the row is leaving it. */
-      if (status === 'rejected' && !showRejected) await refresh()
-    } catch (err) {
-      setError(err.message)
-      await refresh()
-    }
-  }
-
-  /** Another delivery, into a session that is already running. */
+  /** More CVs, into a Triage that is already running. */
   async function addCvs(files) {
     if (!files?.length) return
     setAdding({ total: files.length, done: 0 })
@@ -1132,14 +1084,11 @@ function TriageResults({ id, initial, onBalanceChanged, folders = [], setFolders
         <TriageStatus triage={triage} />
       </header>
 
-      <TriageSessionBar
-        triage={triage}
+      <TriageAddCvs
         adding={adding}
-        busy={busy}
-        canAdd={Boolean(state?.adding?.enabled)}
+        enabled={Boolean(state?.adding?.enabled)}
         room={state?.adding?.room ?? 0}
         balance={state?.adding?.balance ?? 0}
-        onMove={move}
         onPick={() => addInput.current?.click()}
       />
 
@@ -1157,16 +1106,6 @@ function TriageResults({ id, initial, onBalanceChanged, folders = [], setFolders
         <p className="alert alert-success" role="status">
           {notice}
           <button type="button" className="link-button" onClick={() => setNotice('')}>Dismiss</button>
-        </p>
-      )}
-
-      {/* Q9 — in app, and no emails. Held rather than read live, because the
-          read that reports it is the read that clears it. */}
-      {arrived > 0 && (
-        <p className="alert alert-info triage-arrived" role="status">
-          <strong>{arrived}</strong> new applicant{arrived === 1 ? ' has' : 's have'} been
-          analysed since you last looked. They are marked below, in their place in the ranking.
-          <button type="button" className="link-button" onClick={() => setArrived(0)}>Dismiss</button>
         </p>
       )}
 
@@ -1198,27 +1137,9 @@ function TriageResults({ id, initial, onBalanceChanged, folders = [], setFolders
                 onOpen={() => setOpen(row)}
                 folder={filed[row.id] ?? null}
                 onFile={() => setFiling(row.id)}
-                statuses={state?.statuses ?? []}
-                onStatus={(status) => mark(row.id, status)}
               />
             ))}
           </ol>
-
-          {(state?.rejected ?? 0) > 0 && (
-            <p className="muted triage-rejected-toggle">
-              {showRejected
-                ? `Showing ${state.rejected} applicant${state.rejected === 1 ? '' : 's'} you marked as not proceeding.`
-                : `${state.rejected} applicant${state.rejected === 1 ? '' : 's'} marked as not proceeding ${state.rejected === 1 ? 'is' : 'are'} hidden.`}
-              {' '}
-              <button
-                type="button"
-                className="link-button"
-                onClick={() => { setShowRejected((was) => !was); setRows([]) }}
-              >
-                {showRejected ? 'Hide them' : 'Show them'}
-              </button>
-            </p>
-          )}
 
           <div className="triage-more">
             {state?.hasMore ? (
@@ -1270,101 +1191,44 @@ function TriageResults({ id, initial, onBalanceChanged, folders = [], setFolders
 }
 
 /**
- * What this session is, and what can still be done to it.
+ * More CVs, into a Triage that is already running.
  *
- * One row rather than a menu, because all four of these are things a
- * recruiter decides about a session in front of them: whether to add more,
- * whether to stop it, whether it is finished. Hiding them behind an overflow
- * would make "closed" a state nobody discovers they can reach — and closing
- * is the thing that starts the retention clock, which is the promise we make
- * to the people in the pile.
+ * One button, because that is the whole of what this does: pick the files,
+ * they are read, ranked against the same job description and slotted into
+ * the list in their place by score, and each one comes off the
+ * organization's CV balance. Scores already on screen do not move.
+ *
+ * Offered only when pressing it would work. A button that answers "you have
+ * no capacity" after the recruiter has chosen three hundred files is worse
+ * than no button — they have already done the work by then — so the reason
+ * it cannot be pressed is on the button itself, before it is.
  */
-function TriageSessionBar({
-  triage, canAdd, room, balance, adding, busy, onMove, onPick,
-}) {
-  const open = triage.lifecycle === 'open'
-  const closed = triage.lifecycle === 'closed'
+function TriageAddCvs({ enabled, room, balance, adding, onPick }) {
+  if (!enabled) return null
 
-  /* Add is offered only when it would work. A button that answers 402 when
-     pressed is worse than no button: the recruiter has already chosen three
-     hundred files by then. */
-  const cannotAdd = !canAdd ? null
-    : !open ? (closed ? 'This Triage is closed.' : 'This Triage is paused.')
-      : room <= 0 ? `This Triage is full at ${triage.fileCap} CVs.`
-        : balance <= 0 ? 'Your organization has no Triage capacity left.'
-          : null
+  const cannot = room <= 0 ? 'This Triage is full.'
+    : balance <= 0 ? 'Your organization has no Triage capacity left.'
+      : null
 
   return (
-    <div className="triage-session-bar">
-      <span className={`chip chip-lifecycle chip-lifecycle-${triage.lifecycle}`}>
-        {open ? 'Open' : closed ? 'Closed' : 'Paused'}
-      </span>
-
-      {closed && triage.purgeAfter && (
-        <span className="muted triage-purge-note">
-          CVs deleted after {new Date(triage.purgeAfter).toLocaleDateString()}
-        </span>
+    <div className="triage-add-row">
+      {adding ? (
+        <span className="muted">Adding {adding.done} of {adding.total}…</span>
+      ) : (
+        <>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={onPick}
+            disabled={Boolean(cannot)}
+          >
+            Add more CVs
+          </button>
+          <span className="muted triage-add-note">
+            {cannot ?? `Room for ${room} more · ${balance} CVs of capacity left`}
+          </span>
+        </>
       )}
-
-      <span className="triage-session-actions">
-        {canAdd && (
-          adding ? (
-            <span className="muted">Adding {adding.done} of {adding.total}…</span>
-          ) : (
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={onPick}
-              disabled={Boolean(cannotAdd)}
-              title={cannotAdd ?? `Room for ${room} more`}
-            >
-              Add CVs
-            </button>
-          )
-        )}
-
-        {open && (
-          <button
-            type="button"
-            className="link-button"
-            disabled={busy === 'paused'}
-            onClick={() => onMove('paused')}
-          >
-            Pause
-          </button>
-        )}
-
-        {triage.lifecycle === 'paused' && (
-          <button
-            type="button"
-            className="link-button"
-            disabled={busy === 'open'}
-            onClick={() => onMove('open')}
-          >
-            Resume
-          </button>
-        )}
-
-        {closed ? (
-          <button
-            type="button"
-            className="link-button"
-            disabled={busy === 'open'}
-            onClick={() => onMove('open')}
-          >
-            Reopen
-          </button>
-        ) : (
-          <button
-            type="button"
-            className="link-button"
-            disabled={busy === 'closed'}
-            onClick={() => onMove('closed')}
-          >
-            Close
-          </button>
-        )}
-      </span>
     </div>
   )
 }
@@ -1448,9 +1312,7 @@ function TriageFailures({ failures }) {
  * The score keeps the corner it has everywhere else, and the CV download joins
  * the ⋮ rather than sitting beside the number as a second loud thing.
  */
-function TriageResultCard({
-  row, triageId, onOpen, onFile, folder = null, statuses = [], onStatus = null,
-}) {
+function TriageResultCard({ row, triageId, onOpen, onFile, folder = null }) {
   const band = scoreBand(row.score)
 
   /*
@@ -1470,19 +1332,7 @@ function TriageResultCard({
       label: 'Save in folder',
       onSelect: () => onFile(),
     },
-    /*
-     * The recruiter's own call, in the menu rather than as three buttons on
-     * the card. On a list of three hundred, three buttons per row is six
-     * hundred controls competing with the thing the card exists to show.
-     *
-     * The current one is offered back as "Clear", so the menu is the same
-     * shape whatever state the row is in.
-     */
-    ...(onStatus ? statuses.map((entry) => ({
-      key: `status-${entry.key}`,
-      label: row.status === entry.key ? `Clear "${entry.label}"` : entry.label,
-      onSelect: () => onStatus(row.status === entry.key ? '' : entry.key),
-    })) : []),
+
     {
       key: 'cv',
       label: 'Download CV',
@@ -1564,15 +1414,6 @@ function TriageResultCard({
                     flex container is an anonymous item, and text-overflow has
                     nothing to apply to. */}
                 <span className="chip-clip">{folder.name}</span>
-              </span>
-            )}
-            {/* Marked in place rather than lifted to the top: a new arrival
-                that ranks 40th belongs at 40. The badge draws the eye; the
-                position stays the truth about the candidate. */}
-            {row.isNew && <span className="chip chip-new">New</span>}
-            {row.status && (
-              <span className={`chip chip-status chip-status-${row.status}`}>
-                {statuses.find((entry) => entry.key === row.status)?.label ?? row.status}
               </span>
             )}
             {row.reviewedAt && <span className="chip chip-neutral">Opened</span>}

@@ -10511,71 +10511,15 @@ html:has(.workspace-shell) { scrollbar-gutter: auto; }
 /* And the number takes everything the flag gave back. */
 .verified-row .phone-rest { flex: 1; min-width: 0; }
 
-/* ------------------------------------------------- the Triage session bar --
-   What this session is, and what can still be done to it. One row above the
-   list rather than a menu: closing is what starts the retention clock, and a
-   control nobody discovers is a promise nobody keeps. */
-.triage-session-bar {
+/* ----------------------------------------------- adding CVs to a Triage --
+   One button and the reason it can or cannot be pressed, said before it is
+   pressed rather than after three hundred files have been chosen. */
+.triage-add-row {
   display: flex;
   align-items: center;
   gap: 0.75rem;
   flex-wrap: wrap;
   margin-bottom: 1rem;
 }
-.triage-session-actions {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  flex-wrap: wrap;
-  margin-left: auto;
-}
-.triage-purge-note { font-size: 0.85rem; }
+.triage-add-note { font-size: 0.85rem; }
 
-.chip-lifecycle { text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.68rem; }
-.chip-lifecycle-open { background: var(--ok-bg, #e4efe9); color: var(--ok, #2f6b4f); }
-.chip-lifecycle-paused { background: var(--warn-bg, #f6ecd9); color: var(--warn, #8a5a12); }
-.chip-lifecycle-closed { background: var(--surface-2); color: var(--muted); }
-
-.chip-new { background: var(--accent-soft, #f0e2df); color: var(--accent, #7a2e2a); font-weight: 600; }
-.chip-status-shortlisted { background: var(--ok-bg, #e4efe9); color: var(--ok, #2f6b4f); }
-.chip-status-maybe { background: var(--warn-bg, #f6ecd9); color: var(--warn, #8a5a12); }
-.chip-status-rejected { background: var(--surface-2); color: var(--muted); }
-
-.triage-arrived { display: flex; gap: 0.5rem; align-items: baseline; flex-wrap: wrap; }
-.triage-rejected-toggle { margin: 0.75rem 0 0; }
-
-/* --------------------------------------------- what a Triage row says now --
-   A list of titles cannot tell a closed report from a live shortlist, or a
-   pile of four from a pile of four hundred. */
-.chat-item-unread {
-  display: inline-block;
-  margin-left: 0.4rem;
-  padding: 0 0.35rem;
-  min-width: 1.15rem;
-  border-radius: 999px;
-  background: var(--accent, #7a2e2a);
-  color: #fff;
-  font-size: 0.65rem;
-  font-weight: 700;
-  line-height: 1.15rem;
-  text-align: center;
-  vertical-align: middle;
-}
-.chat-item-meta {
-  display: flex;
-  gap: 0.5rem;
-  align-items: baseline;
-  flex-wrap: wrap;
-  font-size: 0.72rem;
-  color: var(--muted);
-  margin-top: 0.15rem;
-}
-.chat-item-state {
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  font-size: 0.62rem;
-  font-weight: 700;
-}
-.chat-item-state-closed { color: var(--muted); }
-.chat-item-state-paused { color: var(--warn, #8a5a12); }
-.chat-item-when { margin-left: auto; }

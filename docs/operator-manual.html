@@ -1250,25 +1250,23 @@ node server/scripts/contact.mjs show <span class="c">&lt;id&gt;</span></pre>
         </article>
       </div>
 
-      <h3>One CV, and the states a session can be in</h3>
+      <h3>Removing one CV</h3>
       <p>
-        A recruiter can now delete <strong>a single CV</strong> from a running session — the
-        author of the session or an organisation administrator. That is what an erasure request
-        needs; until now the only option was deleting the whole session. Nothing is refunded: the
-        CV was read, which is the work that was paid for.
+        A single CV can be deleted from a running session — the author of the session or an
+        organisation administrator, through
+        <code>DELETE /api/hr/triage/&lt;id&gt;/applicants/&lt;applicantId&gt;</code>. There is no
+        button for it yet; it exists because the Terms promise to assist with erasure requests and
+        until now the only available action was deleting the whole session. Nothing is refunded:
+        the CV was read, which is the work that was paid for.
       </p>
-      <p>
-        A session is <strong>open</strong>, <strong>paused</strong> or <strong>closed</strong>.
-        Paused and closed take no new CVs and start no new analysis; both stay readable, and both
-        are reversible. Closing lets analysis already paid for finish. Any seat may pause, resume,
-        close or reopen; only the author or an administrator may delete.
-      </p>
-      <p>
-        Sessions that predate this read as what they are — a finished one is closed, one still
-        working is open — so nothing had to be migrated and no finished report came back as a live
-        shortlist. <code>TRIAGE_MAX_OPEN_SESSIONS</code> (25) caps how many an organisation may
-        have open at once; it is a runaway guard, not a plan limit.
-      </p>
+      <div class="callout">
+        <p>
+          <strong>There is no close button.</strong> The retention clock's ninety-day period runs
+          from when a session is closed, and nothing closes one yet — so in practice only the
+          twelve-month clock binds today, measured from each CV's upload. A session that finished
+          long ago is treated as closed on the day it completed.
+        </p>
+      </div>
     </section>
 
     <!-- ----------------------------------------------------------- tests -- -->
@@ -1367,13 +1365,11 @@ node server/scripts/contact.mjs show <span class="c">&lt;id&gt;</span></pre>
           <tbody>
             <tr>
               <th scope="row"><code>TRIAGE_ADD_CVS</code></th>
-              <td>on, except in production</td>
-              <td>Whether CVs may be added to a Triage that is already running. Off in
-                production until the cost of a CV has been measured and the effort setting
-                chosen — a second delivery is a second charge, and the button should not be in
-                front of paying recruiters before we know what each press costs. Turning it on
-                is one variable and a restart; no deploy, and nothing about the stored data
-                changes either way.</td>
+              <td>on</td>
+              <td>Whether the <strong>Add more CVs</strong> button appears on a running Triage.
+                Set it to <code>0</code> to take the button away; the route goes with it. One
+                variable and a restart, no deploy, and nothing about the stored data changes
+                either way.</td>
             </tr>
             <tr>
               <th scope="row"><code>TRIAGE_LOW_WATER</code></th>
@@ -1402,6 +1398,11 @@ node server/scripts/contact.mjs show <span class="c">&lt;id&gt;</span></pre>
         while it is already running: each delivery is parsed and ranked on its own, and ranks
         already given out never move. The queue also looks for work every few seconds
         (<code>TRIAGE_WAKE_MS</code>), so analysis finishes whether or not a browser is open.
+      </p>
+      <p>
+        <strong>Add more CVs</strong> is a button on a Triage that is already running. Pick the
+        files; they are read, ranked against the same job description and slotted into the list
+        in their place by score. A score already on screen never moves.
       </p>
       <p>
         <strong>Each delivery is charged on its own.</strong> A session used to be charged once,
@@ -1578,7 +1579,7 @@ node server/scripts/contact.mjs show <span class="c">&lt;id&gt;</span></pre>
         <span>test:usage</span><span>test:export</span><span>test:folders</span>
         <span>test:workspace</span><span>test:shared-folders</span><span>test:reveal</span>
         <span>test:triage</span><span>test:triage-funnel</span><span>test:triage-capacity</span>
-        <span>test:triage-charge</span><span>test:triage-lifecycle</span><span>test:triage-skip</span>
+        <span>test:triage-charge</span><span>test:triage-retention</span><span>test:triage-skip</span>
         <span>test:cost</span><span>test:explain</span><span>test:triage-drop</span>
         <span>test:name-case</span><span>test:jd-image</span><span>test:paste-image</span>
         <span>test:score-fairness</span><span>test:criterion-scoring</span><span>test:analysis-depth</span>

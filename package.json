@@ -77,7 +77,7 @@
     "test:explain": "node test/explain-route-check.mjs",
     "test:triage-drop": "node test/triage-drop-check.mjs",
     "test:triage-charge": "node test/triage-charge-check.mjs",
-    "test:triage-lifecycle": "node test/triage-lifecycle-check.mjs"
+    "test:triage-retention": "node test/triage-retention-check.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",

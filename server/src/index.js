@@ -143,7 +143,6 @@ import db, {
   contactIsExempt,
 } from './db.js'
 import {
-  APPLICANT_STATUSES,
   TRIAGE,
   addCvsToSession,
   addFile,
@@ -163,12 +162,7 @@ import {
   failedFiles,
   getTriage,
   listDrops,
-  markSeen,
-  newSince,
-  openSessions,
   removeApplicant,
-  setApplicantStatus,
-  setLifecycle,
   launchReadiness,
   latestDraft,
   listTriages,
@@ -6872,15 +6866,6 @@ app.post('/api/hr/triage/:id/launch', recruiterOnly, (req, res, next) => {
       })
     }
 
-    if (TRIAGE.maxOpenSessions > 0) {
-      const open = openSessions(companyId)
-      if (open >= TRIAGE.maxOpenSessions) {
-        throw new HttpError(409,
-          `Your organization already has ${open} Triages open, which is the limit. `
-          + 'Close one you have finished with to start another.')
-      }
-    }
-
     const capacity = capacityFor(companyId, req.session.id, triage)
     const readiness = launchReadiness({ triage, capacity })
     if (!readiness.ready) {
@@ -7317,116 +7302,7 @@ app.post('/api/hr/triage/:id/retry', recruiterOnly, (req, res, next) => {
 })
 
 /**
- * Pause, resume, close or reopen a session.
- *
- * Q7: any seat may do all four. All of them are reversible, and a colleague
- * who closes a session somebody else is still reading has caused an
- * inconvenience, not a loss. Deleting is the restricted one, and it is
- * restricted where it happens.
- *
- * Q16 decides what closing does to work in flight: analysis already paid for
- * finishes. Nothing here touches the queue — batches already enqueued run to
- * completion, and what stops is new work.
- */
-app.post('/api/hr/triage/:id/lifecycle', recruiterOnly, (req, res, next) => {
-  try {
-    const companyId = companyIdFor(req.session.id)
-    const { triage, error } = mustOwn({ companyId, id: req.params.id })
-    if (error) throw new HttpError(404, 'That Triage does not exist.')
-
-    const to = String(req.body?.state ?? '').trim()
-
-    /*
-     * Reopening counts against the cap, because that is what the cap is for:
-     * closing twenty sessions and reopening them one at a time would
-     * otherwise walk straight past it.
-     */
-    if (to === 'open' && triage.lifecycle !== 'open' && TRIAGE.maxOpenSessions > 0) {
-      const open = openSessions(companyId)
-      if (open >= TRIAGE.maxOpenSessions) {
-        throw new HttpError(409,
-          `Your organization already has ${open} Triages open, which is the limit. `
-          + 'Close one you have finished with to reopen this.')
-      }
-    }
-
-    const moved = setLifecycle({ triageId: triage.id, to })
-
-    if (!moved.ok) {
-      if (moved.reason === 'unknown_state') {
-        throw new HttpError(400, 'That is not a state a Triage can be in.')
-      }
-      if (moved.reason === 'not_started') {
-        throw new HttpError(409, 'This Triage has not started yet. Delete it if you do not want it.')
-      }
-      if (moved.reason === 'failed') {
-        /* Opening one produces a session that reads as live and can do
-           nothing: adding CVs refuses it, the queue skips it, and its status
-           can never move again. Reviving a failed Triage is a real thing to
-           want and it is not this. */
-        throw new HttpError(409,
-          'This Triage could not be processed, so it cannot be reopened. Start a new one for these CVs.')
-      }
-      throw new HttpError(404, 'That Triage does not exist.')
-    }
-
-    if (moved.changed) {
-      track('triage_lifecycle', {
-        actorType: 'recruiter', actorId: req.session.id,
-        triageId: triage.id, from: moved.from, to: moved.to,
-      })
-    }
-
-    res.json({
-      triage: getTriage({ companyId, id: triage.id }),
-      from: moved.from,
-      to: moved.to,
-      purgeAfter: moved.purgeAfter ?? null,
-    })
-  } catch (error) {
-    next(error)
-  }
-})
-
-/**
- * The recruiter's own call on one applicant.
- *
- * Any seat, unlike deleting: this is a note about a decision, it is visible
- * to the whole organization by design — two colleagues working the same pile
- * should not each re-read the same CV — and it is changed by setting it
- * again.
- *
- * Q8 decides what 'rejected' does: the applicant stays in the ranking and is
- * hidden from the list by default. Removing them would destroy the one record
- * that the decision was made, and would let the same CV come back around to a
- * colleague as though nobody had looked at it.
- */
-app.patch('/api/hr/triage/:id/applicants/:applicantId/status', recruiterOnly, (req, res, next) => {
-  try {
-    const companyId = companyIdFor(req.session.id)
-    const { triage, error } = mustOwn({ companyId, id: req.params.id })
-    if (error) throw new HttpError(404, 'That Triage does not exist.')
-
-    const set = setApplicantStatus({
-      triageId: triage.id,
-      applicantId: Number(req.params.applicantId),
-      status: req.body?.status ?? '',
-    })
-
-    if (!set.ok) {
-      throw set.reason === 'unknown'
-        ? new HttpError(400, 'That is not a status an applicant can have.')
-        : new HttpError(404, 'That CV is not in this Triage.')
-    }
-
-    res.json({ status: set.status, statuses: APPLICANT_STATUSES })
-  } catch (error) {
-    next(error)
-  }
-})
-
-/**
- * Removes one CV from a session, at any point in its life.
+ * Removes one CV from a session.
  *
  * This is the route an erasure request needs. Until now the only way to take
  * one person's CV out of a launched Triage was to delete the whole session —
@@ -7434,14 +7310,16 @@ app.patch('/api/hr/triage/:id/applicants/:applicantId/status', recruiterOnly, (r
  * details" was that we could not, which sits badly beside a Terms that
  * promises to assist as processor.
  *
- * Q7 restricts it: the author of the session or an organization
- * administrator. Everything else about a session is any colleague's to do
- * because everything else is reversible, and this is not.
+ * The session's author or an organization administrator. Everything else
+ * about a session is any colleague's to do because everything else is
+ * reversible, and this is not.
  *
  * Nothing is refunded. The CV was read and analysed, which is the work that
- * was paid for; deleting the record of it afterwards does not give that work
- * back. A refund here would also make erasure a way to get capacity back,
- * which is a bad thing to attach to a privacy right.
+ * was paid for; deleting the record afterwards does not give that work back.
+ * A refund here would also make erasure a way to get capacity back, which is
+ * a bad thing to attach to a privacy right.
+ *
+ * No button points at it yet. It exists because the promise exists.
  */
 app.delete('/api/hr/triage/:id/applicants/:applicantId', recruiterOnly, (req, res, next) => {
   try {
@@ -7500,24 +7378,12 @@ app.get('/api/hr/triage/:id/results', recruiterOnly, (req, res, next) => {
 
     const offset = Math.max(0, parseNumber(req.query.offset) ?? 0)
 
-    /*
-     * Read before the page, because reading the page is what makes it old.
-     *
-     * The mark moves on the FIRST page only. A recruiter paging to the end of
-     * a long list is still on the same visit, and moving the mark on every
-     * page would mean arrivals during that visit were never announced.
-     */
-    const seen = newSince({ triageId: triage.id, recruiterId: req.session.id })
-
+    /* Rejected CVs are included: nothing sets that status any more, so
+       filtering on it would be a query per page load answering a question
+       nobody asks. */
     const page = results({
-      triageId: triage.id,
-      offset,
-      limit: TRIAGE.pageSize,
-      includeRejected: req.query.rejected === '1',
-      since: seen.since,
+      triageId: triage.id, offset, limit: TRIAGE.pageSize, includeRejected: true,
     })
-
-    if (offset === 0) markSeen({ triageId: triage.id, recruiterId: req.session.id })
 
     /*
      * New work only while the session is open.
@@ -7574,10 +7440,6 @@ app.get('/api/hr/triage/:id/results', recruiterOnly, (req, res, next) => {
          fetched per row: a folder is shared, so a colleague's filing shows up
          here, and twenty-five rows would otherwise be twenty-five requests. */
       filed: triageFolderIndex(req.session.id),
-      /* What has landed since this recruiter last opened it, and the calls
-         they can make on a row. Q9 — an in-app notice, and no emails. */
-      newSince: { count: seen.count, since: seen.since, first: seen.first },
-      statuses: APPLICANT_STATUSES,
       /* Said once, here, for the same reason Search says it: a score that moves
          when more people are analysed looks like instability unless the
          recruiter is told the scale moved rather than the candidate. */

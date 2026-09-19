@@ -92,11 +92,13 @@ export const TRIAGE = {
    * recruiters before we know what each press costs us is the wrong order to
    * do those two things in.
    *
-   * Flipping it on in production is one environment variable and a restart.
-   * No deploy, and nothing about the data changes either way: a session with
-   * one delivery and a session with three are the same shape.
+   * It defaults ON. It was off in production while the cost of a CV was
+   * still unmeasured, which had the button hidden on the one surface that
+   * wanted it — so the deploy shipped everything around the feature and
+   * withheld the feature. Set TRIAGE_ADD_CVS=0 to switch it off again; that
+   * is one environment variable and a restart, no deploy.
    */
-  addCvs: flag('TRIAGE_ADD_CVS', process.env.NODE_ENV !== 'production'),
+  addCvs: flag('TRIAGE_ADD_CVS', true),
 
   /**
    * How long a closed session's CVs are kept, and how long any CV is kept.
@@ -125,10 +127,12 @@ export const TRIAGE = {
   /**
    * How many sessions one organization may have open at once.
    *
-   * An open session with no analysis running is free storage on our disk, and
-   * nothing else caps it. 25 is a number nobody legitimately working will
-   * meet and an abuser will; it is not a plan limit and should not be sold as
-   * one. Zero switches the cap off.
+   * Enforced nowhere at present, and that is deliberate rather than an
+   * oversight: with no way for a recruiter to close a session, a cap on open
+   * ones is a lock with no key. A company that reached it could not launch
+   * another Triage and would have no action available to fix that. Kept as a
+   * setting because the counting function is still correct and the cap is
+   * worth having the day closing exists.
    */
   maxOpenSessions: num('TRIAGE_MAX_OPEN_SESSIONS', 25),
 }
