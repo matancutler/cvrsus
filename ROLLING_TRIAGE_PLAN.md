@@ -785,6 +785,36 @@ deliveries holding CVs"). Clearing them automatically at boot would mean deletin
 without being asked, and charging them automatically would mean taking money without being asked, so
 neither is done. Today the local and production counts are zero.
 
+### Phase 3 — lifecycle and retention · done
+
+`lifecycle` beside `status`, nullable, with NULL answered from the row's own state — Q10's
+migration without a migration. Per-CV delete (the route an erasure request needs). A retention rule
+(Q6) that reports and does not delete. `TRIAGE_MAX_OPEN_SESSIONS`. Drafted Terms and privacy
+wording, visible in the test version and absent from the production bundle.
+
+**Review found eleven defects, one critical:** deleting the top of a ranking permanently stranded
+the next delivery, because ranks were issued above the highest *surviving* rank while the frontier
+only moves forward. All fixed — see commit `83cbcd6`.
+
+### Phase 4 — the session page · done
+
+Add CVs in the UI behind the flag, offered only when it would work. Pause / resume / close /
+reopen on a session bar with the deletion date shown. Per-applicant status (Q8) with rejected
+hidden but counted. "New since you looked", per recruiter, marked in place (Q9). The daily-limit
+notice, which is decision 4 reaching a screen.
+
+**Not done, deliberately:** keyset paging, and merging the builder and results into one component.
+Both are refactors of a 1,585-line file with high regression risk and no user-visible gain today.
+Offset paging is correct here because the list is ordered by a stored score that does not change.
+
+### Phase 5 — the list, copy and analytics · done
+
+Rail rows carry state, counts, last real activity and an unread count. The worker reports
+completions and permanent batch failures — it had no voice in the analytics at all, so everything
+that happens after the recruiter closes the tab was invisible. Landing, info and pricing say a
+Triage stays open, that scores already given never move, that you are charged per CV every time
+you add some, and that one Triage holds 500.
+
 ---
 
 *Written 18 September 2026 against the working tree. Cost figures are estimates from prompt sizes,

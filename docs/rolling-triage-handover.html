@@ -1,0 +1,777 @@
+<title>Rolling Triage Handover</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Public+Sans:ital,wght@0,400;0,500;1,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<style>
+  /* Same tokens as the operator manual. This is its companion, not a new
+     thing, and a second visual language would say otherwise. */
+  :root {
+    --ground:      #f7f3f1;
+    --surface:     #ffffff;
+    --surface-2:   #f1eae7;
+    --ink:         #1d1512;
+    --ink-soft:    #5f524d;
+    --ink-faint:   #8b7d77;
+    --rule:        #e2d7d2;
+    --accent:      #7a2e2a;
+    --accent-soft: #f0e2df;
+    --ok:          #2f6b4f;
+    --ok-bg:       #e4efe9;
+    --warn:        #8a5a12;
+    --warn-bg:     #f6ecd9;
+    --stop:        #a3352b;
+    --stop-bg:     #f8e3e0;
+    --shadow: 0 1px 2px rgba(29, 21, 18, .05), 0 8px 24px -12px rgba(29, 21, 18, .12);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #15100e; --surface: #1e1715; --surface-2: #271e1b;
+      --ink: #f3ebe7; --ink-soft: #b6a7a1; --ink-faint: #8b7b74;
+      --rule: #362b27; --accent: #d98079; --accent-soft: #3a201e;
+      --ok: #7cc4a0; --ok-bg: #16281f; --warn: #e0b061; --warn-bg: #2e2313;
+      --stop: #e88a80; --stop-bg: #331916;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground: #15100e; --surface: #1e1715; --surface-2: #271e1b;
+    --ink: #f3ebe7; --ink-soft: #b6a7a1; --ink-faint: #8b7b74;
+    --rule: #362b27; --accent: #d98079; --accent-soft: #3a201e;
+    --ok: #7cc4a0; --ok-bg: #16281f; --warn: #e0b061; --warn-bg: #2e2313;
+    --stop: #e88a80; --stop-bg: #331916;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: "Public Sans", ui-sans-serif, system-ui, sans-serif;
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1, h2, h3, .eyebrow, .risk, .step-n {
+    font-family: Archivo, ui-sans-serif, system-ui, sans-serif;
+  }
+
+  code, pre { font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace; }
+
+  .wrap { max-width: 860px; margin: 0 auto; padding: 0 clamp(1rem, 4vw, 2.5rem) 5rem; }
+
+  header.masthead {
+    padding: clamp(2.5rem, 7vw, 4.5rem) 0 1.75rem;
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: 2.5rem;
+  }
+
+  .eyebrow {
+    font-size: .72rem; font-weight: 600; letter-spacing: .16em;
+    text-transform: uppercase; color: var(--accent); margin: 0 0 .9rem;
+  }
+
+  h1 {
+    font-size: clamp(2rem, 5.5vw, 3.1rem); font-weight: 700;
+    letter-spacing: -.028em; line-height: 1.04; margin: 0 0 1rem;
+    text-wrap: balance;
+  }
+
+  .standfirst { font-size: 1.08rem; color: var(--ink-soft); margin: 0; max-width: 58ch; }
+  .standfirst strong { color: var(--ink); font-weight: 500; }
+
+  main { display: flex; flex-direction: column; gap: 3rem; }
+  section { scroll-margin-top: 1.5rem; }
+
+  h2 {
+    font-size: 1.38rem; font-weight: 600; letter-spacing: -.018em;
+    margin: 0 0 .3rem; text-wrap: balance;
+  }
+
+  h3 { font-size: 1rem; font-weight: 600; margin: 1.75rem 0 .5rem; }
+
+  .note { margin: 0 0 1.3rem; color: var(--ink-soft); max-width: 66ch; font-size: .95rem; }
+
+  p { max-width: 66ch; }
+
+  .callout {
+    border-left: 3px solid var(--accent);
+    background: var(--accent-soft);
+    border-radius: 0 6px 6px 0;
+    padding: .9rem 1.1rem;
+    margin: 0 0 1.4rem;
+  }
+  .callout p { margin: 0; font-size: .93rem; }
+  .callout p + p { margin-top: .5rem; }
+  .callout.stop { border-left-color: var(--stop); background: var(--stop-bg); }
+
+  /* The decision cards: three states, and the state is the point. */
+  .decisions { display: flex; flex-direction: column; gap: .7rem; }
+
+  .decision {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--rule);
+    border-radius: 7px;
+    padding: .9rem 1.1rem;
+    box-shadow: var(--shadow);
+  }
+  .decision.yours { border-left-color: var(--stop); }
+  .decision.mine  { border-left-color: var(--ok); }
+
+  .decision-head {
+    display: flex; justify-content: space-between; align-items: baseline;
+    gap: 1rem; flex-wrap: wrap; margin-bottom: .4rem;
+  }
+  .decision h3 { margin: 0; font-size: .98rem; }
+
+  .risk {
+    flex: none; font-size: .62rem; font-weight: 600; letter-spacing: .09em;
+    text-transform: uppercase; padding: .16rem .45rem; border-radius: 3px;
+    white-space: nowrap;
+  }
+  .risk-yours { color: var(--stop); background: var(--stop-bg); }
+  .risk-mine  { color: var(--ok);   background: var(--ok-bg); }
+
+  .decision p { margin: 0; font-size: .92rem; color: var(--ink-soft); }
+  .decision p + p { margin-top: .45rem; }
+  .decision strong { color: var(--ink); font-weight: 500; }
+
+  /* Numbered because the testing order genuinely matters — step 3 proves
+     something step 5 assumes. */
+  ol.steps { counter-reset: step; list-style: none; margin: 0; padding: 0;
+             display: flex; flex-direction: column; gap: 1rem; }
+  ol.steps > li {
+    counter-increment: step;
+    display: grid; grid-template-columns: 1.9rem minmax(0, 1fr); gap: .9rem;
+    align-items: start;
+  }
+  ol.steps > li::before {
+    content: counter(step);
+    font-family: Archivo, sans-serif; font-size: .78rem; font-weight: 700;
+    color: var(--accent); background: var(--accent-soft);
+    border-radius: 4px; height: 1.65rem; display: grid; place-items: center;
+    font-variant-numeric: tabular-nums;
+  }
+  ol.steps h3 { margin: 0 0 .3rem; font-size: .98rem; }
+  ol.steps p { margin: 0 0 .5rem; font-size: .92rem; color: var(--ink-soft); }
+  ol.steps p:last-child { margin-bottom: 0; }
+  ol.steps .expect {
+    font-size: .88rem; color: var(--ink);
+    border-left: 2px solid var(--rule); padding-left: .7rem; margin-top: .5rem;
+  }
+
+  pre {
+    margin: .5rem 0; background: var(--surface-2); border: 1px solid var(--rule);
+    border-radius: 6px; padding: .75rem .9rem; overflow-x: auto;
+    font-size: .84rem; line-height: 1.6;
+  }
+  pre .c { color: var(--ink-faint); }
+
+  code:not(pre code) {
+    background: var(--surface-2); padding: .08em .35em;
+    border-radius: 3px; font-size: .88em;
+  }
+
+  .table-wrap {
+    overflow-x: auto; border: 1px solid var(--rule); border-radius: 7px;
+    background: var(--surface); box-shadow: var(--shadow); margin-bottom: 1.3rem;
+  }
+  table { border-collapse: collapse; width: 100%; min-width: 520px; font-size: .88rem; }
+  th, td { text-align: left; vertical-align: top; padding: .68rem .9rem; border-bottom: 1px solid var(--rule); }
+  thead th {
+    font-family: Archivo, sans-serif; font-size: .67rem; font-weight: 600;
+    letter-spacing: .1em; text-transform: uppercase; color: var(--ink-faint);
+    background: var(--surface-2); white-space: nowrap;
+  }
+  tbody th { font-weight: 500; white-space: nowrap; }
+  tr:last-child th, tr:last-child td { border-bottom: 0; }
+  td { color: var(--ink-soft); }
+  td strong, tbody th { color: var(--ink); }
+  .num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+  ul.plain { padding-left: 1.15rem; margin: 0 0 1rem; }
+  ul.plain li { margin-bottom: .4rem; font-size: .93rem; color: var(--ink-soft); }
+  ul.plain strong { color: var(--ink); font-weight: 500; }
+
+  footer {
+    margin-top: 3.5rem; padding-top: 1.3rem; border-top: 1px solid var(--rule);
+    font-size: .84rem; color: var(--ink-faint);
+  }
+
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+
+  <header class="masthead">
+    <p class="eyebrow">Cursus · rolling Triage</p>
+    <h1>Rolling Triage Handover</h1>
+    <p class="standfirst">
+      Five phases, built on the <strong>rolling-triage</strong> branch and not merged. What it
+      does now, what it costs to test, the decisions I took on your behalf, and the four that are
+      still yours.
+    </p>
+  </header>
+
+  <main>
+
+    <!-- ------------------------------------------------------- what changed -- -->
+    <section id="what">
+      <h2>What actually changed</h2>
+      <p class="note">
+        A Triage was a report: one pile of CVs, ranked once, charged once, finished. It is now a
+        place to work — and every part of that had to be built, because almost nothing in the old
+        pipeline could run twice.
+      </p>
+
+      <ul class="plain">
+        <li><strong>A session stays open.</strong> Add more CVs while it is running; they are
+          read, ranked and slotted into the list in their place. A score already given never
+          moves.</li>
+        <li><strong>Each delivery is charged on its own.</strong> One ledger line per pile, naming
+          the session and the delivery. An unreadable file is refunded against its own delivery.</li>
+        <li><strong>Sessions have a life.</strong> Open, paused, closed — and closed starts a
+          retention clock.</li>
+        <li><strong>One CV can be deleted.</strong> Which is the first time an erasure request has
+          had an honest answer.</li>
+        <li><strong>The queue finds its own work.</strong> Analysis finishes whether or not a
+          browser is open.</li>
+        <li><strong>A candidate who applies twice is one person</strong>, matched by email, newest
+          CV winning.</li>
+        <li><strong>Scores are absolute.</strong> Each candidate against the role, on their own —
+          not rescaled against the best CV in the pile, which is what used to make an arrival
+          quietly lower everybody else's number.</li>
+      </ul>
+
+      <div class="callout">
+        <p>
+          <strong>Nothing is live.</strong> <code>main</code> is unchanged since the bug-fix
+          release. Twenty-one commits sit on <code>rolling-triage</code>: 54 files, about 10,600
+          lines added.
+        </p>
+      </div>
+    </section>
+
+    <!-- --------------------------------------------------------- your calls -- -->
+    <section id="yours">
+      <h2>Four decisions still yours</h2>
+      <p class="note">
+        Each of these touches what customers are charged, what data is destroyed, or the legal
+        wording — so I built the machinery and stopped.
+      </p>
+
+      <div class="decisions">
+        <article class="decision yours">
+          <div class="decision-head">
+            <h3>Turn on “Add CVs” in production</h3>
+            <span class="risk risk-yours">Yours</span>
+          </div>
+          <p>
+            <code>TRIAGE_ADD_CVS=1</code> in Render, and a restart. It is on everywhere else. Off
+            in production until you have run the cost test and picked an effort setting, because a
+            second delivery is a second charge and the button should not be in front of paying
+            recruiters before we know what each press costs us.
+          </p>
+        </article>
+
+        <article class="decision yours">
+          <div class="decision-head">
+            <h3>Pick the daily analysis cap</h3>
+            <span class="risk risk-yours">Yours</span>
+          </div>
+          <p>
+            <code>MATCH_DAILY_CAP</code> is 1500 per company per 24 hours — about ten times any
+            plan we would sell, so it does not bind. Under rolling sessions it should.
+          </p>
+          <p>
+            I did not lower it. Over the line, scoring silently falls back to keyword matching, so
+            a cap set too low gives paying recruiters plainer readings than the ones they bought.
+            <code>npm run triage:audit</code> now reports the busiest real company-day. Pick from
+            that number, not from a guess.
+          </p>
+        </article>
+
+        <article class="decision yours">
+          <div class="decision-head">
+            <h3>Let the retention sweep delete</h3>
+            <span class="risk risk-yours">Yours</span>
+          </div>
+          <p>
+            <code>TRIAGE_RETENTION_DELETES=1</code>. Today it runs daily, works out exactly what
+            the rule would remove, writes that in the log, and stops.
+          </p>
+          <p>
+            Read those logs for a full cycle first. There is no undo and no backup — deleting
+            other people's CVs on a schedule is the least reversible thing this product does.
+          </p>
+        </article>
+
+        <article class="decision yours">
+          <div class="decision-head">
+            <h3>Publish the Terms and privacy wording</h3>
+            <span class="risk risk-yours">Yours</span>
+          </div>
+          <p>
+            Two live clauses stopped being true. Privacy 7A says CVs are kept “for as long as the
+            Organization keeps the workspace” — honest about an afternoon's report, and “forever”
+            about a session designed to stay open. And we promise to assist with erasure requests
+            while having no way to remove one person's CV.
+          </p>
+          <p>
+            Replacement text is drafted and visible on the dev server at <code>/terms</code> and
+            <code>/privacy</code>, in a red dashed box. It is absent from the production bundle —
+            not merely hidden, absent; a test asserts that against the built file. Three questions
+            for whoever reviews it are listed at the end of the draft.
+          </p>
+        </article>
+      </div>
+    </section>
+
+    <!-- ------------------------------------------------------------ my calls -- -->
+    <section id="mine">
+      <h2>Decisions I made for you</h2>
+      <p class="note">
+        Judgement calls I took rather than stopping for. Each is a setting or a small change if
+        you disagree.
+      </p>
+
+      <div class="decisions">
+        <article class="decision mine">
+          <div class="decision-head">
+            <h3>Both versions of a duplicate person stay charged</h3>
+            <span class="risk risk-mine">Mine</span>
+          </div>
+          <p>
+            When somebody applies twice, the older CV is set aside — but it was read, which is the
+            work that was paid for. No refund. It is counted separately in
+            <code>npm run triage:audit</code> so the gap between what was bought and what is shown
+            is visible.
+          </p>
+        </article>
+
+        <article class="decision mine">
+          <div class="decision-head">
+            <h3>Deleting a CV refunds nothing</h3>
+            <span class="risk risk-mine">Mine</span>
+          </div>
+          <p>
+            Same reasoning, plus one more: attaching a refund to a privacy right would make
+            erasure a way to reclaim capacity, which invites exactly the wrong behaviour.
+          </p>
+        </article>
+
+        <article class="decision mine">
+          <div class="decision-head">
+            <h3>Low balance warns at 50 CVs, once per descent</h3>
+            <span class="risk risk-mine">Mine</span>
+          </div>
+          <p>
+            <code>TRIAGE_LOW_WATER</code>. The old email fired at exactly zero, which a rolling
+            session steps straight past: a delivery bigger than the balance is refused, so the
+            balance sits where it is and nobody is told. Buying more arms the warning again.
+          </p>
+        </article>
+
+        <article class="decision mine">
+          <div class="decision-head">
+            <h3>25 open sessions per organisation</h3>
+            <span class="risk risk-mine">Mine</span>
+          </div>
+          <p>
+            <code>TRIAGE_MAX_OPEN_SESSIONS</code>. An open session with nothing running is free
+            storage on our disk and nothing else capped it. A number nobody working legitimately
+            will meet; not a plan limit, and it should not be sold as one.
+          </p>
+        </article>
+
+        <article class="decision mine">
+          <div class="decision-head">
+            <h3>Old sessions read as closed without a migration</h3>
+            <span class="risk risk-mine">Mine</span>
+          </div>
+          <p>
+            Q10 asked for existing Triages to become closed. Rather than run an UPDATE over
+            production, the lifecycle column is nullable and NULL is answered from the row itself
+            — a finished session is closed, a working one is open. Nothing to run, nothing to get
+            wrong, and no finished report can come back as a live shortlist because a column was
+            added underneath it.
+          </p>
+        </article>
+
+        <article class="decision mine">
+          <div class="decision-head">
+            <h3>Two Phase 4 items left undone</h3>
+            <span class="risk risk-mine">Mine</span>
+          </div>
+          <p>
+            Keyset paging, and merging the builder and the results screen into one component. Both
+            are refactors of a 1,585-line file with real regression risk and no user-visible gain
+            today — offset paging is correct here because the list is ordered by a stored score
+            that does not change.
+          </p>
+        </article>
+      </div>
+    </section>
+
+    <!-- ------------------------------------------------------------ testing -- -->
+    <section id="testing">
+      <h2>Testing it yourself</h2>
+      <p class="note">
+        About twenty minutes. Order matters — step 4 proves the thing step 6 assumes.
+      </p>
+
+      <div class="callout stop">
+        <p>
+          <strong>Local only.</strong> <code>npm run data:test</code> registers a company and
+          spends capacity. Never run it against production.
+        </p>
+      </div>
+
+      <ol class="steps">
+        <li>
+          <div>
+            <h3>Get on the branch and start it</h3>
+            <pre>git checkout rolling-triage
+npm run build
+npm run dev</pre>
+            <p class="expect">
+              The boot log should mention the retention sweep in log-only mode. If it says it
+              deleted anything, stop and tell me.
+            </p>
+          </div>
+        </li>
+
+        <li>
+          <div>
+            <h3>Make a test account with sample CVs</h3>
+            <pre>npm run data:test</pre>
+            <p>
+              Prints a join key, username and password, creates a Triage with five applicants, and
+              leaves three more CVs in <code>sample-cvs/</code> for later.
+            </p>
+          </div>
+        </li>
+
+        <li>
+          <div>
+            <h3>Sign in and open the Triage</h3>
+            <p class="expect">
+              The session bar shows <strong>Open</strong>, an <strong>Add CVs</strong> button, and
+              Pause and Close. The rail row shows “N of M analysed” and a date.
+            </p>
+          </div>
+        </li>
+
+        <li>
+          <div>
+            <h3>Add the three held-back CVs</h3>
+            <p>
+              Press Add CVs and pick them from <code>sample-cvs/</code>. This is the whole feature.
+            </p>
+            <p class="expect">
+              They appear in the list <strong>in their place by score</strong>, not at the top, each
+              with a <strong>New</strong> chip. Every score already on screen is unchanged — that is
+              the thing to actually check. Your balance falls by exactly three.
+            </p>
+          </div>
+        </li>
+
+        <li>
+          <div>
+            <h3>Check you were charged once, per delivery</h3>
+            <pre>npm run triage:audit</pre>
+            <p class="expect">
+              Two deliveries. <strong>Unpaid deliveries holding CVs: 0</strong> and
+              <strong>totals disagreeing with deliveries: 0</strong>. Anything else is a bug —
+              send me the output.
+            </p>
+          </div>
+        </li>
+
+        <li>
+          <div>
+            <h3>Mark somebody as not proceeding</h3>
+            <p>Use the ⋯ menu on a card.</p>
+            <p class="expect">
+              They vanish from the list, and a line appears saying one applicant is hidden, with a
+              link to show them. They are still in the ranking — that is deliberate, so a colleague
+              does not re-read the same CV.
+            </p>
+          </div>
+        </li>
+
+        <li>
+          <div>
+            <h3>Close the session, then try to add more</h3>
+            <p class="expect">
+              The bar shows <strong>Closed</strong> and a date the CVs will be deleted. Add CVs is
+              disabled. The list still reads. Reopen puts it back and the date disappears.
+            </p>
+          </div>
+        </li>
+
+        <li>
+          <div>
+            <h3>Delete one CV</h3>
+            <p>
+              The route is <code>DELETE /api/hr/triage/:id/applicants/:applicantId</code>; there is
+              no button for it yet.
+            </p>
+            <p class="expect">
+              The row goes, the file goes, your balance does not move. Add another CV afterwards
+              and confirm it still gets analysed — that specific sequence is what the review found
+              broken, and it is the one worth checking by hand.
+            </p>
+          </div>
+        </li>
+
+        <li>
+          <div>
+            <h3>Read the drafted legal wording</h3>
+            <p>
+              Open <code>/terms</code> and <code>/privacy</code> on the dev server. Red dashed
+              boxes. They are not on the live site and cannot be.
+            </p>
+          </div>
+        </li>
+
+        <li>
+          <div>
+            <h3>Run the suites</h3>
+            <pre><span class="c"># in another terminal, with the spare server running on 5199</span>
+CKING_URL=http://localhost:5199 npm run test:triage-charge
+CKING_URL=http://localhost:5199 npm run test:triage-lifecycle
+CKING_URL=http://localhost:5199 npm run test:triage-drop</pre>
+            <p class="expect">
+              “All checks passed.” on each. Node 24 crashes on exit even after a clean run, so that
+              line is the verdict, not the exit code.
+            </p>
+          </div>
+        </li>
+      </ol>
+    </section>
+
+    <!-- --------------------------------------------------------------- cost -- -->
+    <section id="cost">
+      <h2>What a full test run costs</h2>
+      <p class="note">
+        The test suites cost nothing: there is no API key on the test server, so every analysis
+        falls back to keyword matching. The numbers below are for clicking through the product
+        with a real key.
+      </p>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">What</th>
+              <th scope="col" class="num">CVs read</th>
+              <th scope="col" class="num">At Opus / high</th>
+              <th scope="col" class="num">At Sonnet / medium</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th scope="row">The sample Triage (5 CVs)</th>
+              <td class="num">5</td>
+              <td class="num">≈ $0.75</td>
+              <td class="num">≈ $0.06</td>
+            </tr>
+            <tr>
+              <th scope="row">Adding 3 more</th>
+              <td class="num">3</td>
+              <td class="num">≈ $0.45</td>
+              <td class="num">≈ $0.04</td>
+            </tr>
+            <tr>
+              <th scope="row">One JD parse per delivery</th>
+              <td class="num">—</td>
+              <td class="num">≈ $0.06</td>
+              <td class="num">≈ $0.01</td>
+            </tr>
+            <tr>
+              <th scope="row"><strong>The walkthrough above</strong></th>
+              <td class="num">8</td>
+              <td class="num"><strong>≈ $1.26</strong></td>
+              <td class="num"><strong>≈ $0.11</strong></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout">
+        <p>
+          <strong>These are estimates from prompt sizes, not measurements.</strong> The real
+          per-CV number comes from <code>npm run ai:cost --days 1</code> after a run with a key
+          set — which is also the cost test that decides whether Add CVs goes live.
+        </p>
+        <p>
+          A three-CV delivery is the expensive shape: prompt caching pays for itself across a
+          batch of fifty and barely at all across three, so small drops cost more per CV than a
+          big pile does. Worth knowing before promising “add a few at a time”.
+        </p>
+      </div>
+    </section>
+
+    <!-- ------------------------------------------------------------- reviews -- -->
+    <section id="reviews">
+      <h2>What the reviews found</h2>
+      <p class="note">
+        Each phase was read adversarially by someone who did not write it. Three reviews, nineteen
+        real defects, all fixed. The five worth knowing about:
+      </p>
+
+      <ul class="plain">
+        <li>
+          <strong>Deleting the top of a ranking stranded the next delivery, permanently.</strong>
+          Ranks were issued above the highest surviving rank, but the analysis cursor only moves
+          forward — so the next pile was numbered underneath it and could never be selected by
+          anything. Paid for, parsed, invisible.
+        </li>
+        <li>
+          <strong>One unreadable file refunded an entire session.</strong> On sessions predating
+          deliveries, a single scanned photograph handed back all 36 CVs of capacity and the other
+          35 were analysed free.
+        </li>
+        <li>
+          <strong>A second delivery failing refunded everything and kept working.</strong> The
+          test for “is this the first pile” asked whether anything had been ranked yet, which is
+          false in the ordinary case.
+        </li>
+        <li>
+          <strong>The retention scan went blind past 5,000 CVs.</strong> With deletion off the
+          window never slides, so the log the whole log-only period exists to produce was quietly
+          partial — and <code>--triage &lt;id&gt;</code> answered “nothing is due” for any session
+          past that point, on the exact command an erasure request needs.
+        </li>
+        <li>
+          <strong>The error handler deleted files that surviving rows pointed at.</strong> Found
+          while building, not by a review. It undid the previous phase's fix one layer out, and
+          the loss surfaced days later as an unreadable CV.
+        </li>
+      </ul>
+
+      <p>
+        Four queue-failure fixes are covered by reasoning rather than by a test, and the code says
+        so: forcing a batch to throw structurally means breaking the model call itself, and a test
+        that has to win a race in order to fail passes for the wrong reason most of the time.
+      </p>
+    </section>
+
+    <!-- ------------------------------------------------------------ settings -- -->
+    <section id="settings">
+      <h2>Every new setting</h2>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">Setting</th>
+              <th scope="col">Default</th>
+              <th scope="col">What it does</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th scope="row"><code>TRIAGE_ADD_CVS</code></th>
+              <td>on, except production</td>
+              <td>Whether CVs may be added to a running Triage.</td>
+            </tr>
+            <tr>
+              <th scope="row"><code>TRIAGE_LOW_WATER</code></th>
+              <td>50</td>
+              <td>Warn the administrator when capacity falls to this. 0 switches it off.</td>
+            </tr>
+            <tr>
+              <th scope="row"><code>TRIAGE_MAX_OPEN_SESSIONS</code></th>
+              <td>25</td>
+              <td>How many Triages one organisation may have open at once.</td>
+            </tr>
+            <tr>
+              <th scope="row"><code>TRIAGE_RETAIN_AFTER_CLOSE_DAYS</code></th>
+              <td>90</td>
+              <td>How long a closed session's CVs are kept.</td>
+            </tr>
+            <tr>
+              <th scope="row"><code>TRIAGE_RETAIN_MAX_DAYS</code></th>
+              <td>365</td>
+              <td>How long any CV is kept, whatever the session is doing.</td>
+            </tr>
+            <tr>
+              <th scope="row"><code>TRIAGE_RETENTION_DELETES</code></th>
+              <td>off</td>
+              <td>Whether the sweep may act. Off means it reports and stops.</td>
+            </tr>
+            <tr>
+              <th scope="row"><code>TRIAGE_WAKE_MS</code></th>
+              <td>5000</td>
+              <td>How often the queue looks for work nobody started.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ---------------------------------------------------------------- next -- -->
+    <section id="next">
+      <h2>Going live</h2>
+      <ol class="steps">
+        <li>
+          <div>
+            <h3>Test it locally</h3>
+            <p>The walkthrough above. Nothing deploys until you have done this.</p>
+          </div>
+        </li>
+        <li>
+          <div>
+            <h3>Run the cost test with a real key</h3>
+            <pre>npm run ai:cost --days 1</pre>
+            <p>Pick the effort setting from the real per-CV number, not the estimate.</p>
+          </div>
+        </li>
+        <li>
+          <div>
+            <h3>Merge, with Add CVs still off</h3>
+            <pre>git push origin rolling-triage:main</pre>
+            <p>
+              Render deploys <code>main</code> within about a minute. Everything ships except the
+              button: the flag is off in production by default, so the schema, the charging and
+              the lifecycle all go live while nothing changes for a recruiter.
+            </p>
+          </div>
+        </li>
+        <li>
+          <div>
+            <h3>Check the migrations landed</h3>
+            <pre>npm run triage:audit</pre>
+            <p>
+              In Render → Shell. Unpaid deliveries and disagreeing totals should both read zero.
+            </p>
+          </div>
+        </li>
+        <li>
+          <div>
+            <h3>Then turn the button on</h3>
+            <p>
+              <code>TRIAGE_ADD_CVS=1</code> and a restart. No deploy, and reversible in a minute.
+            </p>
+          </div>
+        </li>
+      </ol>
+    </section>
+
+  </main>
+
+  <footer>
+    Cursus · rolling Triage, built on the <code>rolling-triage</code> branch, 18–19 September 2026.
+    Twenty-one commits, 54 files. Not merged. Cost figures are estimates from prompt sizes except
+    where stated.
+  </footer>
+
+</div>
