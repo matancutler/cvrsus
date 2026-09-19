@@ -77,9 +77,26 @@ export const PUBLIC_DEMO = {
    * demo never reads a recruiter's Opus assessment or writes over one.
    */
   model: process.env.PUBLIC_DEMO_MODEL ?? 'claude-sonnet-5',
-  /* Below this a match is not worth showing. §9: do not fill the page with
-     weak candidates — say there are not enough strong ones. */
-  minScore: asInt(process.env.PUBLIC_DEMO_MIN_SCORE, 40),
+  /*
+   * Below this a match is not worth showing. §9: do not fill the page with
+   * weak candidates — say there are not enough strong ones.
+   *
+   * 22, not 40, because the scale underneath it moved and the constant did
+   * not. This floor used to be applied to a NORMALISED score: the pool's
+   * best candidate was lifted to a ceiling of
+   * `min(100, round(top / 55 * 100))` and everyone else scaled against them.
+   * Search now shows absolute fit, which for a weak pool is a much smaller
+   * number for the same candidate.
+   *
+   * 22 is where the old 40 actually sat, derived rather than guessed: in the
+   * case that matters — a pool whose best is at or below the credibility
+   * threshold of 55, which is the only case that could turn six cards into
+   * an empty page — the displayed score was fit x 100/55, so 40 displayed is
+   * fit 22. Above that threshold the equivalent rises towards 40, and a
+   * strong pool's weak tail is now judged on its own merit instead of
+   * against the leader, which is the whole point of showing absolute fit.
+   */
+  minScore: asInt(process.env.PUBLIC_DEMO_MIN_SCORE, 22),
   searchesPerWindow: asInt(process.env.PUBLIC_DEMO_MAX_SEARCHES, 8),
   windowMinutes: asInt(process.env.PUBLIC_DEMO_WINDOW_MINUTES, 60),
   /*

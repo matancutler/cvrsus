@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -5978,11 +5978,20 @@ function searchResponse(outcome, recruiterId, chatId = null) {
       poolSize: outcome.stats.poolSize,
       batchSize: outcome.stats.batchSize,
       model: outcome.analysisModel,
-      // §10.2 — said plainly, because a score that moves on Show More looks
-      // like instability unless the recruiter is told why it moved.
-      explanation: 'Every score is relative to the candidates analysed for this job so far, '
-        + 'so asking for more people re-ranks the whole set and an earlier score can move. '
-        + 'Several candidates can share a score. '
+      /*
+       * §10.2 — said plainly, and now saying the opposite of what it used to.
+       *
+       * This told recruiters "every score is relative to the candidates
+       * analysed for this job so far, so asking for more people re-ranks the
+       * whole set and an earlier score can move." That was true, and the fix
+       * for it was not a better sentence: the normalisation it described is
+       * gone, and a score is now what the CV earned against the job. The
+       * caption outlived the behaviour by one commit and went on telling
+       * every recruiter their stable numbers were unstable.
+       */
+      explanation: 'A score is what this CV earned against this job, so it does not move '
+        + 'when you ask for more people — the new candidates are simply placed among the '
+        + 'ones you have. Several candidates can share a score. '
         + 'To bring in anyone who has joined or become active since you last ran this search, '
         + 'press Refresh on the search itself.',
     },
@@ -8289,17 +8298,36 @@ const CHECKIN_SWEEP_MS = 24 * 60 * 60 * 1000
  *
  * Here rather than in the start command because the failure modes are
  * different. A migration wired into `npm start` that exits nonzero takes the
- * site down; this one is caught, logged and stepped over, and the worst case
- * of stepping over it is the wave we would have had anyway.
+ * site down; this one is logged and stepped over, and the worst case of
+ * stepping over it is the wave we would have had anyway.
+ *
+ * ASYNCHRONOUS, AND THAT IS THE WHOLE POINT
+ *
+ * The first version called execFileSync from inside this callback, which was
+ * an outage waiting for a big enough table. By the time a listen callback
+ * runs the socket is already bound, so the kernel accepts connections into
+ * the backlog while the event loop is blocked: Render's health check would
+ * connect, get nothing back, and eventually fail the deploy. And because
+ * this service has a disk it cannot run two instances, so the old one is
+ * stopped before the new one starts — every second of that block is a second
+ * the site is down, not a second hidden behind the previous version. The
+ * rest of the callback waited too, including resumeQueue(), which is what
+ * picks up Triage batches orphaned by the last shutdown.
+ *
+ * Run alongside traffic instead. The cost of that is a narrow window where a
+ * not-yet-migrated row is read, misses the cache and is re-analysed once —
+ * bounded, self-healing, and paid only on the first boot after a version
+ * bump. The migration is safe to run against a live table: Search inserts
+ * with ON CONFLICT DO NOTHING so it can never overwrite a judgement made
+ * while it runs, and Triage moves one row per transaction.
  *
  * Spawned rather than imported because there must be exactly one
  * implementation of this arithmetic. A second copy inlined here is two
  * scorers one bug apart, and the bug would be invisible: both would produce
- * a plausible number.
+ * a plausible number. It also keeps the work off this process entirely.
  *
- * Idempotent and cheap when idle — the script counts the rows at the old
- * version and exits before touching anything if there are none, so a restart
- * costs one process and two COUNTs.
+ * Idempotent and cheap when idle — the script checks for a completed run and
+ * exits before touching anything, so a restart costs one short-lived process.
  */
 function migrateStoredScores() {
   if (process.env.SCORE_MIGRATE_ON_BOOT === 'off') {
@@ -8307,37 +8335,44 @@ function migrateStoredScores() {
     return
   }
   const script = fileURLToPath(new URL('../scripts/score-migrate.mjs', import.meta.url))
-  try {
-    const out = execFileSync(process.execPath, [script, '--run'], {
-      encoding: 'utf8',
-      /* Long enough for a table far larger than this one — it is paged, 500
-         rows to a transaction, and makes no network calls. Short enough that
-         a wedged migration does not hold the first request forever. */
-      timeout: 10 * 60 * 1000,
-    })
-    /* Silent on the ordinary boot. The script says so in one of two ways:
-       it has run before, or there was never anything at the old version. */
-    if (/Nothing to do\.|Nothing at version/.test(out)) return
-    for (const line of out.split('\n')) if (line.trim()) console.log(`  ${line}`)
-  } catch (error) {
+
+  execFile(process.execPath, [script, '--run'], {
+    encoding: 'utf8',
+    /* Generous: it is paged, 500 rows to a transaction, and makes no network
+       calls. Nothing waits on it, so a high ceiling costs nothing and a low
+       one would abandon a large table half way. */
+    timeout: 60 * 60 * 1000,
+  }, (error, stdout, stderr) => {
+    if (error) {
+      /*
+       * Loud, and then carry on.
+       *
+       * Stored scores staying at the old version is a cost problem, not an
+       * outage, and this is already past the point where it could cause one.
+       */
+      console.error('  score migration FAILED — stored scores are still on the old arithmetic')
+      console.error('  and will be re-analysed on demand. Run it by hand:')
+      console.error('    npm run score:migrate            (what it would do)')
+      console.error('    npm run score:migrate -- --run   (do it)')
+      console.error(`  ${error?.message ?? error}`)
+      for (const line of String(stderr ?? '').split('\n').slice(-12)) {
+        if (line.trim()) console.error(`    ${line}`)
+      }
+      return
+    }
+
     /*
-     * Loud, and then carry on.
-     *
-     * Stored scores staying at the old version is a cost problem. A server
-     * that will not boot is an outage, and the second is worse than the
-     * first by a long way.
+     * Silent on the ordinary boot, and the marker is anchored to a whole
+     * line on purpose. A substring test over the whole report is a test over
+     * text this server did not write.
      */
-    console.error('  score migration on boot FAILED — stored scores are still on the old')
-    console.error('  arithmetic and will be re-analysed on demand. Run it by hand:')
-    console.error('    npm run score:migrate            (what it would do)')
-    console.error('    npm run score:migrate -- --run   (do it)')
-    console.error(`  ${error?.message ?? error}`)
-    const said = String(error?.stdout ?? '') + String(error?.stderr ?? '')
-    for (const line of said.split('\n').slice(-12)) if (line.trim()) console.error(`    ${line}`)
-  }
+    if (/^SCORE_MIGRATE_IDLE$/m.test(stdout)) return
+    for (const line of String(stdout).split('\n')) if (line.trim()) console.log(`  ${line}`)
+  })
 }
 
 app.listen(PORT, async () => {
+  /* Started, not awaited — see above. */
   migrateStoredScores()
 
   const swept = sweepOrphanUploads()

@@ -126,7 +126,10 @@ section('Silence is priced, so saying less cannot help')
  * cost 0.4 of its weight. Two candidates, one demonstrably closer to the
  * job, and the ranking preferred the one who said less.
  */
-const { scoreAgainst, silenceFraction, quoteIsInText, checkQuotes, rescoreBreakdown } =
+const {
+  scoreAgainst, silenceFraction, quoteIsInText, checkQuotes, rescoreBreakdown,
+  deriveHighlights,
+} =
   await import('../server/src/matching/score.js')
 
 const NINE = [
@@ -180,16 +183,84 @@ check('an invented quote fails', !quoteIsInText('led a team of forty engineers i
 check('something too short to judge passes', quoteIsInText('SQL', CV),
   'generous on purpose — a false positive costs a real candidate a real place')
 
+section('...but a quote check is not allowed to move a score')
+
+/*
+ * This check used to downgrade an unverifiable verdict to no_evidence, and
+ * both halves of that were wrong.
+ *
+ * It is wrong far more often than it is right. Eleven of twelve honest
+ * quotes taken from ordinary CV typography failed it: a soft hyphen, a
+ * zero-width space, an fi ligature out of a PDF text layer, a word
+ * hyphenated across a line break, a Hebrew gershayim where the model typed
+ * an ASCII quote. The cases below are that list, and they are the reason a
+ * control this noisy is not wired to a number that decides who gets read.
+ *
+ * And the one direction it was reliable in, it had backwards — see the
+ * contradiction case further down.
+ */
+const TYPOGRAPHY = [
+  ['a soft hyphen', 'respon\u00ADsible for reconciliation', 'responsible for reconciliation'],
+  ['a zero-width space', 'owned the\u200Bdispute process', 'owned the dispute process'],
+  ['an fi ligature', 'certi\uFB01ed public accountant', 'certified public accountant'],
+  ['a non-breaking hyphen', 'end\u2011to\u2011end dispute process', 'end-to-end dispute process'],
+  ['a word broken across a line', 'led the recon-\nciliation programme', 'led the reconciliation programme'],
+  ['an ellipsis joining two parts', 'Ran the monthly close. Also owned disputes end to end.', 'Ran the monthly close\u2026 owned disputes end to end'],
+  ['a Hebrew gershayim', '\u05e9\u05d9\u05e8\u05ea \u05d1\u05e6\u05d4\u05f4\u05dc \u05db\u05e7\u05e6\u05d9\u05df \u05de\u05d5\u05d3\u05d9\u05e2\u05d9\u05df', '\u05e9\u05d9\u05e8\u05ea \u05d1\u05e6\u05d4"\u05dc \u05db\u05e7\u05e6\u05d9\u05df \u05de\u05d5\u05d3\u05d9\u05e2\u05d9\u05df'],
+  ['German low quotes', 'he was \u201Ethe closer\u201C on the fraud desk', 'he was "the closer" on the fraud desk'],
+  ['guillemets', 'titled \u00ABsenior analyst\u00BB in the org chart', 'titled "senior analyst" in the org chart'],
+  ['fullwidth letters', '\uFF33\uFF31\uFF2C against the ledger daily', 'SQL against the ledger daily'],
+]
+
+for (const [what, text, quote] of TYPOGRAPHY) {
+  check(`an honest quote survives ${what}`, quoteIsInText(quote, text))
+}
+
 const bad = checkQuotes([
   { requirement: 'scheduling', tier: 'must_have', weight: 30, status: 'meets', quote: 'managing high-priority schedules' },
   { requirement: 'Berlin', tier: 'must_have', weight: 30, status: 'meets', quote: 'led a team of forty engineers in Berlin' },
 ], CV)
 
-check('the unsupported verdict is downgraded and counted',
-  bad.downgraded === 1 && bad.breakdown[1].status === 'no_evidence'
-  && bad.breakdown[0].status === 'meets')
-check('and it keeps its quote, so the downgrade can be looked at',
-  bad.breakdown[1].quote.length > 0 && bad.breakdown[1].quoteUnverified === true)
+check('the unsupported verdict is flagged and counted',
+  bad.unverified === 1 && bad.breakdown[1].quoteUnverified === true)
+check('and its status is left exactly as the model gave it',
+  bad.breakdown[1].status === 'meets' && bad.breakdown[0].status === 'meets',
+  'the flag is information for a recruiter, not a correction to a score')
+check('the flag survives scoreAgainst into storage',
+  scoreAgainst(
+    [{ id: 'x', text: 'Berlin', tier: 'must_have' }],
+    [{ requirement_id: 'x', status: 'meets', quote: 'q', quoteUnverified: true }],
+  ).breakdown[0].quoteUnverified === true,
+  'the fixed field list used to drop it, so nothing downstream could tell')
+check('and the flagged quote is withheld from the evidence list',
+  deriveHighlights(bad.breakdown).evidence.every((e) => !/Berlin/.test(e.quote)),
+  'a quote we could not find is not proof of anything, whatever else it is')
+check('the example it reports carries no quote',
+  bad.examples.every((e) => e.quote === undefined),
+  'that string is a verbatim sentence of somebody CV and the report goes to a log')
+
+/*
+ * The direction that made it a reward rather than a control.
+ *
+ * contradicted is worth 0 and silence is now worth 0.35 of its weight, so
+ * downgrading an unverifiable contradiction PAID the candidate it was about.
+ * Measured before the fix: 75 became 84. Proving a negative is exactly where
+ * a model paraphrases, so this was not the rare case.
+ */
+const REQ4 = ['a', 'b', 'c', 'd'].map((id) => ({ id, text: id, tier: 'must_have' }))
+const CV4 = 'ran the monthly close. owned disputes end to end. wrote SQL against the ledger.'
+const withQuote = (quote) => scoreAgainst(REQ4, checkQuotes([
+  { id: 'a', requirement: 'a', tier: 'must_have', weight: 30, status: 'meets', quote: 'ran the monthly close' },
+  { id: 'b', requirement: 'b', tier: 'must_have', weight: 30, status: 'meets', quote: 'owned disputes end to end' },
+  { id: 'c', requirement: 'c', tier: 'must_have', weight: 30, status: 'meets', quote: 'wrote SQL against the ledger' },
+  { id: 'd', requirement: 'd', tier: 'must_have', weight: 30, status: 'contradicted', quote },
+], CV4).breakdown.map((r) => ({
+  requirement_id: r.id, status: r.status, quote: r.quote, quoteUnverified: r.quoteUnverified,
+}))).fit
+
+check('an unverifiable contradiction does not pay the candidate',
+  withQuote('never worked anywhere near fintech') === withQuote('ran the monthly close'),
+  `${withQuote('never worked anywhere near fintech')} either way`)
 
 check('a stored breakdown can be rescored with no requirements and no model',
   rescoreBreakdown(bad.breakdown).fit !== null,

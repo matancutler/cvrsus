@@ -1498,28 +1498,35 @@ export async function analyseMatch({
      *
      * Every verdict carries the sentence the model read its claim out of,
      * and nothing checked the sentence was there. A quote that cannot be
-     * found means the model invented the evidence or paraphrased it — and a
+     * found means the model invented the evidence or paraphrased it - and a
      * paraphrase presented as a quotation is the shape of an invention even
      * when the conclusion happens to be right.
      *
-     * Checked here rather than downstream because this is the only place
-     * that still has `shown`: the exact string the model was given,
-     * redactions and all. The comparison flattens case, whitespace and
-     * punctuation, and passes anything under twelve characters — it is
-     * deliberately generous, because a false positive downgrades a correct
-     * verdict and costs a real candidate a real place, while a false
-     * negative costs nothing anybody can see.
+     * Here rather than downstream because this is the only place that still
+     * has `shown`: the exact string the model was given, redactions and all.
+     * Nowhere later in the product can reconstruct it - dossier() strips the
+     * name, the email and the phone, and the phone pattern takes date ranges
+     * with it, so "2016 - 2022" reaches the model as "[redacted]". A check
+     * run against candidates.cv_text would be looking for the quote in a
+     * document the model never saw.
+     *
+     * It MARKS and does nothing else: no status changes, no score changes.
+     * See checkQuotes for the measurements behind that - against real CV
+     * typography the check was wrong far more often than right, and the one
+     * direction it was reliable in it had backwards.
      */
     const checked = checkQuotes(answer.criteria, shown)
-    if (checked.downgraded > 0) {
-      console.warn(`  match-analysis: ${checked.downgraded} verdict(s) cited a quote that is `
-        + 'not in the CV and were downgraded to no_evidence')
+    if (checked.unverified > 0) {
+      /* The count and the requirement, never the quote: that string is a
+         verbatim sentence of somebody's CV and this goes to a log. */
+      console.warn(`  match-analysis: ${checked.unverified} verdict(s) cite a quote that could `
+        + 'not be found in the text the model was shown; flagged, not downgraded')
     }
 
     return {
       ...answer,
       criteria: checked.breakdown,
-      quotesUnverified: checked.downgraded,
+      quotesUnverified: checked.unverified,
       source: 'claude',
       model_version: response.model,
       usage: usageOf(response),

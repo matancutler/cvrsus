@@ -135,6 +135,16 @@ export function scoreAgainst(requirements, verdicts) {
       status,
       quote: verdict?.quote ?? '',
       reason: verdict?.reason ?? '',
+      /*
+       * Carried through, because this is the only route the flag has to
+       * storage. The fixed field list here used to drop it silently: a quote
+       * was checked, found missing, marked — and then rebuilt into a row
+       * without the mark, so nothing downstream could tell an unverifiable
+       * quote from an honest one, and the false-positive rate of the check
+       * was unmeasurable. Written only when true, so ordinary rows do not
+       * grow a field of `false`.
+       */
+      ...(verdict?.quoteUnverified ? { quoteUnverified: true } : {}),
     })
 
     /*
@@ -175,77 +185,169 @@ function status_is_known(status) {
 /**
  * Checks that a quoted line is actually in the CV.
  *
- * Every verdict the model returns carries the sentence it read the claim
- * out of. Nothing has ever checked that the sentence is there. A quote that
- * is not in the document is one of two things, and both matter: the model
- * invented the evidence, or it paraphrased — and a paraphrase presented as a
- * quotation is the shape of an invention even when the conclusion is right.
+ * Every verdict the model returns carries the sentence it read the claim out
+ * of. Nothing checked that the sentence was there. A quote that is not in the
+ * document is one of two things, and both matter: the model invented the
+ * evidence, or it paraphrased — and a paraphrase presented as a quotation is
+ * the shape of an invention even when the conclusion is right.
  *
- * Compared after flattening everything that can differ without the meaning
- * differing: case, every kind of whitespace, and the punctuation a model
- * silently normalises. Curly quotes become straight, dashes become hyphens,
- * and then all punctuation is dropped — so "end-to-end." matches "end to
- * end" and the check is about the words rather than the typography.
+ * WHAT THIS IS ALLOWED TO DO, AND WHY IT IS SO LITTLE
  *
- * Deliberately generous. A false positive here downgrades a verdict that
- * was correct, which costs a real candidate a real place in the ranking; a
- * false negative lets a sloppy quote through, which costs nothing anybody
- * can see. When in doubt this says yes.
+ * It marks the verdict and changes nothing else. It does not move a status,
+ * it does not move a score, and it does not move a ranking.
+ *
+ * The first version downgraded an unverifiable verdict to no_evidence, which
+ * is indefensible in both directions. Against real CVs the check is wrong far
+ * more often than it is right: eleven of twelve honest quotes drawn from
+ * ordinary CV typography failed it — a soft hyphen, a zero-width space, an fi
+ * ligature out of a PDF text layer, a non-breaking hyphen, a word hyphenated
+ * across a line break, a Hebrew gershayim where the model typed an ASCII
+ * quote. A control with that false-positive rate must never be wired to a
+ * number that decides who gets read.
+ *
+ * And the one direction it was reliable in, it had backwards. Downgrading a
+ * `contradicted` verdict RAISES the score, because contradicted is worth zero
+ * and silence is now worth 0.35 of its weight — so failing to verify a
+ * disproof paid the candidate the disproof was about. Measured: 75 becomes 84.
+ * A control sold as anti-fabrication was rewarding one.
+ *
+ * So: it flags. A recruiter can see that a quote could not be found, the
+ * quote stops being published as proof (see deriveHighlights), and the score
+ * says exactly what the verdicts say.
+ *
+ * WHAT THE FLATTENING HAS TO SURVIVE
+ *
+ * Case, every kind of whitespace, and the typography of a document that has
+ * been through a PDF text layer and back. NFKC folds the ligatures and the
+ * fullwidth forms; the zero-width characters and the soft hyphen are removed
+ * rather than spaced, because "respon\u00ADsible" is one word; a hyphen at a
+ * line break is removed with the break, because "recon-\nciliation" is one
+ * word; and every dash, quote and guillemet the world uses is dropped along
+ * with ASCII punctuation, so the comparison is about words.
  */
-const PUNCTUATION = /[\u2018\u2019\u201c\u201d\u2013\u2014.,;:!?()[\]{}"'`/\\|&*_~^<>+=-]+/g
+
+/*
+ * Two kinds of invisible, and they go opposite ways.
+ *
+ * A soft hyphen and the joiners sit INSIDE a word - at a hyphenation point,
+ * or between two Hebrew or Arabic letters that have to stay joined - so
+ * spacing them would split one word into two. They are removed.
+ */
+const INVISIBLE_INSIDE = /[\u00ad\u200c\u200d]/g
+
+/*
+ * A zero-width space, a word joiner and a stray byte-order mark sit BETWEEN
+ * words, usually where a PDF marked a line-break opportunity and wrote no
+ * actual space. They become one. Removing them instead glues two words
+ * together, and the quote is then genuinely absent - which was the single
+ * honest case still failing after the first pass at this.
+ */
+const INVISIBLE_BETWEEN = /[\u200b\u2060\ufeff]/g
+
+/* A word broken across a line by the typesetter is still one word. */
+const HYPHEN_BREAK = /[-\u2010-\u2015\u2212]\s*[\r\n]+\s*/g
+
+/* Every dash, every quote, every guillemet, the Hebrew geresh and gershayim,
+   and ASCII punctuation. Spaced rather than removed: these sit BETWEEN words. */
+const PUNCTUATION = new RegExp(
+  '[\\u2010-\\u2015\\u2212\\u2018-\\u201f\\u2032\\u2033\\u00ab\\u00bb\\u2039\\u203a'
+  + '\\u05f3\\u05f4\\u060c\\u061b\\u061f.,;:!?()\\[\\]{}"\'`/\\\\|&*_~^<>+=-]+',
+  'g',
+)
 
 export function flattenForQuote(text) {
   return String(text ?? '')
+    .normalize('NFKC')
+    .replace(INVISIBLE_INSIDE, '')
+    .replace(INVISIBLE_BETWEEN, ' ')
+    .replace(HYPHEN_BREAK, '')
     .toLowerCase()
     .replace(PUNCTUATION, ' ')
     .replace(/\s+/g, ' ')
     .trim()
 }
 
-export function quoteIsInText(quote, cvText) {
-  const needle = flattenForQuote(quote)
+/*
+ * A quote with an ellipsis in it is not one string, it is two.
+ *
+ * The model is allowed to join two parts of a sentence it read, and says so
+ * with an ellipsis. Asked for that as a single substring the document can
+ * never contain it. Each part is required instead, in order — which is
+ * strictly more permissive than the whole, and still catches a quote whose
+ * words are simply not there.
+ *
+ * NFKC turns \u2026 into three dots, so both spellings are handled by
+ * splitting after the flatten... which cannot be done, because the flatten
+ * drops the dots. Split first, on either spelling.
+ */
+const ELLIPSIS = /\u2026|\.\s*\.\s*\./
+
+export function quoteIsInText(quote, cvText, flatHaystack = null) {
+  const raw = String(quote ?? '')
   /* Nothing to check. A verdict with no quote is not a verdict claiming
      evidence, and `meets` without a quote is a separate problem the schema
      is responsible for. */
-  if (!needle) return true
-  /* Too short to be evidence of anything, and too short to fail honestly:
-     "sql" appears in half the CVs on the platform by accident. */
-  if (needle.length < 12) return true
+  if (!flattenForQuote(raw)) return true
 
-  const haystack = flattenForQuote(cvText)
+  const haystack = flatHaystack ?? flattenForQuote(cvText)
   if (!haystack) return true
 
-  return haystack.includes(needle)
+  let from = 0
+  for (const part of raw.split(ELLIPSIS)) {
+    const needle = flattenForQuote(part)
+    if (!needle) continue
+    /* Too short to be evidence of anything, and too short to fail honestly:
+       "sql" appears in half the CVs on the platform by accident. */
+    if (needle.length < 12) continue
+    const at = haystack.indexOf(needle, from)
+    if (at === -1) return false
+    from = at + needle.length
+  }
+  return true
 }
 
 /**
- * Downgrades verdicts whose quote is not in the CV, and says how many.
+ * Marks verdicts whose quote is not in the CV, and says how many.
  *
- * Applied to the breakdown rather than to the model's raw answer, so the
- * migration can run it over verdicts stored months ago and get the same
- * result as the live path gets on a fresh one.
+ * Marks. Nothing else — see the note above quoteIsInText for why a check
+ * this noisy is not allowed near a score. The verdict keeps its status, its
+ * quote and its reason; it gains `quoteUnverified: true`, which survives
+ * scoreAgainst into storage, keeps the quote out of the evidence list, and
+ * is the only thing that makes the false-positive rate measurable in
+ * production rather than guessed at.
  *
- * A downgraded verdict becomes `no_evidence` and keeps its quote and reason
- * for the record — throwing them away would leave nothing to look at when
- * somebody asks why a score moved, and the whole point of counting these is
- * that somebody looks.
+ * Applied to the breakdown rather than to the model's raw answer, so it can
+ * be reasoned about in one place wherever it runs.
+ *
+ * `examples` carries the requirement and the status and NOT the quote. The
+ * quote is a verbatim sentence of somebody's CV, and this report is printed
+ * to a log.
  */
 export function checkQuotes(breakdown, cvText) {
-  let downgraded = 0
+  const haystack = flattenForQuote(cvText)
+  let unverified = 0
   const examples = []
 
   const checked = (breakdown ?? []).map((row) => {
     if (row.status === UNKNOWN) return row
-    if (quoteIsInText(row.quote, cvText)) return row
 
-    downgraded += 1
-    if (examples.length < 3) {
-      examples.push({ requirement: row.requirement, was: row.status, quote: row.quote })
+    if (quoteIsInText(row.quote, cvText, haystack)) {
+      /* Clear a stale flag rather than leave it: this can be re-run over a
+         breakdown that was checked against a different text, and a mark that
+         no longer holds is worse than no mark. */
+      if (row.quoteUnverified) {
+        const { quoteUnverified, ...rest } = row
+        return rest
+      }
+      return row
     }
-    return { ...row, status: UNKNOWN, quoteUnverified: true }
+
+    unverified += 1
+    if (examples.length < 5) examples.push({ requirement: row.requirement, status: row.status })
+    return { ...row, quoteUnverified: true }
   })
 
-  return { breakdown: checked, downgraded, examples }
+  return { breakdown: checked, unverified, examples }
 }
 
 /**
@@ -264,8 +366,20 @@ export function rescoreBreakdown(breakdown) {
   for (const row of breakdown ?? []) {
     const weight = Number(row.weight) || TIER_WEIGHT[row.tier] || TIER_WEIGHT.contextual
     totalWeight += weight
-    if (row.status !== UNKNOWN) knownWeight += weight
-    earned += (row.status === UNKNOWN ? SILENCE : (MULTIPLIER[row.status] ?? 0)) * weight
+
+    /*
+     * Same gate as scoreAgainst, and it has to be: this function exists to
+     * reproduce that one from what is stored, and the two disagreed on a
+     * status neither recognises. scoreAgainst coerced it to no_evidence; this
+     * counted it as known and worth zero, so identical data gave fit 0 here
+     * and fit null there. Worse, MULTIPLIER is a plain object, so a verdict
+     * whose status was the string "constructor" looked up a function, `?? 0`
+     * did not fire, and the fit came out NaN — straight into absolute_fit.
+     */
+    const status = status_is_known(row.status) ? row.status : UNKNOWN
+
+    if (status !== UNKNOWN) knownWeight += weight
+    earned += (status === UNKNOWN ? SILENCE : (MULTIPLIER[status] ?? 0)) * weight
   }
 
   return {
@@ -318,7 +432,18 @@ export function deriveHighlights(breakdown, { limit = 8 } = {}) {
       .map((row) => `${row.requirement} — the CV does not mention it`),
   ].slice(0, limit)
 
+  /*
+   * A quote we could not find is not evidence, whatever else it is.
+   *
+   * This list is rendered to the recruiter as the proof behind a claim. A row
+   * flagged by checkQuotes is one whose quoted sentence could not be located
+   * in the document — so publishing it here presents the one string we have
+   * reason to doubt as the one string that settles the question. The verdict
+   * itself stands, and the claim can still appear under strengths; what is
+   * withheld is the quotation.
+   */
   const evidence = rows
+    .filter((row) => row.quoteUnverified !== true)
     .filter((row) => String(row.quote ?? '').trim().length > 0)
     .sort(byTier)
     .map((row) => ({ claim: said(row), quote: String(row.quote).trim() }))
