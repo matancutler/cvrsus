@@ -134,6 +134,17 @@ function migrate(...flags) {
   )
 }
 
+/* Same, with the silence dial turned — which is the only way to observe
+   that --refresh does anything, since the fraction is read at module load
+   in whatever process does the work. */
+function migrateAt(fraction, ...flags) {
+  return execFileSync(
+    process.execPath,
+    ['server/scripts/score-migrate.mjs', '--job', String(JOB_ID), ...flags],
+    { cwd: root, encoding: 'utf8', env: { ...process.env, MATCH_SILENCE_FRACTION: String(fraction) } },
+  )
+}
+
 /* The Triage half, scoped the same way and for the same reason. */
 function migrateTriage(...flags) {
   return execFileSync(
@@ -445,6 +456,91 @@ check('with its original score', restored.fit === triageStored,
 check('and its original verdicts',
   JSON.parse(restored.criteria).verdicts.find((row) => row.id === 'r4').status === 'meets')
 
+// ------------------------------------------------- turning the dial ---
+
+section('A changed silence fraction reaches scores that are already stored')
+
+/*
+ * The dial was half a dial.
+ *
+ * MATCH_SILENCE_FRACTION is read at module load and applied to analyses
+ * written after the change, so turning it moved nothing a recruiter was
+ * looking at: the folder they open is full of rows scored at the old
+ * fraction, and the search they re-run is served from cache. The only way
+ * to see a new value was to find a candidate nobody had ever scored against
+ * that job. Tuning by feel, you would conclude the setting did not work.
+ *
+ * What made it impossible was that the location nudge was never stored. It
+ * is added to the fit and then exists nowhere, so recovering it means
+ * subtracting the OLD arithmetic from the stored total — which works
+ * exactly once. On a row already rescored, the same subtraction returns the
+ * gap between two different arithmetics and would be added back as though
+ * it were geography.
+ */
+const CAND_D = JOB_ID + 4
+seedCandidate(CAND_D, `Refresh ${RUN}`)
+
+const dialled = verdicts()
+const atThirtyFive = newFitOf(dialled) + NUDGE
+
+db.prepare(`
+  INSERT INTO candidate_job_analyses (
+    candidate_id, profile_version, job_id, jd_version, analysis_model,
+    scoring_version, absolute_fit, criteria_results, explanation, source, created_at
+  ) VALUES (?, 1, ?, 1, 'claude-opus-5', '3', ?, ?, ?, 'claude', ?)
+`).run(
+  CAND_D, JOB_ID, atThirtyFive,
+  JSON.stringify({
+    verdicts: dialled, coverage: 70, locationNudge: NUDGE, items: [],
+    strengths: ['stale'], gaps: ['stale'], evidence: [],
+  }),
+  `seeded by score-migration-check ${RUN}`, new Date().toISOString(),
+)
+
+const dRow = () => db.prepare(`
+  SELECT absolute_fit AS fit, criteria_results AS criteria FROM candidate_job_analyses
+  WHERE candidate_id = ? AND job_id = ? AND scoring_version = '3'
+`).get(CAND_D, JOB_ID)
+
+check('the seeded row is on the shipped fraction', dRow().fit === atThirtyFive,
+  `${dRow().fit}`)
+
+const refreshed = migrateAt(0.6, '--refresh', '--run')
+
+check('the refresh reports the movement', /rescored\s*:\s*[1-9]/.test(refreshed),
+  refreshed.split('\n').find((l) => l.includes('rescored'))?.trim())
+check('the stored score moved up', dRow().fit > atThirtyFive,
+  `${atThirtyFive} at 0.35 -> ${dRow().fit} at 0.6`)
+/* The same arithmetic at the new fraction, written out here so the check
+   is against the rule rather than against whatever the code produced. */
+const fitAt = (fraction, breakdown) => {
+  const MULT = { meets: 1, partial: 0.6, contradicted: 0 }
+  let total = 0
+  let earned = 0
+  for (const row of breakdown) {
+    total += row.weight
+    earned += (row.status === 'no_evidence' ? fraction : (MULT[row.status] ?? 0)) * row.weight
+  }
+  return Math.round((earned / total) * 100)
+}
+
+check('to exactly the new arithmetic, with the nudge added back whole',
+  dRow().fit === fitAt(0.6, dialled) + NUDGE,
+  `expected ${fitAt(0.6, dialled)} + ${NUDGE}, got ${dRow().fit}`)
+check('the stale highlight lists were recomputed',
+  !JSON.parse(dRow().criteria).strengths.includes('stale'))
+check('and the nudge is still recorded for the next turn of the dial',
+  JSON.parse(dRow().criteria).locationNudge === NUDGE)
+
+section('And the refresh comes back')
+
+migrateAt(0.6, '--revert', '--run')
+check('the row is exactly as it was', dRow().fit === atThirtyFive,
+  `${dRow().fit} vs ${atThirtyFive}`)
+check('including the criteria blob it was rewritten from',
+  JSON.parse(dRow().criteria).strengths.includes('stale'),
+  'a revert that tidied up would not be a revert')
+
 // ---------------------------------------------------------------- cleanup ---
 
 section('Cleanup')
@@ -452,7 +548,7 @@ section('Cleanup')
 db.prepare(`DELETE FROM candidate_job_analyses WHERE job_id = ?`).run(JOB_ID)
 db.prepare(`DELETE FROM triage_applicants WHERE triage_id = ?`).run(TRIAGE_ID)
 db.prepare(`DELETE FROM triages WHERE id = ?`).run(TRIAGE_ID)
-for (const id of [CAND_A, CAND_B, CAND_C]) {
+for (const id of [CAND_A, CAND_B, CAND_C, CAND_D]) {
   db.prepare(`DELETE FROM candidates WHERE id = ? AND email LIKE ?`).run(id, `%${RUN}@example.com`)
 }
 

@@ -1220,9 +1220,10 @@ node server/scripts/contact.mjs show <span class="c">&lt;id&gt;</span></pre>
             <span class="risk risk-write">Writes</span>
           </div>
           <p class="what">
-            Backs both tables up, then rescores every stored analysis from the verdicts already
-            on disk &mdash; no model calls. Search gets new rows beside the old ones; Triage is
-            updated in place.
+            Rescores every stored analysis from the verdicts already on disk &mdash; no model
+            calls. Search gets new rows beside the old ones and overwrites nothing, ever; Triage
+            is updated in place, with the previous contents of each row recorded so the revert
+            can put them back exactly.
           </p>
           <p class="when">
             Rarely, because the server already does it: <code>index.js</code> runs this before
@@ -1240,14 +1241,38 @@ node server/scripts/contact.mjs show <span class="c">&lt;id&gt;</span></pre>
           </div>
           <p class="what">
             Undoes exactly one run and nothing else. Every row the migration wrote is recorded
-            &mdash; the key of each Search row it inserted, the previous contents of each Triage
-            applicant it overwrote &mdash; so this removes those and restores those, and leaves
-            alone every analysis written by ordinary use since. Both tables are copied to a
-            timestamped backup on the way back as well as on the way out.
+            &mdash; the key of each Search row it actually inserted, the previous contents of
+            each Triage applicant it overwrote &mdash; so this removes those and restores those,
+            and leaves alone every analysis written by ordinary use since. There are no backup
+            tables: the record is row-exact, and a full copy of both tables would have sat
+            outside account deletion and outside the Triage retention sweep, holding the text of
+            CVs that had been erased everywhere else.
+            <br><br>
+            <strong>Set <code>SCORE_MIGRATE_ON_BOOT=off</code> as well if you want the revert to
+            stick.</strong> Otherwise the next restart migrates again, because as far as the
+            server is concerned there is nothing recorded as done.
           </p>
           <p class="when">
             If the new scores are wrong. Then set <code>MATCH_V_SCORING=2</code> and restart &mdash;
             the old rows were never touched, so they are found again immediately.
+          </p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">npm run score:migrate <span class="flag">-- --refresh --run</span></span>
+            <span class="risk risk-write">Writes</span>
+          </div>
+          <p class="what">
+            Re-applies the CURRENT <code>MATCH_SILENCE_FRACTION</code> to every analysis already
+            on the live scoring version. No model calls: it rescores the verdicts that are
+            already on disk and adds each row's stored location nudge back on top. Recorded like
+            any other run, so <code>-- --revert --run</code> puts it back.
+          </p>
+          <p class="when">
+            After changing the silence fraction. Without it the new value reaches only analyses
+            written from then on, so every folder and every saved search keeps its old numbers
+            and the dial looks broken.
           </p>
         </article>
 
@@ -1385,7 +1410,9 @@ node server/scripts/contact.mjs show <span class="c">&lt;id&gt;</span></pre>
                 not mention Kubernetes is not a CV saying the candidate cannot do it, so silence
                 costs something rather than everything. Raise it and thin CVs climb; lower it and
                 only what a CV actually evidences counts. <strong>It applies to analyses written
-                after the change, not to ones already stored</strong>.</td>
+                after the change, not to ones already stored</strong> &mdash; to move those, run
+                <code>npm run score:migrate -- --refresh --run</code>, which rescores every
+                stored analysis at the new value without a single model call.</td>
             </tr>
             <tr>
               <th scope="row"><code>MATCH_COVERAGE_FLOOR</code></th>

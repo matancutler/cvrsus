@@ -305,6 +305,23 @@ export async function analyseBatch({
              bounded adjustment for location rather than letting the model spend
              points on it. */
           locationFit: ai.location_fit ?? null,
+          /*
+           * The nudge itself, as a number, and not only the level it came from.
+           *
+           * It is added to the fit above and then exists nowhere: the stored
+           * score is fit-plus-nudge with no record of which part was which.
+           * That made every later recomputation a subtraction against the OLD
+           * arithmetic, which works exactly once - after that the stored total
+           * is on the new arithmetic and the subtraction recovers nonsense. So
+           * MATCH_SILENCE_FRACTION could be tuned for new analyses and never
+           * applied to the ones already scored, which is the half of the
+           * product a recruiter is actually looking at.
+           *
+           * Written down, the recomputation is arithmetic: rescore the stored
+           * verdicts at the current fraction and add this back. That is what
+           * `score:migrate --refresh` does.
+           */
+          locationNudge: bonus,
           seniorityAlignment: ai.seniority_alignment ?? null,
           items: fallback.criteria.items,
         },

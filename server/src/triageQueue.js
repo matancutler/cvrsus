@@ -1165,6 +1165,15 @@ async function analyseApplicant({ triage, row, criteria, requirements, useAi = t
       ...deriveHighlights(judged.breakdown),
       transferable: ai.transferable,
       locationFit: ai.location_fit ?? null,
+      /*
+       * Zero, explicitly, because Triage applies no geographic nudge: the
+       * score above is judged.fit and nothing else. Written anyway so that
+       * both tables carry the same field and `score:migrate --refresh` can
+       * treat them identically - an absent nudge means "this row predates
+       * the field and cannot be refreshed", which is a different thing from
+       * "this row's nudge is zero", and the two must not look alike.
+       */
+      locationNudge: 0,
       seniorityAlignment: ai.seniority_alignment ?? null,
       items: criteriaItems(fallback),
     },

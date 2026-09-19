@@ -1222,6 +1222,21 @@ export function contactIsExempt(value) {
  * them as plain unique indexes, which is not "as I found them" but "with no
  * exemptions at all".
  */
+/**
+ * Enough of a contact to recognise, not enough to be a contact.
+ *
+ * Used where a real address or number would otherwise be written to a log:
+ * the operator needs to tell two rows apart and then look them up by id,
+ * which this supports, and does not need the log to be a directory.
+ */
+function maskContact(value) {
+  const raw = String(value ?? '')
+  if (!raw) return '(blank)'
+  const at = raw.indexOf('@')
+  if (at > 0) return `${raw.slice(0, Math.min(2, at))}\u2026${raw.slice(at)}`
+  return `\u2026${raw.slice(-4)}`
+}
+
 export function ensureContactIndexes() {
   const quote = (value) => `'${String(value).replace(/'/g, "''")}'`
 
@@ -1240,10 +1255,23 @@ export function ensureContactIndexes() {
     ).get(name)?.sql
 
     if (existing === wanted) continue
-    if (existing) db.exec(`DROP INDEX ${name}`)
 
+    /*
+     * Dropped and recreated together, or not at all.
+     *
+     * These were two separate db.exec calls, so a process killed between
+     * them left candidates.email_key with no uniqueness constraint at all
+     * until the next boot — and the window is no longer theoretical now
+     * that a second process imports this file while the server runs. Inside
+     * a transaction a failure rolls the DROP back, which leaves the old
+     * index standing: its exempt list may be stale, but a stale constraint
+     * is a great deal better than none.
+     */
     try {
-      db.exec(wanted)
+      db.transaction(() => {
+        if (existing) db.exec(`DROP INDEX ${name}`)
+        db.exec(wanted)
+      })()
     } catch (error) {
       const clashes = db.prepare(`
         SELECT ${column} AS key, GROUP_CONCAT(id) AS ids
@@ -1253,7 +1281,18 @@ export function ensureContactIndexes() {
 
       console.warn(`  WARNING: cannot enforce one account per ${what} — `
         + `${clashes.length} already shared. Nothing prevents more until these are resolved:`)
-      for (const clash of clashes) console.warn(`    ${clash.key} → candidate ids ${clash.ids}`)
+      /*
+       * The ids, and only enough of the address to recognise it.
+       *
+       * This printed the whole email address and the whole phone number
+       * into the application log, which on Render is retained and readable
+       * by anyone with dashboard access. The ids are what an operator
+       * actually needs — they are how you look the accounts up — and the
+       * masked form is enough to tell two clashes apart at a glance.
+       */
+      for (const clash of clashes) {
+        console.warn(`    ${maskContact(clash.key)} → candidate ids ${clash.ids}`)
+      }
       console.warn(`    (${error.message})`)
     }
   }

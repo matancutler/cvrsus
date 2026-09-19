@@ -8,6 +8,7 @@
  *   npm run score:migrate -- --job 42 --run    one job first, to look at
  *   npm run score:migrate -- --revert --run    put it back
  *   npm run score:migrate -- --force --run     run it again once it has run
+ *   npm run score:migrate -- --refresh --run   re-apply a changed silence fraction
  *
  * The server also starts it in the background on boot (index.js), and it does
  * nothing on all but the first — see the gate below.
@@ -114,6 +115,7 @@ function numberFlag(name) {
 const RUN = has('run')
 const REVERT = has('revert')
 const FORCE = has('force')
+const REFRESH = has('refresh')
 const ONLY_JOB = numberFlag('job')
 const ONLY_TRIAGE = numberFlag('triage')
 const SCOPED = ONLY_JOB !== null || ONLY_TRIAGE !== null
@@ -140,6 +142,11 @@ const TARGET = String(VERSIONS.scoring)
 const pad = (v, w) => String(v ?? '').padEnd(w)
 const padL = (v, w) => String(v ?? '').padStart(w)
 const now = () => new Date().toISOString()
+
+/* Shared by the forward pass and by --refresh, so declared before both. */
+const PAGE = 500
+const KEY_SQL = `(a.candidate_id || ':' || a.job_id || ':' || a.jd_version || ':' `
+  + `|| a.profile_version || ':' || a.analysis_model)`
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS score_migration_runs (
@@ -222,10 +229,12 @@ if (REVERT) {
 
   const rows = db.prepare(`SELECT * FROM score_migration_rows WHERE run_id = ?`).all(run.id)
   const inserted = rows.filter((r) => r.kind === 'analysis_insert')
+  const rewritten = rows.filter((r) => r.kind === 'analysis_update')
   const updated = rows.filter((r) => r.kind === 'applicant_update')
 
   console.log(`Undoing run ${run.id} of ${run.created_at} (${run.from_version} -> ${run.to_version})`)
   console.log(`  ${inserted.length} analysis row(s) to remove`)
+  console.log(`  ${rewritten.length} analysis row(s) to put back`)
   console.log(`  ${updated.length} Triage applicant(s) to put back`)
   console.log('')
 
@@ -247,6 +256,22 @@ if (REVERT) {
       drop.run(k.candidate_id, k.profile_version, k.job_id, k.jd_version, k.analysis_model, run.to_version)
     }
 
+    /* A refresh rewrites rows in place rather than inserting them, so its
+       manifest carries the previous contents and the undo is a restore. */
+    const restore = db.prepare(`
+      UPDATE candidate_job_analyses SET absolute_fit = ?, criteria_results = ?
+      WHERE candidate_id = ? AND profile_version = ? AND job_id = ? AND jd_version = ?
+        AND analysis_model = ? AND scoring_version = ?
+    `)
+    for (const row of rewritten) {
+      const k = JSON.parse(row.key_json)
+      const was = JSON.parse(row.payload)
+      restore.run(
+        was.absolute_fit, was.criteria_results,
+        k.candidate_id, k.profile_version, k.job_id, k.jd_version, k.analysis_model, run.to_version,
+      )
+    }
+
     const put = db.prepare(`
       UPDATE triage_applicants SET absolute_fit = ?, criteria = ?, scoring_version = ? WHERE id = ?
     `)
@@ -258,13 +283,185 @@ if (REVERT) {
     db.prepare(`UPDATE score_migration_runs SET reverted_at = ? WHERE id = ?`).run(now(), run.id)
   })()
 
-  console.log(`Removed ${inserted.length} row(s) and restored ${updated.length} applicant(s).`)
+  console.log(`Removed ${inserted.length} row(s), put back ${rewritten.length} analysis row(s) `
+    + `and ${updated.length} applicant(s).`)
   console.log('Only what that run wrote was touched; anything written since is untouched.')
   console.log('')
   console.log('IF YOU WANT THIS TO STICK, set SCORE_MIGRATE_ON_BOOT=off as well.')
   console.log(`Otherwise the next restart migrates again. Setting MATCH_V_SCORING=${FROM}`)
   console.log('also stops it, and makes the server read the old scores.')
   console.log('')
+  process.exit(0)
+}
+
+/* ------------------------------------------------------------ refresh --- */
+
+/*
+ * Re-apply the CURRENT silence fraction to rows that are already on the
+ * current scoring version.
+ *
+ * Without this the tuning dial is half a dial. MATCH_SILENCE_FRACTION is
+ * read at module load and applies to analyses written after the change, so
+ * turning it moves nothing a recruiter is looking at: the folder they open
+ * is full of rows scored at the old fraction, the search they re-run serves
+ * them from cache, and the only way to see the new value is to find a
+ * candidate nobody has ever scored against that job. Somebody tuning by
+ * feel would conclude the setting does not work.
+ *
+ * This is arithmetic, not a migration, and it makes no model call either.
+ * Fit is rescored from the stored verdicts at whatever fraction is set now,
+ * and the stored locationNudge is added back.
+ *
+ * It requires that nudge to be stored, which is why it is written down at
+ * analysis time. A row without it is skipped and counted rather than
+ * guessed at: the nudge used to be recoverable by subtracting the OLD
+ * arithmetic from the stored total, and that works exactly once — on a row
+ * already rescored, the same subtraction returns the gap between two
+ * different arithmetics, which is not a nudge and would be added to the
+ * score as though it were.
+ *
+ * In place, and recorded, so --revert puts it back.
+ */
+if (REFRESH) {
+  if (!RUN) console.log('Dry run — add --run to write.\n')
+
+  const refreshRun = RUN ? db.prepare(`
+    INSERT INTO score_migration_runs (stamp, from_version, to_version, silence, scope, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(
+    new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14),
+    TARGET, TARGET, silenceFraction(),
+    JSON.stringify({ job: ONLY_JOB, triage: ONLY_TRIAGE, refresh: true }),
+    now(),
+  ).lastInsertRowid : null
+
+  const note = RUN
+    ? db.prepare(`INSERT INTO score_migration_rows (run_id, kind, key_json, payload) VALUES (?, ?, ?, ?)`)
+    : null
+
+  const stats = { seen: 0, moved: [], noNudge: 0, noVerdicts: 0 }
+
+  const rescoreStored = (blob, storedFit) => {
+    let criteria = null
+    try {
+      criteria = JSON.parse(blob)
+    } catch {
+      return null
+    }
+    if (!Array.isArray(criteria?.verdicts) || criteria.verdicts.length === 0) {
+      stats.noVerdicts += 1
+      return null
+    }
+    if (!Number.isFinite(criteria.locationNudge)) {
+      stats.noNudge += 1
+      return null
+    }
+    const scored = rescoreBreakdown(criteria.verdicts)
+    if (scored.fit === null) return null
+
+    const { explain, ...rest } = criteria
+    return {
+      fit: Math.max(0, Math.min(100, scored.fit + criteria.locationNudge)),
+      was: Math.round(storedFit),
+      blob: JSON.stringify({
+        ...rest,
+        coverage: scored.coverage,
+        needsReview: needsReview(scored.coverage),
+        ...deriveHighlights(criteria.verdicts),
+      }),
+    }
+  }
+
+  if (DO_SEARCH) {
+    const rewrite = db.prepare(`
+      UPDATE candidate_job_analyses SET absolute_fit = ?, criteria_results = ?
+      WHERE candidate_id = ? AND profile_version = ? AND job_id = ? AND jd_version = ?
+        AND analysis_model = ? AND scoring_version = ?
+    `)
+    let key = ''
+    for (;;) {
+      const page = db.prepare(`
+        SELECT a.candidate_id, a.profile_version, a.job_id, a.jd_version, a.analysis_model,
+               a.absolute_fit, a.criteria_results, ${KEY_SQL} AS k
+        FROM candidate_job_analyses a
+        WHERE a.scoring_version = ?
+          ${ONLY_JOB === null ? '' : 'AND a.job_id = ?'}
+          AND ${KEY_SQL} > ?
+        ORDER BY k LIMIT ?
+      `).all(...(ONLY_JOB === null ? [TARGET, key, PAGE] : [TARGET, ONLY_JOB, key, PAGE]))
+      if (page.length === 0) break
+      key = page[page.length - 1].k
+
+      db.transaction(() => {
+        for (const row of page) {
+          stats.seen += 1
+          const next = rescoreStored(row.criteria_results, row.absolute_fit)
+          if (!next) continue
+          stats.moved.push(next.fit - next.was)
+          if (!RUN) continue
+          note.run(refreshRun, 'analysis_update', JSON.stringify({
+            candidate_id: row.candidate_id, profile_version: row.profile_version,
+            job_id: row.job_id, jd_version: row.jd_version, analysis_model: row.analysis_model,
+          }), JSON.stringify({
+            absolute_fit: row.absolute_fit, criteria_results: row.criteria_results,
+          }))
+          rewrite.run(
+            next.fit, next.blob, row.candidate_id, row.profile_version,
+            row.job_id, row.jd_version, row.analysis_model, TARGET,
+          )
+        }
+      })()
+    }
+  }
+
+  if (DO_TRIAGE) {
+    const rewrite = db.prepare(
+      `UPDATE triage_applicants SET absolute_fit = ?, criteria = ? WHERE id = ?`,
+    )
+    let id = 0
+    for (;;) {
+      const page = db.prepare(`
+        SELECT id, absolute_fit, criteria, scoring_version FROM triage_applicants
+        WHERE criteria IS NOT NULL AND scoring_version = ?
+          ${ONLY_TRIAGE === null ? '' : 'AND triage_id = ?'}
+          AND id > ? ORDER BY id LIMIT ?
+      `).all(...(ONLY_TRIAGE === null ? [TARGET, id, PAGE] : [TARGET, ONLY_TRIAGE, id, PAGE]))
+      if (page.length === 0) break
+      id = page[page.length - 1].id
+
+      db.transaction(() => {
+        for (const row of page) {
+          stats.seen += 1
+          const next = rescoreStored(row.criteria, row.absolute_fit)
+          if (!next) continue
+          stats.moved.push(next.fit - next.was)
+          if (!RUN) continue
+          note.run(refreshRun, 'applicant_update', JSON.stringify({ id: row.id }), JSON.stringify({
+            absolute_fit: row.absolute_fit, criteria: row.criteria,
+            scoring_version: row.scoring_version,
+          }))
+          rewrite.run(next.fit, next.blob, row.id)
+        }
+      })()
+    }
+  }
+
+  console.log(`REFRESH at silence fraction ${silenceFraction()}`)
+  console.log(`  version-${TARGET} rows seen           : ${stats.seen}`)
+  console.log(`  rescored                     : ${stats.moved.length}`)
+  console.log(`  no verdicts, left alone      : ${stats.noVerdicts}`)
+  if (stats.noNudge > 0) {
+    console.log(`  no stored location nudge     : ${stats.noNudge}   <-- written before the nudge was recorded; cannot be refreshed without guessing`)
+  }
+  console.log(`  score movement               : ${movement(stats.moved)}`)
+  console.log('')
+
+  if (RUN) {
+    db.prepare(`UPDATE score_migration_runs SET completed_at = ? WHERE id = ?`).run(now(), refreshRun)
+    console.log(`Recorded as run ${refreshRun}. To undo exactly this run:`)
+    console.log('  npm run score:migrate -- --revert --run')
+    console.log('')
+  }
   process.exit(0)
 }
 
@@ -442,10 +639,6 @@ const writeRow = db.prepare(`
  * were silently skipped, stayed at version 2, and the completed-run gate
  * then made sure nobody ever came back for them.
  */
-const PAGE = 500
-const KEY_SQL = `(a.candidate_id || ':' || a.job_id || ':' || a.jd_version || ':' `
-  + `|| a.profile_version || ':' || a.analysis_model)`
-
 let lastKey = ''
 while (DO_SEARCH) {
   const page = db.prepare(`
@@ -550,6 +743,9 @@ while (DO_SEARCH) {
         verdicts: result.verdicts,
         coverage: result.coverage,
         needsReview: needsReview(result.coverage),
+        /* Recovered by subtraction here, and written down so it never has
+           to be recovered again. See --refresh. */
+        locationNudge: result.nudge,
         ...deriveHighlights(result.verdicts),
       }))
     }
@@ -632,6 +828,7 @@ while (DO_TRIAGE) {
           verdicts: result.verdicts,
           coverage: result.coverage,
           needsReview: needsReview(result.coverage),
+          locationNudge: result.nudge,
           ...deriveHighlights(result.verdicts),
         }), TARGET, row.id)
         noteRow.run(recordRun, 'applicant_update', JSON.stringify({ id: row.id }), before)
