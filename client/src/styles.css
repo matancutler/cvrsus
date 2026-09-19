@@ -2770,50 +2770,13 @@ input:focus, select:focus, textarea:focus, .chip-input:focus-within {
 .folder-picker { width: auto; min-width: 170px; }
 
 /*
- * No align-self: it is the only chip that had one.
+ * The named folder chip and its clipping wrapper used to live here.
  *
- * flex-start dates from when this chip sat in a column under the summary. In
- * the corner strip it sits beside the reveal chip, which centres itself like
- * everything else in that row — so the folder chip alone rode high, by about
- * two pixels, which is exactly enough to look like a mistake and not enough to
- * see why.
+ * Both went when the folder mark became an unlabelled dot with the name on
+ * hover (see .chip-folder-dot): there is no text left in it to cap or to
+ * clip. Removed rather than left behind, because a rule nothing references
+ * is one somebody restores a chip against by accident.
  */
-/*
- * Capped, the way the reveal chip beside it is.
- *
- * Folders are named after the search that made them, and a search is named
- * after the job description — so a pasted posting becomes a folder name a
- * paragraph long, and the chip grew to fit it. On a candidate row that put an
- * entire Hebrew JD where a small label belongs, wider than the candidate's own
- * name and louder than the score.
- *
- * 6rem matches .result-menu .chip-revealed exactly, so the two read as the
- * same kind of mark. The full name is still in the title attribute, which is
- * where a name too long to show has always belonged.
- */
-.chip-folder {
-  background: var(--accent-soft);
-  color: var(--accent);
-  max-width: 6rem;
-}
-
-/*
- * The clipping happens on the text, not on the chip.
- *
- * Overriding the chip itself to `display: inline-block` did truncate it, and
- * broke the thing chips are for: .chip is an inline-flex box 22px tall that
- * centres its own content, and an inline-block with a line-height is aligned by
- * a different rule — so the folder chip sat off the line its neighbours share.
- * Giving the NAME its own element keeps the chip a flex box and puts the
- * ellipsis on a real flex item, which is the only thing text-overflow can act
- * on. min-width: 0 lets that item shrink below its content, which flex items
- * otherwise refuse to do.
- */
-.chip-clip {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
-}
 
 .badge {
   display: inline-grid;

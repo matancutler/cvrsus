@@ -35,13 +35,34 @@ const denied = scoreAgainst(REQS, verdicts({
   R1: 'meets', R2: 'meets', R3: 'contradicted', R4: 'meets', R5: 'contradicted',
 }))
 
+/*
+ * 78, not 100, and that change is the point of the new arithmetic.
+ *
+ * Silence used to leave the sum entirely: an unanswered requirement was
+ * struck from the denominator as well as the numerator, so a CV that
+ * answered four of five requirements well scored exactly the same as a CV
+ * that answered all five well. That is not what a recruiter means by a
+ * match, and it rewarded the thin CV over the thorough one - the less a
+ * document said, the fewer chances it had to be wrong.
+ *
+ * Silence now earns a fraction of its weight (MATCH_SILENCE_FRACTION, 0.35)
+ * against the full denominator. It costs something, because an unevidenced
+ * must-have is a real risk. It does not cost everything, because a CV that
+ * does not mention Kubernetes is not a CV saying the candidate cannot do it
+ * - and that distinction is the whole difference between this and `denied`.
+ */
 check('a CV that says nothing about Kubernetes still scores well',
-  quiet.fit === 100, `${quiet.fit}`)
+  quiet.fit === 78,
+  `${quiet.fit} - two unknowns in 105 of weight, each earning 0.35 of its own`)
 check('and reports how much it could actually check',
   quiet.coverage === 67,
   `${quiet.coverage}% — a must-have (30) and a contextual (5) are unknown, so 70 of 105 weight was checked`)
-check('a CV that contradicts the same requirements scores far lower',
+check('a CV that contradicts the same requirements scores lower',
   denied.fit < quiet.fit, `${denied.fit} vs ${quiet.fit}`)
+check('and the gap is the whole distinction between silent and wrong',
+  quiet.fit - denied.fit === 11,
+  `${quiet.fit} - ${denied.fit}: saying nothing costs 0.65 of the weight, `
+  + 'saying the wrong thing costs all of it')
 check('while claiming full evidence', denied.coverage === 100,
   'nothing was unknown — the CV answered every requirement, badly')
 
@@ -64,7 +85,20 @@ check('but well above nothing', partial.fit > 0, `${partial.fit}`)
 
 section('A thin CV is flagged, not silently trusted')
 const thin = scoreAgainst(REQS, verdicts({ R1: 'meets', R2: 'no_evidence', R3: 'no_evidence', R4: 'no_evidence', R5: 'no_evidence' }))
-check('one met requirement out of five is arithmetically 100', thin.fit === 100)
+/*
+ * 54, where this used to be 100.
+ *
+ * One met must-have and four unanswered requirements produced a perfect
+ * score, because the four left the denominator along with the numerator. It
+ * was the least defensible number the old arithmetic could produce and the
+ * one a recruiter was most likely to act on: a CV that said one true thing
+ * and nothing else, at the top of the list. A little over half is what "we
+ * could check a third of this job, and what we checked was good" should
+ * look like.
+ */
+check('one met requirement out of five is no longer arithmetically 100',
+  thin.fit === 54,
+  `${thin.fit} - 30 earned outright and 26.25 across four silences, over 105`)
 check('and is correctly called out as needing review', needsReview(thin.coverage),
   `${thin.coverage}% evidence — showing this as 100 would be confidently wrong`)
 check('a well-evidenced score is not flagged', !needsReview(quiet.coverage), `${quiet.coverage}%`)

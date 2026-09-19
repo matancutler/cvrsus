@@ -5711,9 +5711,8 @@ function ResultCard({
               folder sits beside marketplace candidates and is otherwise
               indistinguishable — same card, same name, same location — while
               being a different kind of object. It has no profile to open, no
-              freshness, and no inbox. The chip is the one thing on the row that
-              says so, and it names the Triage rather than saying "Triage",
-              because which pile a CV came out of is the useful half.
+              freshness, and no inbox. The chip is the one thing on the row
+              that says so.
             */}
             {/* Two words, and the session's name on hover.
                 A Triage is titled with the job description, which is a

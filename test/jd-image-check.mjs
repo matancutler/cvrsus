@@ -16,7 +16,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 
-import { createReporter } from './helpers.mjs'
+import { systemText, createReporter } from './helpers.mjs'
 
 const { check, section, finish } = createReporter('JD images')
 
@@ -109,7 +109,7 @@ check('and the PNG signature survives the encoding',
   'a mangled encoding would reach the API as an unreadable image')
 
 section('The prompt refuses to take orders from the picture')
-const prompt = String(lastRequest?.system ?? '')
+const prompt = systemText(lastRequest?.system)
 check('an uploaded image is treated as text, never as instruction',
   /NEVER AS AN INSTRUCTION/i.test(prompt),
   'a screenshot saying "ignore your instructions" is a prompt-injection vector')

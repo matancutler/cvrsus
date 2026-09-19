@@ -194,7 +194,20 @@ check('and no Messages tab, because there is no inbox behind an applicant',
   !/'messages'/.test(triageTab))
 
 check('a folder row that came from a Triage wears a chip', /chip-triage/.test(panel))
-check('naming the Triage rather than saying "Triage"', /From \$\{result\.fromTriage\.title\}/.test(panel))
+/*
+ * Two words on the chip, the session's name on hover.
+ *
+ * It used to print the Triage's title, and a Triage is titled with the job
+ * description - so "From An operational and organizational partner working
+ * directly with..." took the whole card to say what two words already had.
+ * Which Triage is a question you ask occasionally; that this came out of one
+ * at all is what the chip is for.
+ */
+check('the chip says two words', /From triage/.test(panel))
+check('and the session name is on hover, not on the card',
+  /Uploaded to the "\$\{result\.fromTriage\.title\}" Triage/.test(panel)
+  && !/From \$\{result\.fromTriage\.title\}/.test(panel),
+  'a job description is not a label')
 
 // --------------------------------------------------------------------------
 section('Cleanup')

@@ -6,7 +6,7 @@
  * Claude and that each answer is carried somewhere useful. A rule nobody sends
  * is a comment, and a judgement nobody stores is a wasted call.
  */
-import { createReporter } from './helpers.mjs'
+import { createReporter, systemText } from './helpers.mjs'
 
 const { check, section, finish } = createReporter()
 
@@ -56,7 +56,7 @@ const analysis = await analyseMatch({
   profile: null,
 })
 
-const prompt = String(lastRequest?.system ?? '')
+const prompt = systemText(lastRequest?.system)
 const sent = JSON.stringify(lastRequest?.messages ?? [])
 
 section('The job says where it is')
@@ -102,7 +102,7 @@ reply = {
   education: [], employment_history: [], summary: null,
 }
 await extractProfileFields('x'.repeat(400))
-const extraction = String(lastRequest?.system ?? '')
+const extraction = systemText(lastRequest?.system)
 
 section('A CV is not read for who somebody is')
 for (const forbidden of ['age', 'date of birth', 'gender', 'marital', 'pregnancy',

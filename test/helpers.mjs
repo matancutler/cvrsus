@@ -261,6 +261,22 @@ export function createReporter() {
   }
 }
 
+/**
+ * The system prompt as text, whether it was sent as one or as blocks.
+ *
+ * A request that carries a cache breakpoint sends `system` as an array of
+ * content blocks. String() on that array is "[object Object]", so a check
+ * written as /some rule/.test(String(system)) does not fail loudly - it
+ * quietly tests nothing, and keeps testing nothing whether the rule it was
+ * watching is still in the prompt or not. Eleven assertions about the
+ * matching prompt were in that state from the day it was given a breakpoint.
+ */
+export function systemText(system) {
+  if (typeof system === 'string') return system
+  if (Array.isArray(system)) return system.map((block) => block?.text ?? '').join('\n')
+  return ''
+}
+
 export async function json(response) {
   const body = await response.json().catch(() => ({}))
   if (!response.ok) throw new Error(`${response.status}: ${body.error ?? 'unknown error'}`)

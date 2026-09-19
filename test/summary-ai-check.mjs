@@ -7,7 +7,7 @@
  * only way to prove the trim actually applies to what Claude returns rather
  * than merely being asked for in the prompt.
  */
-import { createReporter } from './helpers.mjs'
+import { systemText, createReporter } from './helpers.mjs'
 
 const { check, section, finish } = createReporter()
 
@@ -135,7 +135,7 @@ check('with no summary on the CV, nothing extra is sent',
 check('and the answer says so', invented.used_own_summary === false)
 
 section('The prompt carries the rules the complaint was about')
-const prompt = String(lastRequest.system ?? '')
+const prompt = systemText(lastRequest.system)
 check('third person is demanded', /THIRD PERSON/.test(prompt))
 check('the name is ruled out', /NEVER the candidate's name/.test(prompt))
 check('gendered pronouns are ruled out', /never "he" or "she"/.test(prompt))
