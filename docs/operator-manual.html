@@ -1556,6 +1556,22 @@ node server/scripts/contact.mjs show <span class="c">&lt;id&gt;</span></pre>
 
         <article class="cmd-card">
           <div class="cmd-head">
+            <span class="cmd">npm run ai:prefix</span>
+            <span class="risk risk-read">Read</span>
+          </div>
+          <p class="what">
+            How many tokens the cached part of a match request is, asked of the provider rather
+            than estimated, and what that is worth over a batch of 8, 25 and 50.
+          </p>
+          <p class="when">
+            In Render &rarr; Shell, after changing the instructions or the shape of the request.
+            The prefix's share of the request is the saving; if it falls, caching is worth less
+            than it was. Costs nothing &mdash; counting tokens does not run the model.
+          </p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
             <span class="cmd">npm run ai:eval <span class="flag">--configs baseline,opus-medium --dry</span></span>
             <span class="risk risk-wreck">Spends</span>
           </div>

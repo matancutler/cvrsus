@@ -36,6 +36,7 @@
     "test:recruiter-reset": "node test/recruiter-reset-check.mjs",
     "ai:health": "node server/scripts/ai-health.mjs",
     "ai:cost": "node server/scripts/ai-cost.mjs",
+    "ai:prefix": "node server/scripts/ai-prefix.mjs",
     "ai:eval": "node server/scripts/ai-eval.mjs",
     "triage:audit": "node server/scripts/triage-audit.mjs",
     "triage:retention": "node server/scripts/triage-retention.mjs",

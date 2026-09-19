@@ -1998,3 +1998,17 @@ function uniqueStrings(value) {
   }
   return [...seen.values()]
 }
+
+/*
+ * Exported for measurement, not for use.
+ *
+ * ai-prefix.mjs asks the provider how many tokens the cached prefix is, and
+ * the instructions are most of it. A script that reconstructed this text
+ * would drift from the real one without anything noticing, and the number it
+ * printed would quietly stop being about the request the product sends.
+ *
+ * An export STATEMENT rather than `export const X = MATCH_SYSTEM` beside the
+ * declaration: that form runs at that line, and at that line MATCH_SYSTEM is
+ * still in its temporal dead zone.
+ */
+export { MATCH_SYSTEM as MATCH_SYSTEM_TEXT }

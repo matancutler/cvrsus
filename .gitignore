@@ -35,3 +35,6 @@ backups/
 # Real job ads and real CVs used to compare model settings. Never committed:
 # they are other people's documents, not test fixtures.
 eval/
+
+# Eval material: real CVs and job descriptions. Personal data — never committed.
+eval-material/
