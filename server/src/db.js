@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 import Database from 'better-sqlite3'
 
 import { ADDED_COLUMNS, SCHEMA, normalizeCompanyName } from './schema.js'
+import personName from './personName.js'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 
@@ -695,6 +696,53 @@ for (const row of db.prepare(`SELECT id, name FROM candidates WHERE first_name I
   )
 }
 
+/*
+ * Names stored before they were tidied on the way in.
+ *
+ * Runs on every boot and does nothing once it has caught up, like the
+ * backfill above it. Only rows the rule would actually change are written,
+ * so a second boot is a read and no more.
+ *
+ * It is a real edit to somebody's own record, which is why it is narrow: it
+ * changes how a name is capitalised and nothing else, and it leaves alone
+ * every name that shows a deliberate capital — McDonald, DeSouza, van der
+ * Berg. See personName for exactly what it refuses to touch.
+ */
+{
+  const rows = db.prepare(`
+    SELECT id, name, first_name, middle_name, last_name FROM candidates
+  `).all()
+
+  const write = db.prepare(`
+    UPDATE candidates SET name = ?, first_name = ?, middle_name = ?, last_name = ?
+    WHERE id = ?
+  `)
+
+  let tidied = 0
+  const run = db.transaction(() => {
+    for (const row of rows) {
+      const next = {
+        name: personName(row.name),
+        first_name: personName(row.first_name),
+        middle_name: personName(row.middle_name),
+        last_name: personName(row.last_name),
+      }
+      const same = next.name === (row.name ?? '')
+        && next.first_name === (row.first_name ?? '')
+        && next.middle_name === (row.middle_name ?? '')
+        && next.last_name === (row.last_name ?? '')
+      if (same) continue
+
+      write.run(next.name || null, next.first_name || null,
+        next.middle_name || null, next.last_name || null, row.id)
+      tidied += 1
+    }
+  })
+  run()
+
+  if (tidied > 0) console.log(`  tidied the capitalisation of ${tidied} candidate name(s)`)
+}
+
 const insertStmt = db.prepare(`
   INSERT INTO candidates (
     name, first_name, middle_name, last_name, email, phone, location,
@@ -756,9 +804,41 @@ function safeParse(value, fallback) {
   }
 }
 
+/*
+ * Which columns hold a person's name, and are therefore tidied on the way in.
+ *
+ * `name` is the joined form the search index and most cards read; the three
+ * parts are what the profile form edits. All four have to move together or a
+ * card reading one and a form reading another disagree about who somebody is.
+ */
+const NAME_COLUMNS = ['name', 'first_name', 'middle_name', 'last_name']
+
+/**
+ * Tidies whichever name columns a write actually carries.
+ *
+ * Done here, at the single funnel every route, script and repair goes
+ * through, rather than at each form. A CV header set in capitals and a
+ * recruiter typing fast both produce MATAN CUTLER, and normalising it in one
+ * form leaves it shouting everywhere else it is displayed.
+ *
+ * Only fields being written are touched: an update that does not mention a
+ * surname must not write one.
+ */
+function tidyNames(fields) {
+  const out = {}
+  for (const column of NAME_COLUMNS) {
+    if (!(column in fields)) continue
+    const value = fields[column]
+    if (typeof value !== 'string') continue
+    out[column] = personName(value)
+  }
+  return out
+}
+
 export function insertCandidate(record) {
   const info = insertStmt.run({
     ...record,
+    ...tidyNames(record),
     links: JSON.stringify(record.links ?? []),
     skills: JSON.stringify(record.skills ?? []),
     /* Always both, because this is an INSERT and every named parameter has to
@@ -893,7 +973,8 @@ const UPDATABLE_COLUMNS = new Set([
 
 /** Partial update from the candidate's own account page. */
 export function updateCandidate(id, fields) {
-  const entries = Object.entries(fields).filter(([column]) => UPDATABLE_COLUMNS.has(column))
+  const tidied = { ...fields, ...tidyNames(fields) }
+  const entries = Object.entries(tidied).filter(([column]) => UPDATABLE_COLUMNS.has(column))
   if (entries.length === 0) return false
 
   /* Derived here rather than by the caller. Every route, script and repair that

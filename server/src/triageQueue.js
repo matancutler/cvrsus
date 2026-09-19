@@ -31,6 +31,7 @@ import path from 'node:path'
    "nbar@gmail.com" are one mailbox and one person — the same folding the
    marketplace uses for candidate accounts. Anything else compares as written. */
 import db, { UPLOAD_DIR, emailKey } from './db.js'
+import personName from './personName.js'
 import { extractText } from './extract.js'
 import {
   analyseJobDescription, analyseMatch, deterministicContact,
@@ -460,7 +461,13 @@ async function runParse(triage, batch) {
       }
 
       const contact = deterministicContact(text)
-      const name = [contact.firstName, contact.lastName].filter(Boolean).join(' ') || null
+      /* A CV header is very often set in capitals, and the recruiter sees
+         this string on every card. Tidied where it is stored rather than at
+         each render, so the list, the dialog, the export and anything built
+         on it later all agree. */
+      const name = personName(
+        [contact.firstName, contact.lastName].filter(Boolean).join(' '),
+      ) || null
 
       db.prepare(`
         UPDATE triage_applicants

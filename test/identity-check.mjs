@@ -157,4 +157,68 @@ for (const address of [`zoe.${RUN}@gmail.com`, `z.o.e.${RUN}+work@gmail.com`]) {
 }
 check('test data removed', true, `${removed} candidate(s)`)
 
+section('Names are capitalised the way names are written')
+
+/*
+ * A CV header set in capitals, and somebody typing fast, both produce
+ * MATAN CUTLER. Tidied where the row is written rather than at each render,
+ * so the search card, the folder card, the Triage list and the profile form
+ * cannot disagree about how a person spells their name.
+ *
+ * The cases that matter are the ones it must NOT touch: McDonald and
+ * van der Berg are how those people spell their names, and a rule that
+ * lower-cased the interior would be correcting them.
+ */
+const { default: serverName } = await import('../server/src/personName.js')
+const { default: clientName } = await import('../client/src/personName.js')
+
+const CASES = [
+  ['MATAN CUTLER', 'Matan Cutler'],
+  ['matan cutler', 'Matan Cutler'],
+  ['NOA BAR-LEV', 'Noa Bar-Lev'],
+  ["o'brien", "O'Brien"],
+  ['McDonald', 'McDonald'],
+  ['MacLeod', 'MacLeod'],
+  ['DeSouza', 'DeSouza'],
+  ['Ronald van der Berg', 'Ronald van der Berg'],
+  ['מתן כותלי', 'מתן כותלי'],
+]
+
+for (const [input, want] of CASES) {
+  check(`${input} → ${want}`, serverName(input) === want, serverName(input))
+}
+
+check('the client and the server agree on every one',
+  CASES.every(([input]) => clientName(input) === serverName(input)),
+  'two copies of the rule, kept in step on purpose — see the note in either file')
+
+/* And the write path, not just the helper. */
+const shoutyId = insertCandidate({
+  name: 'MATAN CUTLER', first_name: 'MATAN', middle_name: null, last_name: 'CUTLER',
+  email: `shouty.${RUN}@${MARK}.example.com`, phone: `050-111-${String(Date.now()).slice(-4)}`,
+  location: 'Tel Aviv',
+  years_experience: null, current_title: null, desired_role: null,
+  availability: null, links: [], notes: null,
+  file_name: 'cv.pdf', stored_name: `${MARK}-shouty.pdf`, file_size: 10,
+  photo_name: null, cv_text: null, skills: [], detected_years: null,
+  created_at: new Date().toISOString(),
+})
+
+const stored = db.prepare(
+  `SELECT name, first_name AS first, last_name AS last FROM candidates WHERE id = ?`,
+).get(shoutyId)
+
+check('a candidate saved in capitals is stored tidied',
+  stored.first === 'Matan' && stored.last === 'Cutler' && stored.name === 'Matan Cutler',
+  JSON.stringify(stored))
+
+updateCandidate(shoutyId, { first_name: 'SHIRA', last_name: "o'brien" })
+const edited = db.prepare(
+  `SELECT first_name AS first, last_name AS last FROM candidates WHERE id = ?`,
+).get(shoutyId)
+check('and an edit is tidied the same way',
+  edited.first === 'Shira' && edited.last === "O'Brien", JSON.stringify(edited))
+
+db.prepare(`DELETE FROM candidates WHERE id = ?`).run(shoutyId)
+
 finish()
