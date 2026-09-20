@@ -82,7 +82,8 @@
     "test:triage-retention": "node test/triage-retention-check.mjs",
     "test:score-migration": "node test/score-migration-check.mjs",
     "infer:backfill": "node server/scripts/infer-capabilities.mjs",
-    "recall:test": "node server/scripts/recall-test.mjs"
+    "recall:test": "node server/scripts/recall-test.mjs",
+    "seed:candidates": "node server/scripts/seed-candidates.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",

@@ -24,6 +24,21 @@ import { DOCUMENT_SLOT_KEYS, normalizeCompanyName } from './schema.js'
 export const EXTRACTED_FIELDS = [
   'current_title', 'industry', 'seniority',
   'skills', 'languages', 'education', 'employment_history', 'summary',
+  /*
+   * C2. This list is a whitelist, and effectiveProfile() copies only what is
+   * named here — so leaving it out did not merely hide the field, it deleted
+   * it on every read. buildIntelligence() reads the profile through that
+   * function, which is where inferred capabilities were supposed to become
+   * taxonomy labels, so the whole retrieval half of C2 was dead: the model
+   * produced the list, saveExtraction stored it, and nothing downstream
+   * could ever see it. Caught by seeding five real CVs and reading back
+   * "0 inferred" beside a stored list of five.
+   *
+   * Being on this list also makes it correctable by the candidate, which is
+   * right: it is our inference about them, and the person best placed to say
+   * it is wrong is the person it is about.
+   */
+  'inferredCapabilities',
 ]
 
 /**

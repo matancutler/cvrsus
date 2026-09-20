@@ -1715,6 +1715,26 @@ node server/scripts/contact.mjs show <span class="c">&lt;id&gt;</span></pre>
 
         <article class="cmd-card">
           <div class="cmd-head">
+            <span class="cmd">npm run seed:candidates <span class="flag">-- --run</span></span>
+            <span class="risk risk-wreck">Spends</span>
+          </div>
+          <p class="what">
+            Turns the CVs in <code>eval-material/cvs/*.txt</code> into real candidate profiles,
+            through the steps an upload runs: extraction, then the taxonomy intelligence
+            retrieval reads, then the embedding. A hand-written row would have no concepts and
+            no vector, so it would be invisible to two thirds of the retrieval blend.
+            <code>-- --remove --run</code> takes back exactly what it created.
+          </p>
+          <p class="when">
+            Before testing anything about retrieval or ranking on a laptop. <strong>Local
+            only</strong> &mdash; those CVs carry real names and phone numbers, so it refuses
+            outright if <code>CKING_DATA_DIR</code> points at the production disk. A few pence
+            per CV.
+          </p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
             <span class="cmd">npm run recall:test <span class="flag">-- --band 200 --yes</span></span>
             <span class="risk risk-wreck">Spends</span>
           </div>
