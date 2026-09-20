@@ -6,6 +6,7 @@
  *   npm run recall:test -- --yes               run it
  *   npm run recall:test -- --band 200 --yes    how deep to look
  *   npm run recall:test -- --model claude-sonnet-5 --effort medium --yes
+ *   npm run recall:test -- --from-db 5 --yes   use real jobs from the database
  *
  * ---
  *
@@ -78,34 +79,73 @@ const DEPTHS = String(flag('depths', '25,50,75,100,150,200'))
   .filter((d) => d <= BAND)
 
 const here = path.dirname(fileURLToPath(import.meta.url))
-const JOBS_DIR = path.join(here, '..', '..', 'eval-material', 'jobs')
+const JOBS_DIR = flag('jobs', path.join(here, '..', '..', 'eval-material', 'jobs'))
 
-const jobs = fs.existsSync(JOBS_DIR)
+/*
+ * Where the job descriptions come from, and on the server it is the database.
+ *
+ * eval-material is gitignored, so the .txt files on a laptop are not on
+ * Render — and this test is only meaningful against a real candidate pool,
+ * which is on Render. Reading the jobs table solves both halves at once and
+ * is the better measurement anyway: these are postings recruiters actually
+ * searched with, against the pool they actually searched, and their match
+ * profiles and analyses are already cached, so the run costs only the band
+ * beyond what has already been read.
+ *
+ * The file mode stays for a laptop with a seeded pool, and for trying a
+ * posting nobody has run yet.
+ */
+const FROM_DB = number('from-db', null)
+
+const fileJobs = () => (fs.existsSync(JOBS_DIR)
   ? fs.readdirSync(JOBS_DIR).filter((n) => n.endsWith('.txt'))
     .map((n) => ({ name: n.replace(/\.txt$/, ''), text: fs.readFileSync(path.join(JOBS_DIR, n), 'utf8') }))
-  : []
-
-if (jobs.length === 0) {
-  console.error(`\nNo job descriptions in ${JOBS_DIR}. Put real postings there as .txt.\n`)
-  process.exit(1)
-}
+  : [])
 
 const dbModule = await import('../src/db.js')
 const db = dbModule.default
 const { listCandidatesWithText } = dbModule
 const { isConfigured } = await import('../src/ai.js')
 const {
-  findOrCreateJob, jobConceptIds, ensureJobMatchProfile,
+  findOrCreateJob, getJob, jobConceptIds, ensureJobMatchProfile,
 } = await import('../src/matching/jobProfile.js')
 const { hardFilter, rankAndPool } = await import('../src/matching/retrieval.js')
 const { analyseBatch } = await import('../src/matching/analysis.js')
 const { activityStatus } = await import('../src/profiles.js')
 
+/*
+ * Real jobs, newest first, and only those a model has already profiled: a
+ * job with no match profile has never been searched, so it has no retrieval
+ * ranking to measure and asking for one would parse a JD nobody ran.
+ */
+const dbJobs = FROM_DB === null ? [] : db.prepare(`
+  SELECT j.id, j.title, j.raw_jd
+  FROM jobs j
+  JOIN job_match_profiles p ON p.job_id = j.id AND p.jd_version = j.jd_version
+  ORDER BY j.updated_at DESC
+  LIMIT ?
+`).all(FROM_DB).map((row) => ({
+  name: `#${row.id} ${String(row.title ?? '').slice(0, 40) || '(untitled)'}`,
+  text: row.raw_jd,
+  jobId: row.id,
+}))
+
+const jobs = FROM_DB === null ? fileJobs() : dbJobs
+
+if (jobs.length === 0) {
+  console.error(FROM_DB === null
+    ? `\nNo job descriptions in ${JOBS_DIR}. Put real postings there as .txt,`
+      + ' or use --from-db to read the ones recruiters have run.\n'
+    : '\nNo jobs in the database have a match profile yet, so none has ever been'
+      + ' searched and none has a retrieval ranking to measure.\n')
+  process.exit(1)
+}
+
 const pool = listCandidatesWithText()
 
 console.log('')
 console.log('C6 recall test - what a depth cap would lose')
-console.log(`Jobs                 : ${jobs.length}`)
+console.log(`Jobs                 : ${jobs.length} (${FROM_DB === null ? 'from ' + JOBS_DIR : 'real, from the database'})`)
 console.log(`Candidates with text : ${pool.length}`)
 console.log(`Band (analysed/job)  : ${Math.min(BAND, pool.length)}`)
 console.log(`Final list measured  : top ${TOP}`)
@@ -147,14 +187,17 @@ const EVAL_RECRUITER = -424242
 const rows = []
 
 for (const spec of jobs) {
-  const { job } = findOrCreateJob({
+  /* A real job is used as it stands — same id, same jd_version, so the
+     analyses this writes are the analyses production would read back, and
+     nothing new is created in the jobs table. */
+  const job = spec.jobId ? getJob(spec.jobId) : findOrCreateJob({
     recruiterId: EVAL_RECRUITER,
     companyId: null,
     chatId: null,
     title: `recall-test ${spec.name}`,
     rawJd: spec.text,
     instruction: null,
-  })
+  }).job
 
   const matchProfile = await ensureJobMatchProfile(job)
   const jobConcepts = jobConceptIds(matchProfile)
@@ -243,7 +286,11 @@ console.log('')
    they are cached work against a real job description and a second run
    should not pay for them again. */
 if (!has('keep')) {
+  /* Scoped to the throwaway recruiter, so a --from-db run, which creates no
+     jobs at all, can never delete the real ones it just measured. */
   const removed = db.prepare(`DELETE FROM jobs WHERE recruiter_id = ?`).run(EVAL_RECRUITER).changes
-  console.log(`Removed ${removed} throwaway job row(s). --keep leaves them for inspection.`)
-  console.log('')
+  if (removed > 0) {
+    console.log(`Removed ${removed} throwaway job row(s). --keep leaves them for inspection.`)
+    console.log('')
+  }
 }
