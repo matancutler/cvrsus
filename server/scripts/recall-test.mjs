@@ -141,12 +141,26 @@ if (jobs.length === 0) {
   process.exit(1)
 }
 
-const pool = listCandidatesWithText()
+/*
+ * listCandidatesWithText() returns every candidate, text or not — the name
+ * predates the filter it sounds like it has. Reporting its length as "the
+ * pool" overstates what this test can actually measure: on this machine it
+ * said 12 when all twelve are the same fixture carrying 117 characters of
+ * placeholder, which is not a CV anything can be judged against.
+ *
+ * MIN_CV_CHARS is the same floor the backfill uses, for the same reason: a
+ * document too short to read is a document too short to rank.
+ */
+const MIN_CV_CHARS = 200
+const everyone = listCandidatesWithText()
+const pool = everyone.filter((c) => String(c.cv_text ?? '').length >= MIN_CV_CHARS)
+const tooThin = everyone.length - pool.length
 
 console.log('')
 console.log('C6 recall test - what a depth cap would lose')
 console.log(`Jobs                 : ${jobs.length} (${FROM_DB === null ? 'from ' + JOBS_DIR : 'real, from the database'})`)
-console.log(`Candidates with text : ${pool.length}`)
+console.log(`Candidates, judgeable : ${pool.length} of ${everyone.length}`
+  + (tooThin ? `   (${tooThin} have under ${MIN_CV_CHARS} characters of CV and are excluded)` : ''))
 console.log(`Band (analysed/job)  : ${Math.min(BAND, pool.length)}`)
 console.log(`Final list measured  : top ${TOP}`)
 console.log(`Judging model        : ${MODEL} at effort ${EFFORT}`)
@@ -163,9 +177,18 @@ if (pool.length < BAND) {
   console.log('')
 }
 
+if (pool.length === 0) {
+  console.log('STOP: no candidate has enough CV text to be judged, so there is nothing')
+  console.log('to retrieve and no ranking to measure. This is not a small sample, it is')
+  console.log('an empty one, and no depth can be proposed from it.')
+  console.log('')
+  process.exit(1)
+}
+
 if (pool.length < TOP * 3) {
-  console.log('WARNING: with a pool this small a "top 20" is most of it, and the answer')
-  console.log('this produces is about arithmetic rather than about retrieval.')
+  console.log(`WARNING: a top ${TOP} out of ${pool.length} is most of the pool. Whatever this`)
+  console.log('prints will be a fact about arithmetic rather than about retrieval, and')
+  console.log(`no depth should be proposed from it. Come back at roughly ${TOP * 10}+ CVs.`)
   console.log('')
 }
 
