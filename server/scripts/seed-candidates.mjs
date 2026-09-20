@@ -76,6 +76,7 @@ const { insertCandidate, getCandidate } = await import('../src/db.js')
 const { extractProfileFields, isConfigured } = await import('../src/ai.js')
 const { saveExtraction, effectiveProfile } = await import('../src/profiles.js')
 const { buildIntelligence } = await import('../src/matching/intelligence.js')
+const { refreshEmbedding, profileText } = await import('../src/embeddings.js')
 const { priceOf } = await import('../src/costs.js')
 
 if (REMOVE) {
@@ -120,16 +121,47 @@ function contactFrom(text, fallbackName) {
   const email = text.match(/[\w.+-]+@[\w-]+\.[\w.-]+/)?.[0] ?? null
   const phone = text.match(/\+?\d[\d\s().-]{8,}\d/)?.[0]?.trim() ?? null
 
-  /* The name is the first line that is a name: CVs put it at the top, in
-     capitals as often as not, and never with a digit or an at-sign in it. */
+  /*
+   * The first usable line, because that is where a CV puts the name.
+   *
+   * The first attempt looked for the first line matching a name-SHAPED
+   * pattern. That rejected "Gilad Ne'eman, CPA" for its comma and then
+   * happily accepted the next line that did match: "PROFESSIONAL SUMMARY".
+   * Two of seventeen profiles were seeded under the name of a section
+   * heading, and both looked entirely plausible in the output.
+   *
+   * Position is the stronger signal. A trailing credential is trimmed, and
+   * the headings a first line is never allowed to be are refused by name
+   * rather than pattern-matched around.
+   */
+  const HEADING = /^(professional\s+summary|summary|profile|curriculum\s+vitae|cv|resume|contact)$/i
+
   const name = text.split('\n')
     .map((line) => line.trim())
-    .find((line) => line.length > 3 && line.length < 48
-      && !/[@\d|]/.test(line) && /^[\p{L} .'-]+$/u.test(line))
-    ?? fallbackName
+    .filter((line) => line.length > 2 && line.length < 60)
+    .filter((line) => !/[@|]/.test(line) && !/\d{3}/.test(line))
+    .filter((line) => !HEADING.test(line.replace(/[:,.]+$/, '')))
+    .map((line) => line.replace(/,\s*(CPA|Adv\.?|MBA|PhD|Ph\.D\.?|LL\.?M\.?|CFA|Esq\.?)\s*$/i, ''))
+    [0] ?? fallbackName
 
-  const location = text.match(/\b(Tel[- ]Aviv|Herzliya|Hertzeliya|Jerusalem|Haifa|Ramat Gan|Bnei[- ]Brak|Kiryat Gat)\b/i)?.[0]
-    ?? null
+  /*
+   * Hebrew and American cities too. The first list was Israeli cities in
+   * Latin script only, so every Hebrew CV and every US one came through
+   * with no location — and location carries a bounded nudge in the ranking,
+   * so a missing one is not neutral, it is a candidate quietly scored as
+   * though nobody knows where they are.
+   */
+  const CITY = new RegExp(
+    '\\b(Tel[- ]Aviv(?:-Yafo)?|Herzliya|Hertzeliya|Jerusalem|Haifa|Ramat Gan|Givatayim'
+    + '|Bnei[- ]Brak|Kiryat Gat|Ra\'anana|Petah Tikva|Kadima|San Diego|New York|Chicago'
+    + '|Boston|Houston|San Francisco|Los Angeles)\\b'
+    + '|(\u05ea\u05dc \u05d0\u05d1\u05d9\u05d1|\u05d9\u05e8\u05d5\u05e9\u05dc\u05d9\u05dd'
+    + '|\u05d7\u05d9\u05e4\u05d4|\u05d4\u05e8\u05e6\u05dc\u05d9\u05d4'
+    + '|\u05e8\u05de\u05ea \u05d2\u05df|\u05d2\u05d1\u05e2\u05ea\u05d9\u05d9\u05dd'
+    + '|\u05e4\u05ea\u05d7 \u05ea\u05e7\u05d5\u05d5\u05d4)',
+    'i',
+  )
+  const location = text.match(CITY)?.[0] ?? null
 
   return {
     name: name.replace(/\s+/g, ' ').trim(),
@@ -226,6 +258,26 @@ for (const row of todo) {
 
   const candidate = getCandidate(id)
   const profile = effectiveProfile(id)
+
+  /*
+   * The vector, which this script described in its own header and then did
+   * not build. Twenty-two candidates were seeded with no embedding at all,
+   * so the semantic third of the retrieval blend scored every one of them
+   * at zero and the pool was quietly one-third blind — the exact failure
+   * the header warns about for hand-written rows, reproduced by the script
+   * written to avoid it.
+   *
+   * After the intelligence, not before: profileText reads the structured
+   * profile, so a vector built earlier would be a vector of an empty one.
+   */
+  try {
+    const outcome = await refreshEmbedding(id, profileText(candidate, profile))
+    if (outcome?.status !== 'stored') {
+      console.warn(`    no embedding for ${id}: ${outcome?.status ?? 'unknown'}`)
+    }
+  } catch (error) {
+    console.warn(`    embedding failed for ${id}: ${error.message}`)
+  }
   console.log(`  ${String(id).padStart(6)}  ${row.name.padEnd(20)} `
     + `${String(profile?.current_title ?? '(no title)').slice(0, 28).padEnd(30)}`
     + `${(profile?.skills ?? []).length} skills, `

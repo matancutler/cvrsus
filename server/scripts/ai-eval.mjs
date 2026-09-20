@@ -496,7 +496,7 @@ fs.writeFileSync(path.join(OUT, 'key.txt'), key, 'utf8')
 fs.writeFileSync(path.join(OUT, 'summary.json'), JSON.stringify({ baseline, summary }, null, 2), 'utf8')
 
 console.log(`${disagreements.length} must-have disagreements written to ${path.relative(ROOT, OUT)}/disagreements.txt`)
-console.log('Read them first. The key is in eval/out/key.txt.\n')
+console.log('Read them first. The key is in ${path.relative(ROOT, OUT)}/key.txt.\n')
 
 /** Rank correlation. Ties are averaged, which matters: fits repeat a lot. */
 function spearman(pairs) {
