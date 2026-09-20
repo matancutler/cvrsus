@@ -270,7 +270,7 @@ function DemoTriagePage() {
           <div className="field">
             <span className="field-label">Job description</span>
             <div className="demo-field demo-field-tall">
-              Paste the job description, or attach it as a PDF or Word file…
+              Paste the job description, or attach it as a PDF, Word or Markdown file…
             </div>
           </div>
         </section>

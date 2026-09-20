@@ -70,6 +70,19 @@ export async function extractText(filePath, originalName) {
     return normalize(result.value)
   }
 
+  /*
+   * Markdown is already the text; there is nothing to extract from it.
+   *
+   * The syntax is left in place rather than stripped. What reads this is a
+   * model, and a heading marked with a hash or a requirement marked with a
+   * dash is structure it can use — removing the marks to produce "clean"
+   * prose would throw away the outline of the posting and leave a wall of
+   * sentences. Size is bounded by the upload limit, as every other format is.
+   */
+  if (ext === '.md' || ext === '.markdown') {
+    return normalize(await fs.readFile(filePath, 'utf8'))
+  }
+
   if (IMAGE_EXTENSIONS.includes(ext)) {
     const bytes = await fs.readFile(filePath)
 

@@ -1729,7 +1729,7 @@ export const SUPPORTING_EXTENSIONS = ['.pdf', '.docx', '.png', '.jpg', '.jpeg']
  * Images cost a vision call to read (see transcribeImage), which is why this
  * list is not simply given to every upload field.
  */
-export const JD_EXTENSIONS = ['.pdf', '.docx', '.png', '.jpg', '.jpeg', '.webp']
+export const JD_EXTENSIONS = ['.pdf', '.docx', '.md', '.png', '.jpg', '.jpeg', '.webp']
 export const MAX_DOCUMENT_BYTES = 5 * 1024 * 1024
 
 export const CAPACITY_OPTIONS = ['Full time', 'Part time', 'Freelance']

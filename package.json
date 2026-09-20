@@ -80,7 +80,8 @@
     "test:triage-drop": "node test/triage-drop-check.mjs",
     "test:triage-charge": "node test/triage-charge-check.mjs",
     "test:triage-retention": "node test/triage-retention-check.mjs",
-    "test:score-migration": "node test/score-migration-check.mjs"
+    "test:score-migration": "node test/score-migration-check.mjs",
+    "infer:backfill": "node server/scripts/infer-capabilities.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",

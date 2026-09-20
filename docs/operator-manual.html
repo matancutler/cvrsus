@@ -1692,6 +1692,56 @@ node server/scripts/contact.mjs show <span class="c">&lt;id&gt;</span></pre>
             start without <code>--yes</code>; <code>--dry</code> prints the plan and spends nothing.
           </p>
         </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">npm run ai:eval <span class="flag">-- --extraction --yes</span></span>
+            <span class="risk risk-wreck">Spends</span>
+          </div>
+          <p class="what">
+            A different question from the one above. That measures judgement &mdash; does a cheaper
+            model rank people the same way. This measures reading: does a cheaper model pull the
+            same title, skills and dates off a CV. It reports agreement per field, because the
+            fields fail differently &mdash; a wrong title shows on every card, a missed skill is
+            invisible and costs retrieval, a wrong date moves seniority and therefore the ranking.
+          </p>
+          <p class="when">
+            Before considering a cheaper extraction model. Extraction runs on Opus today at roughly
+            2.4 cents per CV, on a read-and-report task already at the lowest effort, so it is the
+            cheapest saving available if the agreement holds. Reports only &mdash; it changes no
+            default. Pennies per run at five CVs.
+          </p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">npm run infer:backfill</span>
+            <span class="risk risk-read">Read</span>
+          </div>
+          <p class="what">
+            Dry run. Counts the profiles extracted before inferred capabilities existed, and prices
+            the backfill from the actual length of those CVs rather than an assumption.
+          </p>
+          <p class="when">Always first. This is the default.</p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">npm run infer:backfill <span class="flag">-- --run [--limit 50]</span></span>
+            <span class="risk risk-wreck">Spends</span>
+          </div>
+          <p class="what">
+            Asks the cheap model what each CV's work implies but never states, and stores it beside
+            the stated skills &mdash; never merged with them, at a lower confidence, under its own
+            label type. Retrieval matches both; judgement is told an inference is a hypothesis and
+            can never carry a requirement on its own.
+          </p>
+          <p class="when">
+            Once, after inferred capabilities shipped. <code>--limit</code> does a tranche first so
+            you can read what it produced before paying for the rest. It merges one key into each
+            stored profile rather than re-extracting, so a candidate's own corrections survive.
+          </p>
+        </article>
       </div>
 
       <div class="suites">

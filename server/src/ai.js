@@ -51,7 +51,9 @@ export function isConfigured() {
   return Boolean(process.env.ANTHROPIC_API_KEY) && !isPaused()
 }
 
-function getClient() {
+/* Exported for the one-off scripts, which need the configured client and
+   must not build a second one with its own idea of the key and the timeouts. */
+export function getClient() {
   if (!isConfigured()) return null
   if (!client) client = new Anthropic()
   return client
@@ -206,13 +208,19 @@ costs far less than a confident invention.`
  * filters against. Falls back to the deterministic extractor when no API key is
  * configured, or when the call fails.
  */
-export async function extractProfileFields(cvText, { signal } = {}) {
+export async function extractProfileFields(cvText, { signal, model = MODEL } = {}) {
   const anthropic = getClient()
   if (!anthropic) return { ...deterministicExtraction(cvText), source: 'deterministic' }
 
   try {
     const response = await anthropic.messages.create({
-      model: MODEL,
+      /*
+       * Overridable for the eval and for nothing else. Production passes
+       * nothing and gets MODEL, so this cannot quietly become a per-caller
+       * choice - the question of which model reads a CV is one measurement
+       * answers, not one each call site decides for itself.
+       */
+      model,
       max_tokens: 8000,
       system: EXTRACTION_SYSTEM,
       // Extraction is a read-and-report task, so the cheapest effort that still

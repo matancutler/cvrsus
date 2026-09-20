@@ -245,14 +245,14 @@ export default function SearchHero({
           dir="auto"
           className={submitted || busy ? 'input-locked' : undefined}
           placeholder={maxCvs > 0
-            ? 'Paste the job description, or attach it as a PDF or Word file. '
+            ? 'Paste the job description, or attach it as a PDF, Word or Markdown file. '
               + `You can also upload up to ${maxCvs} CVs to try our Triage feature.`
             : acceptsImages
               /* Naming the screenshot is the whole point: nobody tries a
                  format the box did not offer, so an accepted one that goes
                  unmentioned may as well be refused. */
-              ? 'Paste the job description, or attach a PDF, Word file or screenshot…'
-              : 'Paste the job description, or attach it as a PDF or Word file…'}
+              ? 'Paste the job description, or attach a PDF, Word, Markdown file or screenshot…'
+              : 'Paste the job description, or attach it as a PDF, Word or Markdown file…'}
           onChange={(e) => onChange(e.target.value)}
           /* A screenshot on the clipboard is read rather than dropped — see
              the note in TriageTab. Text paste falls through untouched, and the
@@ -322,7 +322,7 @@ export default function SearchHero({
               <input
                 ref={fileInput}
                 type="file"
-                accept={acceptsImages ? '.pdf,.docx,.png,.jpg,.jpeg,.webp' : '.pdf,.docx'}
+                accept={acceptsImages ? '.pdf,.docx,.md,.png,.jpg,.jpeg,.webp' : '.pdf,.docx,.md'}
                 /* Only where the composer takes CVs. Everywhere else it is the
                    one job description it has always been. */
                 multiple={maxCvs > 0}
@@ -349,8 +349,8 @@ export default function SearchHero({
                 disabled={attaching || busy}
                 onClick={() => fileInput.current?.click()}
                 title={heldLabel ?? (acceptsImages
-                  ? 'Attach a job description — PDF, Word or a screenshot'
-                  : 'Attach a job description — PDF or Word')}
+                  ? 'Attach a job description — PDF, Word, Markdown or a screenshot'
+                  : 'Attach a job description — PDF, Word or Markdown')}
                 aria-label={heldLabel ? `${heldLabel}. Choose more files.` : 'Attach a job description'}
               >
                 <PaperClip />

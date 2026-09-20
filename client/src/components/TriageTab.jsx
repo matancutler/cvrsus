@@ -621,7 +621,7 @@ async function filesFromDrop(dataTransfer) {
             <input
               ref={jdInput}
               type="file"
-              accept=".pdf,.docx,.png,.jpg,.jpeg,.webp"
+              accept=".pdf,.docx,.md,.png,.jpg,.jpeg,.webp"
               className="visually-hidden"
               onChange={(event) => attachJd(event.target.files?.[0])}
             />

@@ -50,6 +50,30 @@ const MARKUP = [
 const matches = (buffer, bytes, at = 0) =>
   bytes.every((byte, index) => buffer[at + index] === byte)
 
+/*
+ * Whether a head of bytes is text a person wrote.
+ *
+ * A strict UTF-8 decode rejects the byte sequences no text file contains, and
+ * the control-character sweep rejects the binaries that happen to decode
+ * anyway. Tab, newline and carriage return are the three controls prose uses;
+ * everything below 0x20 apart from those is a file that is not text.
+ *
+ * The head may end mid-character, so the last three bytes are dropped before
+ * decoding rather than counted as a failure.
+ */
+function isUtf8Text(slice) {
+  const body = slice.length > 3 ? slice.subarray(0, slice.length - 3) : slice
+  try {
+    new TextDecoder('utf-8', { fatal: true }).decode(body)
+  } catch {
+    return false
+  }
+  for (const byte of body) {
+    if (byte < 0x20 && byte !== 0x09 && byte !== 0x0a && byte !== 0x0d) return false
+  }
+  return true
+}
+
 /**
  * What a file actually is, by content. Null for anything unrecognised.
  *
@@ -73,6 +97,26 @@ export function sniffFile(filePath) {
       if (!matches(slice, signature.bytes)) continue
       if (signature.tail && !matches(slice, signature.tail.bytes, signature.tail.at)) continue
       return { type: signature.type, ext: signature.ext }
+    }
+
+    /*
+     * Markdown, which has no signature to find.
+     *
+     * Every other format here announces itself in its first bytes. Plain text
+     * announces nothing, so it is identified by exclusion: it did not match a
+     * signature, it contains no markup (checked above, before this, so a .md
+     * full of <script> is still refused), it is valid UTF-8, and it holds no
+     * NUL byte — which is what separates prose from a binary whose magic
+     * number we simply do not know.
+     *
+     * Only ever reached by a caller whose allow-list includes .md, which
+     * today is the job-description field alone. That file is read for its
+     * words and deleted in the same request; nothing stores it and nothing
+     * serves it back, which is the reason accepting an unsigned format here
+     * is safe and would not be for a CV.
+     */
+    if (read > 0 && !slice.includes(0) && isUtf8Text(slice)) {
+      return { type: 'text/markdown', ext: '.md' }
     }
 
     return null

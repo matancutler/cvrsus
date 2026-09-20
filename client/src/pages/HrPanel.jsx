@@ -5606,8 +5606,22 @@ function ResultCard({
                 because all five matter. */}
             <TagStrip tags={result.tags ?? []} />
           </h3>
+          {/*
+            Location, capacity, and when they were last around.
+            *
+            The dot beside the name says active or not; this says how long,
+            and it is here rather than in the corner strip because the corner
+            is width-bounded and this line is not. It earns its place because
+            recency is part of the ranking: freshness carries a tenth of the
+            retrieval blend, on the reasoning that a candidate who has been
+            silent for fifty days is about to be hidden at sixty and a reveal
+            spent on them is a reveal spent on somebody who will not reply.
+            A signal that moves the order should be visible in the row it
+            moves, or the order looks arbitrary.
+          */}
           <p className="muted">
-            {[candidate.location, candidate.availability].filter(Boolean).join(' · ')}
+            {[candidate.location, candidate.availability, lastActiveLabel(result.activity)]
+              .filter(Boolean).join(' · ')}
           </p>
 
           </div>
@@ -8079,6 +8093,23 @@ function RecruiterAvatar({ recruiter, size = 'normal' }) {
  * the text beside the dot is read by screen readers, so this does not depend on
  * telling red from green.
  */
+/**
+ * How long since this person was last around, in words, or nothing.
+ *
+ * Nothing when there is no activity record and nothing for a deactivated
+ * profile — "Active 4 days ago" beside "Not open to opportunities" is two
+ * facts that contradict each other at a glance, and the second is the one
+ * that matters.
+ */
+function lastActiveLabel(activity) {
+  if (!activity || activity.state === 'deactivated') return null
+  const days = Number(activity.days)
+  if (!Number.isFinite(days) || days < 0) return null
+  if (days === 0) return 'Active today'
+  if (days === 1) return 'Active yesterday'
+  return `Active ${days} days ago`
+}
+
 function ActivityDot({ activity }) {
   if (!activity) return null
 

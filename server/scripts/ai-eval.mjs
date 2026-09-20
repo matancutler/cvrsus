@@ -41,7 +41,15 @@ import { requirementsFrom } from '../src/matching/analysis.js'
 import { scoreAgainst } from '../src/matching/score.js'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
-const DIR = path.join(ROOT, 'eval')
+/*
+ * eval-material, not eval, and the difference mattered more than it looks.
+ *
+ * The harness read <root>/eval while every real CV on this machine sat in
+ * <root>/eval-material/cvs — so it reported "no material" with five CVs on
+ * disk, and the answer to "why has the eval never run" was a folder name.
+ * Both are gitignored; this is the one people actually put things in.
+ */
+const DIR = path.join(ROOT, 'eval-material')
 const OUT = path.join(DIR, 'out')
 
 const argv = process.argv.slice(2)
@@ -81,11 +89,157 @@ if (has('list') || jobs.length === 0 || cvs.length === 0) {
   console.log(`  jobs: ${jobs.length}${jobs.length ? ` (${jobs.map((j) => j.name).join(', ')})` : ''}`)
   console.log(`  cvs:  ${cvs.length}${cvs.length ? ` (${cvs.map((c) => c.name).join(', ')})` : ''}`)
   if (jobs.length === 0 || cvs.length === 0) {
-    console.log('\nPut real job ads in eval/jobs/*.txt and real CVs in eval/cvs/*.txt.')
+    console.log('\nPut real job ads in eval-material/jobs/*.txt and real CVs in eval-material/cvs/*.txt.')
     console.log('Public job ads are fine. Fixtures check the plumbing, not the judgement —')
     console.log('every configuration agrees on a tidy invented CV, which is what makes')
     console.log('invented CVs useless for this particular question.')
   }
+  console.log('')
+  process.exit(0)
+}
+
+/* ------------------------------------------------- extraction agreement --- */
+
+/*
+ * A different question from the rest of this file, so a different mode.
+ *
+ * Everything below measures JUDGEMENT: does a cheaper model rank candidates
+ * the way the expensive one does. This measures READING: does a cheaper model
+ * pull the same facts off a CV. They are not the same question and the answer
+ * is probably not the same either — reading a document for what it says is the
+ * task small models are best at, and judging a person against a role is the
+ * one they are worst at.
+ *
+ * It matters because extraction runs on Opus today, once per CV, at roughly
+ * 2.4 cents. It is a read-and-report task already running at effort: low. If
+ * Haiku agrees with Opus on titles, skills and dates, that is the single
+ * cheapest saving available in this product, and it is invisible to a
+ * recruiter because nothing about the ranking changes.
+ *
+ * PROPOSAL ONLY. This measures and prints. It changes no default, and the
+ * production extraction model is still MODEL in ai.js.
+ *
+ * Agreement is measured per field rather than as one number, because the
+ * fields fail differently. A wrong title is visible on every card. A missing
+ * skill is invisible and costs retrieval. A wrong date shifts seniority and
+ * therefore the ranking. One percentage across the three would hide which of
+ * those is happening.
+ */
+if (has('extraction')) {
+  const EXTRACTION_MODELS = String(flag('models', 'claude-opus-5,claude-sonnet-5,claude-haiku-4-5'))
+    .split(',').map((m) => m.trim()).filter(Boolean)
+
+  const [BASELINE, ...CHALLENGERS] = EXTRACTION_MODELS
+
+  console.log(`\nExtraction agreement: ${cvs.length} CVs x ${EXTRACTION_MODELS.length} models`)
+  console.log(`  baseline: ${BASELINE}`)
+  console.log(`  against : ${CHALLENGERS.join(', ') || '(nothing)'}`)
+  console.log('')
+
+  if (has('dry')) {
+    console.log('--dry: nothing was called.\n')
+    process.exit(0)
+  }
+  if (!isConfigured()) {
+    console.error('No ANTHROPIC_API_KEY (or AI_PAUSED is set). Nothing to run.\n')
+    process.exit(1)
+  }
+  if (!has('yes')) {
+    console.error('This spends real money. Re-run with --yes when you mean it.\n')
+    process.exit(1)
+  }
+
+  const { extractProfileFields } = await import('../src/ai.js')
+  const { priceOf } = await import('../src/costs.js')
+
+  const norm = (v) => String(v ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+  const setOf = (list) => new Set((list ?? []).map(norm).filter(Boolean))
+
+  /* Jaccard, not "how many of the baseline's did it find". A model that
+     returns forty skills would score perfectly on recall alone while burying
+     the profile in noise, and noise in a skills list is what retrieval reads. */
+  const overlap = (a, b) => {
+    const A = setOf(a)
+    const B = setOf(b)
+    if (A.size === 0 && B.size === 0) return 1
+    const shared = [...A].filter((x) => B.has(x)).length
+    return shared / (A.size + B.size - shared)
+  }
+
+  /* Dates as a sorted list of year pairs: the same history read in a
+     different order is the same history. */
+  const dates = (history) => (history ?? [])
+    .map((role) => `${role?.start_year ?? '?'}-${role?.end_year ?? '?'}`)
+    .sort().join('|')
+
+  const results = new Map(EXTRACTION_MODELS.map((m) => [m, { profiles: new Map(), cost: 0, ms: 0 }]))
+
+  for (const cv of cvs) {
+    for (const model of EXTRACTION_MODELS) {
+      const started = Date.now()
+      let profile = null
+      try {
+        profile = await extractProfileFields(cv.text, { model })
+      } catch (error) {
+        console.warn(`  ${model} failed on ${cv.name}: ${error.message}`)
+      }
+      const slot = results.get(model)
+      slot.ms += Date.now() - started
+      const usage = profile?.usage ?? {}
+      const price = priceOf(model)
+      slot.cost += ((usage.inputTokens ?? usage.input_tokens ?? 0) * price.input
+        + (usage.outputTokens ?? usage.output_tokens ?? 0) * price.output) / 1_000_000
+      slot.profiles.set(cv.name, profile)
+    }
+    console.log(`  read ${cv.name}`)
+  }
+
+  console.log('')
+  console.log('AGREEMENT WITH ' + BASELINE.toUpperCase())
+  console.log('')
+  console.log('model                 title   skills   dates   seniority   cost/CV   s/CV')
+  console.log('-'.repeat(78))
+
+  const pct = (n) => `${Math.round(n * 100)}%`.padStart(5)
+
+  for (const model of EXTRACTION_MODELS) {
+    const slot = results.get(model)
+    const base = results.get(BASELINE)
+    let title = 0
+    let skills = 0
+    let when = 0
+    let seniority = 0
+    let counted = 0
+
+    for (const cv of cvs) {
+      const a = base.profiles.get(cv.name)
+      const b = slot.profiles.get(cv.name)
+      if (!a || !b) continue
+      counted += 1
+      if (norm(a.current_title) === norm(b.current_title)) title += 1
+      skills += overlap(a.skills, b.skills)
+      if (dates(a.employment_history) === dates(b.employment_history)) when += 1
+      if (norm(a.seniority) === norm(b.seniority)) seniority += 1
+    }
+
+    if (counted === 0) { console.log(`${model.padEnd(22)}(no comparable readings)`); continue }
+    console.log(
+      model.padEnd(22)
+      + pct(title / counted) + '   ' + pct(skills / counted) + '    '
+      + pct(when / counted) + '      ' + pct(seniority / counted) + '     '
+      + `$${(slot.cost / cvs.length).toFixed(4)}`.padStart(7) + '  '
+      + (slot.ms / cvs.length / 1000).toFixed(1).padStart(5),
+    )
+  }
+
+  console.log('')
+  console.log('Title and dates are exact-match; skills is Jaccard overlap, so a model')
+  console.log('that pads the list is penalised as much as one that misses entries.')
+  console.log('')
+  console.log('PROPOSAL ONLY - no default was changed. Extraction still runs on the')
+  console.log('model named in ai.js. What would make a switch defensible: agreement at')
+  console.log('or above roughly 95% on title and dates, since both move the ranking,')
+  console.log('and no systematic direction to the skills the cheaper model drops.')
   console.log('')
   process.exit(0)
 }

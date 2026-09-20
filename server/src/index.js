@@ -862,7 +862,8 @@ const upload = multer({
       if (!JD_EXTENSIONS.includes(ext)) {
         return cb(new HttpError(
           400,
-          `Unsupported file type "${ext}". Upload a PDF, Word file, or a picture of the posting.`,
+          `Unsupported file type "${ext}". Upload a PDF, Word or Markdown file, `
+          + 'or a picture of the posting.',
         ))
       }
       return cb(null, true)
