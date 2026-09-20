@@ -40,7 +40,7 @@
  * lower confidence than a stated skill, so they can surface somebody without
  * outranking a person who said the thing themselves.
  */
-import 'dotenv/config'
+import './env.mjs'
 import process from 'node:process'
 
 const argv = process.argv.slice(2)
@@ -64,6 +64,7 @@ const db = (await import('../src/db.js')).default
 const { getExtraction, saveExtraction } = await import('../src/profiles.js')
 const { runIntelligence } = await import('../src/matching/intelligence.js')
 const { priceOf } = await import('../src/costs.js')
+const { supportsEffort } = await import('../src/ai.js')
 
 /* The cheap model, per C2, and named here rather than read from the
    environment: this is a one-off whose cost was approved at this rate. */
@@ -164,7 +165,10 @@ for (const row of due) {
       max_tokens: 1000,
       system: SYSTEM,
       output_config: {
-        effort: 'low',
+        /* Haiku rejects an effort budget with a 400, and this script runs on
+           Haiku by design — sending it would fail every call on the server
+           and return an empty backfill that looked like a quiet success. */
+        ...(supportsEffort(MODEL) ? { effort: 'low' } : {}),
         format: {
           type: 'json_schema',
           schema: {

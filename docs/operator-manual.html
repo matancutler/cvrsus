@@ -1715,6 +1715,26 @@ node server/scripts/contact.mjs show <span class="c">&lt;id&gt;</span></pre>
 
         <article class="cmd-card">
           <div class="cmd-head">
+            <span class="cmd">npm run recall:test <span class="flag">-- --band 200 --yes</span></span>
+            <span class="risk risk-wreck">Spends</span>
+          </div>
+          <p class="what">
+            Measures what the deep-analysis cap costs you. Takes each job's real retrieval
+            ranking over the real pool, deeply analyses the top band of it, sorts by the fit
+            each candidate actually earned, and then counts how many of the final top 20 were
+            ranked below each candidate depth. Those are the people that depth would have lost.
+            Reads the job descriptions from <code>eval-material/jobs/*.txt</code>.
+          </p>
+          <p class="when">
+            Before changing <code>MATCH_POOL_SIZE</code> or the analysis cap. It can show a
+            depth is too shallow and can never show one is deep enough &mdash; anybody ranked
+            below the band is invisible to the test as well. Needs a pool several times larger
+            than the top list to mean anything, so it is a production command.
+          </p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
             <span class="cmd">npm run infer:backfill</span>
             <span class="risk risk-read">Read</span>
           </div>

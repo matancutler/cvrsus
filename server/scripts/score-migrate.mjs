@@ -87,7 +87,7 @@
  * Rows with no verdicts are carried forward unchanged — they were scored
  * deterministically and the new arithmetic has nothing to say about them.
  */
-import 'dotenv/config'
+import './env.mjs'
 import process from 'node:process'
 
 const argv = process.argv.slice(2)

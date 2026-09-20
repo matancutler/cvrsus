@@ -51,6 +51,19 @@ export function isConfigured() {
   return Boolean(process.env.ANTHROPIC_API_KEY) && !isPaused()
 }
 
+/*
+ * Which models accept an effort budget.
+ *
+ * Haiku 4.5 does not, and sending it one is a 400 rather than a warning — so
+ * every call fails, extraction falls back to keyword matching, and the
+ * result looks like a model that reads CVs extremely badly rather than a
+ * model that was never asked. The extraction eval measured exactly that and
+ * scored Haiku at 0% agreement before anybody noticed it had not run.
+ */
+export function supportsEffort(model) {
+  return !/haiku/i.test(String(model ?? ''))
+}
+
 /* Exported for the one-off scripts, which need the configured client and
    must not build a second one with its own idea of the key and the timeouts. */
 export function getClient() {
@@ -223,10 +236,10 @@ export async function extractProfileFields(cvText, { signal, model = MODEL } = {
       model,
       max_tokens: 8000,
       system: EXTRACTION_SYSTEM,
-      // Extraction is a read-and-report task, so the cheapest effort that still
-      // reads carefully is the right setting.
       output_config: {
-        effort: 'low',
+        // Extraction is a read-and-report task, so the cheapest effort that
+        // still reads carefully is the right setting — where it is accepted.
+        ...(supportsEffort(model) ? { effort: 'low' } : {}),
         format: { type: 'json_schema', schema: EXTRACTION_SCHEMA },
       },
       messages: [{
