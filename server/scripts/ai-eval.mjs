@@ -293,13 +293,51 @@ for (const job of jobs) {
     continue
   }
 
-  const requirements = requirementsFrom(profile)
+  /*
+   * The model's answer, in the shape the rest of the product reads.
+   *
+   * analyseJobDescription returns the raw JSON: must_haves, work_arrangement,
+   * location at the top level. requirementsFrom reads mustHaves, and
+   * jobProfile.js does that conversion on the production path — which this
+   * script does not go through.
+   *
+   * So `matchProfile.mustHaves` was undefined and take() took nothing, while
+   * `preferred` and `contextual` happen to be spelled the same in both shapes
+   * and came through fine. The eval ran on a requirement list with EVERY
+   * MUST-HAVE MISSING: not demoted, absent. Every fit it computed was a
+   * judgement about the optional half of the job, and the MUST-HAVE column
+   * compared zero requirements and printed 0%, which read as total
+   * disagreement rather than as nothing measured.
+   *
+   * Converted here rather than made tolerant in requirementsFrom: a scorer
+   * that silently accepts two shapes is how one of them stops being tested.
+   */
+  const matchProfile = {
+    title: profile.title ?? null,
+    interpretation: profile.interpretation ?? null,
+    mustHaves: profile.must_haves ?? [],
+    preferred: profile.preferred ?? [],
+    contextual: profile.contextual ?? [],
+    hardConstraints: profile.hard_constraints ?? [],
+    logistics: {
+      location: profile.location ?? null,
+      workArrangement: profile.work_arrangement ?? null,
+      languages: profile.languages_required ?? [],
+    },
+  }
+
+  const requirements = requirementsFrom(matchProfile)
+
+  if (requirements.filter((r) => r.tier === 'must_have').length === 0) {
+    console.log('  no must-have requirements were read from this job description')
+  }
+
   const criteria = {
-    title: profile.title ?? '',
+    title: matchProfile.title ?? '',
     jobDescription: job.text,
     requirements,
-    location: profile.logistics?.location ?? null,
-    workArrangement: profile.logistics?.workArrangement ?? null,
+    location: matchProfile.logistics.location,
+    workArrangement: matchProfile.logistics.workArrangement,
   }
 
   for (const config of chosen) {
@@ -406,7 +444,12 @@ for (const config of chosen.slice(1)) {
     config,
     exact: total ? Math.round((exact / total) * 100) : 0,
     adjacent: total ? Math.round((adjacent / total) * 100) : 0,
-    mustHave: mustTotal ? Math.round((mustExact / mustTotal) * 100) : 0,
+    /* null, not 0, when nothing was compared. Printing 0% for "no must-have
+       requirements existed" is the difference between a configuration that
+       disagrees about everything and one nobody asked — and the adoption
+       rule below reads this column. */
+    mustHave: mustTotal ? Math.round((mustExact / mustTotal) * 100) : null,
+    mustTotal,
     spearman: spearman(fitPairs),
     cost: usage.get(config).cost,
     perCv: usage.get(config).calls ? usage.get(config).cost / usage.get(config).calls : 0,
@@ -421,7 +464,8 @@ console.log('CONFIG            ALL   ADJACENT  MUST-HAVE  RANKS   $/CV     TOTAL
 for (const row of summary) {
   console.log(
     `${row.config.padEnd(17)} ${String(`${row.exact}%`).padStart(4)}  `
-    + `${String(`${row.adjacent}%`).padStart(7)}  ${String(`${row.mustHave}%`).padStart(8)}  `
+    + `${String(`${row.adjacent}%`).padStart(7)}  `
+    + `${String(row.mustHave === null ? 'none' : `${row.mustHave}%`).padStart(8)}  `
     + `${row.spearman.toFixed(2).padStart(5)}  $${row.perCv.toFixed(3)}  $${row.cost.toFixed(2)}`,
   )
 }
@@ -451,7 +495,7 @@ fs.writeFileSync(path.join(OUT, 'disagreements.txt'),
 fs.writeFileSync(path.join(OUT, 'key.txt'), key, 'utf8')
 fs.writeFileSync(path.join(OUT, 'summary.json'), JSON.stringify({ baseline, summary }, null, 2), 'utf8')
 
-console.log(`${disagreements.length} must-have disagreements written to eval/out/disagreements.txt`)
+console.log(`${disagreements.length} must-have disagreements written to ${path.relative(ROOT, OUT)}/disagreements.txt`)
 console.log('Read them first. The key is in eval/out/key.txt.\n')
 
 /** Rank correlation. Ties are averaged, which matters: fits repeat a lot. */
