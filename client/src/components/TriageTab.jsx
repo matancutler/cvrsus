@@ -959,8 +959,12 @@ function TriageResults({ id, initial, onBalanceChanged, meId = null, folders = [
       const data = await post(`/api/hr/folders/${target}/triage-items`, { applicantId }, 'recruiter')
       if (data.folders) setFolders(data.folders)
       if (data.filed) setFiled(data.filed)
-      if (data.tagged) setTagged(data.tagged)
-      if (data.commented) setCommented(data.commented)
+      /* Not tagged/commented: POST folders/:id/triage-items returns
+         { folders, filed } and nothing else, so the two guards that used to sit
+         here were permanently false — and they were the ONLY place those two
+         pieces of state were ever filled from the server. They belong on the
+         results response, which actually carries them, and that is where they
+         are now. */
     } catch (err) {
       setError(err.message)
     } finally {

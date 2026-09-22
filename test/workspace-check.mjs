@@ -1580,10 +1580,35 @@ check('a candidate in a folder is drawn by the search card',
  * to press by accident and the only one that takes something away.
  */
 check('and the card keeps the way out of the folder',
-  /onRemove=\{\(\) => removeItem\(item\.candidate_id\)\}/.test(panel)
+  /removeItem\(item\.candidate_id\)/.test(panel)
   && /key: 'remove', label: removeLabel, danger: true/.test(panel)
   && /removeLabel=\{`Remove from \$\{opened\.name\}`\}/.test(panel),
   'the one action a folder row has that a search result never needs')
+
+/*
+ * The same action for the other kind of row.
+ *
+ * A Triage applicant filed into a folder has candidate_id: null by design, and
+ * every handler on this card was wired to it — so Remove reached
+ * /api/hr/folders/items/null, deleted nothing, and answered 200 with the
+ * unchanged list. The row stayed where it was and nothing said why. The
+ * applicant's own route existed the whole time and this screen never called it.
+ */
+check('a Triage applicant is removed through its own route',
+  /removeTriageItem\(item\.triage_applicant_id\)/.test(panel)
+  && /del\(`\/api\/hr\/folders\/triage-items\/\$\{applicantId\}`/.test(panel),
+  'folders/items/:id takes a candidate id, and an applicant does not have one')
+
+check('and it is not offered the two actions it cannot perform',
+  /canSave=\{item\.candidate_id != null\}/.test(panel)
+  && /onOpen=\{item\.candidate_id == null/.test(panel),
+  'a menu entry that does nothing is worse than an absent one')
+
+check('a card with nothing to open is not dressed as a button',
+  /role=\{onOpen \? 'button' : undefined\}/.test(panel)
+  && /draggable=\{candidate\.id != null\}/.test(panel),
+  'the pointer, the focus ring and the drag all promised something that could '
+  + 'not happen')
 /* And the folder card can file somebody elsewhere, not only let them go.
    Moving between folders was otherwise two gestures through two screens: take
    them out here, find them again in a search, put them back. */
@@ -2008,5 +2033,80 @@ check('and typing a name does not fling the filter panel open',
   'activeCount drives both the funnel badge and the auto-open, and this control is not behind the funnel')
 check('a folder offers it, and so does the reveal history',
   (panel.match(/nameSearch\b/g) ?? []).length === 2)
+
+section('Comment dots belong to one kind of thing at a time')
+
+/*
+ * A marketplace candidate and a Triage applicant are numbered independently,
+ * and the shared count store was keyed on the number alone and loaded only
+ * from the marketplace endpoint. Triage applicant #42 wore candidate #42's
+ * dot; writing a note on the applicant set the count for the candidate and put
+ * a dot on a stranger in Search, Folders and Reveal History for the session.
+ */
+const commented = read('../client/src/commented.js')
+const popover = read('../client/src/components/CommentsPopover.jsx')
+const triage = read('../client/src/components/TriageTab.jsx')
+
+check('the key carries a scope',
+  /const key = \(id, scope\) => `\$\{scope\}:\$\{Number\(id\)\}`/.test(commented),
+  'two independent id sequences shared one map, so they overwrote each other')
+check('the shared endpoint fills the candidate scope only',
+  /key\(row\.candidateId, 'candidate'\)/.test(commented),
+  '/api/hr/comments/commented groups candidate_comments, and nothing else')
+check('a whole scope can be primed from an index',
+  /export function seedCommentCounts\(index, scope\)/.test(commented),
+  'Triage already receives its counts with the results; asking per row would be '
+  + 'twenty-five requests to learn that most rows have none')
+check('reads and writes both take the scope',
+  /useCommentCount\(candidateId, scope = 'candidate'\)/.test(commented)
+  && /setCommentCount\(candidateId, count, scope = 'candidate'\)/.test(commented))
+check('the popover reads its own scope',
+  /useCommentCount\(candidateId, scope\)/.test(popover)
+  && (popover.match(/setCommentCount\(candidateId, data\.comments\.length, scope\)/g) ?? []).length === 3,
+  'the dot and all three writes, or the fix is half done')
+check('and Triage says which scope it is in',
+  /scope="triage"/.test(triage))
+
+section('Triage reads the tags the server has been sending all along')
+
+/*
+ * The results route sends `tagged` and `commented` for the whole company with
+ * every page. The only code that read them sat inside fileInto, against a
+ * response that returns neither — so both guards were permanently false, the
+ * state was seeded empty at mount and never filled, and Triage rows showed no
+ * tags at all however many the team had written.
+ */
+check('the poll reads them',
+  /if \(data\.tagged\) setTagged\(data\.tagged\)/.test(triage))
+check('so does Show More',
+  (triage.match(/if \(data\.tagged\) setTagged\(data\.tagged\)/g) ?? []).length === 2,
+  'a row that arrives on page two has tags too')
+check('and the dots are primed from the same index',
+  (triage.match(/seedCommentCounts\(data\.commented, 'triage'\)/g) ?? []).length === 2)
+
+section('Reveal History opens a dialog that can report a failure')
+
+/*
+ * CandidateDialog calls onError bare in four places — the profile fetch, the
+ * message send, close/reopen, and the CV download. This caller omitted it, so
+ * each of those raised "onError is not a function" inside an uncaught promise:
+ * the dialog sat on Loading for ever and the recruiter was told nothing.
+ */
+const revealsTab = panel.slice(
+  panel.indexOf('function RevealsTab'),
+  panel.indexOf('function FoldersTab'),
+)
+
+check('the reveal log passes onError',
+  /onError=\{setError\}/.test(revealsTab),
+  'four call sites invoke it with no guard, and the failure vanished into an '
+  + 'unhandled rejection')
+check('and meId rather than me',
+  /meId=\{me\?\.recruiter\?\.id \?\? null\}/.test(revealsTab)
+  && !/^\s*me=\{me\}$/m.test(revealsTab),
+  'with meId unset, a profile you revealed yourself read "Revealed by <your own name>"')
+check('the reveal log offers no status filter',
+  !/statuses=/.test(revealsTab) && /statuses=\{statuses\}/.test(panel),
+  'a reveal row carries no status, so choosing one could only ever empty the screen')
 
 finish()
