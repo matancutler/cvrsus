@@ -10826,6 +10826,31 @@ html:has(.workspace-shell) { scrollbar-gutter: auto; }
   font-size: 0.88rem;
 }
 
+/*
+ * Inferred, and it has to look inferred.
+ *
+ * A dashed outline and no fill: the stated skills are solid chips, and the
+ * difference has to be visible at a glance rather than only in the label
+ * above them. Same size and shape, so the row still reads as one kind of
+ * thing - these are skills, they are simply ours rather than theirs.
+ */
+.chip-inferred {
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px dashed var(--border-strong);
+  font-style: italic;
+}
+
+/* The sentence under a skill row that needs explaining. Small, muted, and
+   directly beneath the chips it is about. */
+.skill-row-note {
+  margin: 0.25rem 0 0.6rem;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+  max-width: 46ch;
+}
+
 .chip-review {
   background: var(--warn-soft);
   color: var(--warn);

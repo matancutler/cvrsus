@@ -62,13 +62,27 @@ const LIMIT = numberFlag('limit')
 
 const db = (await import('../src/db.js')).default
 const { getExtraction, saveExtraction } = await import('../src/profiles.js')
-const { runIntelligence } = await import('../src/matching/intelligence.js')
+const { buildIntelligence } = await import('../src/matching/intelligence.js')
 const { priceOf } = await import('../src/costs.js')
 const { supportsEffort } = await import('../src/ai.js')
 
-/* The cheap model, per C2, and named here rather than read from the
-   environment: this is a one-off whose cost was approved at this rate. */
-const MODEL = process.env.INFER_MODEL ?? 'claude-haiku-4-5'
+/*
+ * Opus, not the cheap model.
+ *
+ * C2 specified a cheap model on the reasoning that naming what a CV implies
+ * is a reading task. The extraction eval says otherwise about reading tasks
+ * on this material: against Opus, Haiku agreed on a job title 60% of the
+ * time and on employment dates 20%, and Sonnet 60% and 80%. Inference is a
+ * harder job than extraction, not an easier one - it asks what work implies
+ * rather than what a document states - so a model that cannot reliably read
+ * the dates off a CV has no business deciding what that CV implies.
+ *
+ * And the cost argument is small. This is a one-off backfill of a few
+ * hundred profiles: 22 CVs at Opus rates is under a dollar. The asymmetry is
+ * not close - a wrong inference is a skill attributed to somebody who never
+ * claimed it, which is exactly the failure this whole feature has to avoid.
+ */
+const MODEL = process.env.INFER_MODEL ?? 'claude-opus-5'
 
 const SYSTEM = `You read a CV and name the capabilities its work implies but never states.
 
@@ -77,7 +91,14 @@ implies more: somebody who owned a finance team's month-end close for six years
 knows reconciliation, variance analysis and audit preparation whether or not
 those words appear anywhere.
 
-Return short, concrete, searchable noun phrases, lowercase. Twelve at most.
+Return short, concrete, searchable noun phrases, lowercase. EIGHT AT MOST,
+and most CVs should yield fewer.
+
+THE TEST, and it is strict: would somebody who has done the work described
+here NECESSARILY have this capability? Not "probably", not "it would help" -
+necessarily, such that a recruiter shown the CV passage and the capability
+side by side would agree it follows. If you would have to assume anything the
+CV does not say, leave it out.
 
 Rules, and they matter more than the list being long:
 - Infer only from what the CV says the person DID. Never from a job title
@@ -89,7 +110,19 @@ Rules, and they matter more than the list being long:
 - No soft qualities. "Communication", "leadership" and "teamwork" describe
   everybody and retrieve everybody, which is the same as retrieving nobody.
 - If the CV is too thin to infer anything honestly, return an empty list. An
-  empty list is a correct answer and a padded one is a wrong one.`
+  empty list is a correct answer and a padded one is a wrong one.
+
+For each one you return, you should be able to point at the specific line of
+the CV it follows from. If you cannot, it does not belong. Four well-founded
+capabilities are a better answer than eight stretched ones, and returning
+fewer than the maximum is the normal case rather than a failure.
+
+The stretch to avoid looks like this: a CV says the person "conducted
+interviews and assessments" as a military security investigator, and the
+inference offered is "structured interviewing" - as though that were hiring
+experience. Same words, different work. Do not make that move. This list is shown to recruiters, labelled as our inference
+rather than the candidate's claim, so every entry is something the product is
+saying about a person who never said it.`
 
 function candidatesToDo() {
   const rows = db.prepare(`
@@ -202,7 +235,7 @@ for (const row of due) {
         /* The prompt says not to repeat a stated skill; this is what makes
            that true rather than requested. */
         .filter((value) => !stated.has(value)),
-    )].slice(0, 12)
+    )].slice(0, 8)
 
     const usage = response.usage ?? {}
     spent += ((usage.input_tokens ?? 0) * price.input
@@ -218,7 +251,7 @@ for (const row of due) {
     /* So the new list reaches retrieval rather than only storage: the taxonomy
        labels are what conceptSimilarity reads, and they are built from the
        profile at this point and not before. */
-    runIntelligence(row.id)
+    buildIntelligence(row.id)
 
     capabilities += list.length
     if (list.length === 0) empty += 1

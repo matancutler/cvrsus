@@ -433,6 +433,31 @@ for (const config of chosen.slice(1)) {
             disagreements.push({
               job: job.name, cv: cv.name, requirement: requirement.text,
               pair: `${baseline} vs ${config}`, sides,
+              /*
+               * The same case, NOT blinded, for the machine-readable dump.
+               *
+               * `sides` above is deliberately sorted by verdict text so a
+               * person reading disagreements.txt cannot tell which setup
+               * produced which reading — that blinding is the point of the
+               * file. But it also made the file unusable for any later
+               * analysis that needs to say "the current setting said X and
+               * medium said Y", and re-running the eval to recover an
+               * attribution it already had is paying twice for one answer.
+               */
+              attributed: {
+                requirementId: requirement.id,
+                tier: requirement.tier,
+                [baseline]: {
+                  verdict: a,
+                  quote: base.byId.get(requirement.id)?.quote ?? '',
+                  reason: base.byId.get(requirement.id)?.reason ?? '',
+                },
+                [config]: {
+                  verdict: b,
+                  quote: other.byId.get(requirement.id)?.quote ?? '',
+                  reason: other.byId.get(requirement.id)?.reason ?? '',
+                },
+              },
             })
           }
         }
@@ -493,6 +518,27 @@ fs.writeFileSync(path.join(OUT, 'disagreements.txt'),
   + blind, 'utf8')
 
 fs.writeFileSync(path.join(OUT, 'key.txt'), key, 'utf8')
+
+/*
+ * The same disagreements, attributed and machine-readable.
+ *
+ * disagreements.txt is for a person to read blind; this is for anything that
+ * has to work with the data afterwards. Written alongside rather than instead,
+ * because opening this one first defeats the blinding — which is why it is a
+ * .json nobody reads by accident.
+ */
+fs.writeFileSync(
+  path.join(OUT, 'disagreements.json'),
+  JSON.stringify(disagreements.map((row, index) => ({
+    n: index + 1,
+    job: row.job,
+    cv: row.cv,
+    requirement: row.requirement,
+    pair: row.pair,
+    ...row.attributed,
+  })), null, 2),
+  'utf8',
+)
 fs.writeFileSync(path.join(OUT, 'summary.json'), JSON.stringify({ baseline, summary }, null, 2), 'utf8')
 
 console.log(`${disagreements.length} must-have disagreements written to ${path.relative(ROOT, OUT)}/disagreements.txt`)

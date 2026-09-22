@@ -4808,6 +4808,17 @@ app.get('/api/hr/candidates/:id', recruiterOnly, refuseIfBlocked(), (req, res) =
     /* Where they have worked, as fixed labels. Free of the reveal gate on
        purpose: an industry is a fact about the work, not about the person. */
     industries: industriesFor(candidate.id),
+    /*
+     * What the CV implies but never says, sent separately from the skills the
+     * candidate listed and never merged with them.
+     *
+     * It was produced, stored and used for retrieval, and shown nowhere - so
+     * the product was surfacing people partly on the strength of claims it had
+     * made about them and could not point at. A recruiter who asks why
+     * somebody appeared deserves to see the whole answer, including the part
+     * we inferred, and labelled as inferred so they can weigh it accordingly.
+     */
+    inferredCapabilities: effectiveProfile(candidate.id).inferredCapabilities ?? [],
     /* And what this team calls them, so a profile opened from anywhere shows
        the same strip the row does. */
     tags: listTags({ companyId, candidateId: candidate.id }),

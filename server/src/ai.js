@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk'
 
 import { detectSkills } from './skills.js'
 import { checkQuotes } from './matching/score.js'
+import { proseProblem, usableOrPlaceholder } from './matching/prose.js'
 
 /**
  * Every Claude call in the product goes through here.
@@ -120,8 +121,17 @@ const EXTRACTION_SCHEMA = {
      * different standing: one is a claim the candidate made, the other is
      * ours. Retrieval matches both; judgement is told the difference (see
      * MATCH_SYSTEM) and is forbidden from treating an inference as evidence.
+     * It is also shown to recruiters, labelled as inferred, which is the
+     * other reason the test below is necessity rather than plausibility.
      */
-    inferred_capabilities: { type: 'array', items: { type: 'string' } },
+    inferred_capabilities: {
+      type: 'array',
+      items: { type: 'string' },
+      /* A ceiling in the schema as well as in the prompt. A list of thirty is
+         not a richer profile, it is a model padding, and every entry is a
+         claim about somebody who did not make it. */
+      maxItems: 8,
+    },
     languages: { type: 'array', items: { type: 'string' } },
     education: {
       type: 'array',
@@ -1503,8 +1513,17 @@ export async function analyseMatch({
     + (wanted ? `<recruiter_criteria>\n${wanted}\n</recruiter_criteria>\n\n` : '')
     + (instruction ? `<recruiter_instruction>\n${instruction}\n</recruiter_instruction>\n\n` : '')
 
-  try {
-    const response = await anthropic.messages.create({
+  /*
+   * The request, as a function, so it can be made twice.
+   *
+   * It is identical both times on purpose. The failure being retried is a
+   * model losing the thread and emitting one token until it stops - a
+   * sampling accident, not a misunderstanding of the prompt - so the same
+   * request is the right second attempt, and adding a "you did that wrong"
+   * turn would change what is being asked as well as cost another full
+   * prefix.
+   */
+  const ask = () => anthropic.messages.create({
       model,
       // Room for the reasoning plus quoted evidence for several claims.
       max_tokens: 8000,
@@ -1527,12 +1546,55 @@ export async function analyseMatch({
           { type: 'text', text: `<candidate>\n${shown}\n</candidate>` },
         ],
       }],
-    }, { signal })
+  }, { signal })
+
+  try {
+    let response = await ask()
 
     if (response.stop_reason === 'refusal') return null
 
-    const text = response.content.find((block) => block.type === 'text')?.text
+    let text = response.content.find((block) => block.type === 'text')?.text
     if (!text) return null
+
+    /*
+     * One retry, when what came back is not language.
+     *
+     * A verdict arrived from a real analysis with its reason set to the word
+     * "ok" repeated twenty-one times. It satisfied the schema - a string
+     * under 180 characters - parsed as JSON, and was stored, and would have
+     * been shown to a recruiter as this product's explanation of a judgement.
+     * A JSON schema constrains shape, not sense.
+     *
+     * Retried rather than patched over because the rest of that answer is
+     * suspect too: a model that degenerated in one field was not attending to
+     * the others either, and the verdicts it produced decide who gets read.
+     * Once, not twice - the second failure is a signal about the input, and
+     * paying a third time for the same document does not change it.
+     */
+    const degenerate = (raw) => {
+      let parsed
+      try {
+        parsed = JSON.parse(raw)
+      } catch {
+        return 'unparseable'
+      }
+      const bad = (value, kind) => proseProblem(value, { kind }) !== null
+        && proseProblem(value, { kind }) !== 'empty'
+      if (bad(parsed?.reasoning, 'explanation')) return 'reasoning'
+      for (const row of parsed?.criteria ?? []) {
+        if (bad(row?.reason, 'reason')) return `reason on ${row?.requirement_id ?? '?'}`
+      }
+      return null
+    }
+
+    const firstProblem = degenerate(text)
+    if (firstProblem) {
+      console.warn(`  match-analysis: unusable prose (${firstProblem}); asking once more`)
+      response = await ask()
+      if (response.stop_reason === 'refusal') return null
+      const retried = response.content.find((block) => block.type === 'text')?.text
+      if (retried) text = retried
+    }
 
     /* The provider's own token counts, carried out with the analysis.
        Section 9 of the Triage brief asks for real per-stage cost telemetry, and
@@ -1540,6 +1602,29 @@ export async function analyseMatch({
        character counts would be a guess dressed as a measurement. Ignored by
        every caller that does not want it. */
     const answer = normalizeMatch(JSON.parse(text))
+
+    /*
+     * Whatever survived the retry is made safe to store.
+     *
+     * The placeholder is written to be obviously a placeholder: the
+     * alternatives are storing the mangled text, or storing an empty string
+     * that renders as nothing, and both present the absence as though it were
+     * the product's considered opinion. The verdict and the quote are
+     * unaffected and are what a recruiter should read instead.
+     */
+    let replaced = 0
+    const note = () => { replaced += 1 }
+
+    answer.reasoning = usableOrPlaceholder(answer.reasoning, { kind: 'explanation', onProblem: note })
+    answer.criteria = (answer.criteria ?? []).map((row) => ({
+      ...row,
+      reason: usableOrPlaceholder(row.reason, { kind: 'reason', onProblem: note }),
+    }))
+
+    if (replaced > 0) {
+      console.warn(`  match-analysis: ${replaced} field(s) replaced with a placeholder `
+        + 'after the retry also came back unusable')
+    }
 
     /*
      * A quoted line that is not in the document is not evidence.

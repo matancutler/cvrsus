@@ -1715,6 +1715,41 @@ node server/scripts/contact.mjs show <span class="c">&lt;id&gt;</span></pre>
 
         <article class="cmd-card">
           <div class="cmd-head">
+            <span class="cmd">npm run prose:scan</span>
+            <span class="risk risk-read">Read</span>
+          </div>
+          <p class="what">
+            Finds model-written text already in storage that is not language: a reason that is
+            empty, one token repeated, far over its length cap, or without a letter in it. A
+            verdict was once stored with its reason set to the word &ldquo;ok&rdquo; repeated
+            twenty-one times &mdash; it satisfied the schema, parsed as JSON, and would have been
+            shown to a recruiter as this product&rsquo;s explanation of a judgement.
+            <code>-- --show</code> prints the offending text.
+          </p>
+          <p class="when">
+            After any run of analyses you want to trust. The check now runs before anything is
+            written, so this is for rows written before it existed.
+          </p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">npm run prose:scan <span class="flag">-- --repair</span></span>
+            <span class="risk risk-write">Writes</span>
+          </div>
+          <p class="what">
+            Replaces corrupt reasons and explanations with a placeholder that reads as a
+            placeholder. The verdict, the quote and the score are untouched &mdash; only the prose
+            &mdash; and strengths and gaps are recomputed, since they are derived from reason.
+          </p>
+          <p class="when">
+            After reading the scan. Re-analysing the row instead would be the thorough answer and
+            costs a model call per candidate per job; this makes the row honest for nothing.
+          </p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
             <span class="cmd">npm run seed:candidates <span class="flag">-- --run</span></span>
             <span class="risk risk-wreck">Spends</span>
           </div>

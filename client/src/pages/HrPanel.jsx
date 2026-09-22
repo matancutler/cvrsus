@@ -7884,6 +7884,31 @@ function CandidateProfileView({ candidate, data, onError, onRead }) {
       <SkillRow label="Industries" skills={data.industries} tone="neutral" />
       <SkillRow label="Skills" skills={candidate.skills} tone="neutral" />
 
+      {/*
+        What we think the work implies, kept visibly apart from what the
+        candidate wrote.
+
+        These are used in retrieval, so they help decide who a recruiter sees;
+        showing them is what makes that answerable rather than hidden. They
+        are styled differently and labelled as ours on purpose - presented in
+        the same grey as the stated skills they would read as things the
+        person claimed, which is the one thing this list must never be
+        mistaken for.
+      */}
+      {(data.inferredCapabilities?.length ?? 0) > 0 && (
+        <>
+          <SkillRow
+            label="Likely, from the CV"
+            skills={data.inferredCapabilities}
+            tone="inferred"
+          />
+          <p className="skill-row-note">
+            Our reading of what this experience implies, not skills the candidate
+            listed. Used to help find them; never treated as evidence when scoring.
+          </p>
+        </>
+      )}
+
       {links.length > 0 && (
         <div>
           <h4 className="modal-subhead">Links</h4>
