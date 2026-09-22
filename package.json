@@ -84,7 +84,8 @@
     "infer:backfill": "node server/scripts/infer-capabilities.mjs",
     "recall:test": "node server/scripts/recall-test.mjs",
     "seed:candidates": "node server/scripts/seed-candidates.mjs",
-    "prose:scan": "node server/scripts/prose-scan.mjs"
+    "prose:scan": "node server/scripts/prose-scan.mjs",
+    "test:prose": "node test/prose-check.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",
