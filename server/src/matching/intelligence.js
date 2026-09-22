@@ -620,20 +620,42 @@ export function conceptIdsFor(candidateId) {
   `).all(candidateId, version).map((row) => row.concept_id)
 }
 
-/** Every candidate's concepts in one query — retrieval must not loop over rows. */
+/**
+ * Every candidate's concepts in one query — retrieval must not loop over rows.
+ *
+ * Carries the confidence, which it did not, and that absence made a stated
+ * safeguard imaginary. C2 stores an inferred capability at 0.45 against 0.6
+ * for a skill the candidate actually wrote, on the reasoning that an
+ * inference may surface somebody and must not outrank a person who named the
+ * thing themselves. This is the only function that hands concepts to
+ * retrieval, and it selected the id alone — so every label arrived weighing
+ * exactly the same and the separation existed only in the row that produced
+ * it.
+ *
+ * The strongest label wins where a concept is reached more than one way: a
+ * candidate who both wrote "reconciliation" and had it inferred should be
+ * scored on what they wrote.
+ */
 export function conceptIndex() {
   const rows = db.prepare(`
-    SELECT l.candidate_id AS id, l.concept_id AS concept
+    SELECT l.candidate_id AS id, l.concept_id AS concept, l.confidence AS confidence
     FROM candidate_taxonomy_labels l
     JOIN candidates c ON c.id = l.candidate_id AND c.profile_version = l.profile_version
   `).all()
 
   const index = new Map()
   for (const row of rows) {
-    if (!index.has(row.id)) index.set(row.id, [])
-    index.get(row.id).push(row.concept)
+    if (!index.has(row.id)) index.set(row.id, new Map())
+    const held = index.get(row.id)
+    const weight = Number.isFinite(row.confidence) ? row.confidence : 1
+    held.set(row.concept, Math.max(held.get(row.concept) ?? 0, weight))
   }
-  return index
+
+  /* Returned as arrays of { id, confidence } so conceptSimilarity can weigh
+     them and everything that only wants the ids can still map over it. */
+  return new Map([...index].map(([id, held]) => [
+    id, [...held].map(([concept, confidence]) => ({ id: concept, confidence })),
+  ]))
 }
 
 /**

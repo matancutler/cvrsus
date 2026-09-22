@@ -6307,6 +6307,20 @@ app.post('/api/hr/search/:sessionId/save', recruiterOnly, (req, res, next) => {
         missingRequired: strings(shown.missingRequired),
         matchedPreferred: strings(shown.matchedPreferred),
         missingPreferred: strings(shown.missingPreferred),
+        /*
+         * And how much of the job the number rested on.
+         *
+         * Without these the snapshot carries the score and drops the warning
+         * attached to it, so a candidate flagged "Needs review" in the search
+         * results is filed into a folder and shows there as a bare number - the
+         * one surface where a recruiter revisits a score weeks later, stripped
+         * of the one thing that says how far to trust it. Bounded like every
+         * other client-supplied field here.
+         */
+        coverage: Number.isFinite(Number(shown.coverage))
+          ? Math.max(0, Math.min(100, Math.round(Number(shown.coverage))))
+          : null,
+        needsReview: shown.needsReview === true,
       }
 
       scored = {

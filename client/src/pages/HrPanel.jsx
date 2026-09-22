@@ -6943,8 +6943,15 @@ function FoldersTab({ me = null, folders, setFolders, statuses = [] }) {
               scoredAt: openItem.scoredAt ?? null,
               /* The reading, in the shape the score view already renders — the
                  requirement chips and Claude's sentence, as they stood. */
-              analysis: openItem.analysis?.reasoning
-                ? { reasoning: openItem.analysis.reasoning }
+              /* Coverage carried too. Rebuilt as { reasoning } alone, the
+                 dialog opened from a folder was structurally unable to show
+                 the warning the card beside it was showing. */
+              analysis: openItem.analysis
+                ? {
+                  reasoning: openItem.analysis.reasoning ?? null,
+                  coverage: openItem.analysis.coverage ?? null,
+                  needsReview: openItem.analysis.needsReview ?? false,
+                }
                 : null,
               matchedRequired: openItem.analysis?.matchedRequired ?? [],
               missingRequired: openItem.analysis?.missingRequired ?? [],

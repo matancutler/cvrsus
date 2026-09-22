@@ -213,18 +213,48 @@ export function interestPermits(interestConceptId, roleConceptIds) {
 export function conceptSimilarity(a, b) {
   if (a.length === 0 || b.length === 0) return null
 
-  const setB = new Set(b)
+  /*
+   * The candidate side may be weighted, and usually is.
+   *
+   * Each entry is either a bare concept id or { id, confidence }. A skill the
+   * candidate wrote carries 0.6; a capability we inferred from what they
+   * described carries 0.45 (see C2 in intelligence.js). Matching an inferred
+   * concept is worth proportionally less than matching a stated one, which is
+   * the whole point of storing the two at different confidences — and until
+   * this function could see them, it was a distinction that existed nowhere
+   * but the database.
+   *
+   * Normalised against the strongest a label can be, so an all-stated
+   * candidate scores exactly as they did before this and only the inferred
+   * ones are discounted.
+   */
+  const STRONGEST = 0.6
+  const weightOf = (entry) => {
+    const raw = typeof entry === 'string' ? 1 : (entry?.confidence ?? 1)
+    return Math.min(1, (Number.isFinite(raw) ? raw : 1) / STRONGEST)
+  }
+  const idOf = (entry) => (typeof entry === 'string' ? entry : entry?.id)
+
+  const weights = new Map()
+  for (const entry of b) {
+    const id = idOf(entry)
+    if (!id) continue
+    weights.set(id, Math.max(weights.get(id) ?? 0, weightOf(entry)))
+  }
+
+  const ids = [...weights.keys()]
   let total = 0
-  for (const id of a) {
-    if (setB.has(id)) { total += 1; continue }
+  for (const entry of a) {
+    const id = idOf(entry)
+    if (weights.has(id)) { total += weights.get(id); continue }
     const concept = BY_ID.get(id)
     const parent = concept?.parent
-    if (parent && (setB.has(parent) || b.some((other) => BY_ID.get(other)?.parent === parent))) {
-      total += 0.5
+    if (parent && (weights.has(parent) || ids.some((other) => BY_ID.get(other)?.parent === parent))) {
+      total += 0.5 * (weights.get(parent) ?? 1)
     }
   }
 
-  return Math.min(1, total / Math.min(a.length, b.length))
+  return Math.min(1, total / Math.min(a.length, ids.length))
 }
 
 export const TAXONOMY_VERSION = VERSIONS.taxonomy

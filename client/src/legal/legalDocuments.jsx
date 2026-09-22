@@ -1205,9 +1205,12 @@ function PrivacyBody() {
         </li>
         <li>
           <strong>Ranking.</strong> Remaining candidates are scored and ordered. The score shown to a
-          recruiter is <em>relative to the other candidates in that particular search</em>: it is a
-          position in a list, not an assessment of the person, and the same candidate can show a
-          different number in a different search, or when more candidates are added to the same one.
+          recruiter is <em>how far that CV evidenced the requirements of that particular job</em> —
+          it is about the fit between a document and a job description, not an assessment of the
+          person, and the same candidate will show a different number against a different job. It
+          does not move when more candidates are added to the same search. Alongside it we show how
+          much of the job could be checked against the CV at all, so that a score resting on a
+          little evidence is not read as a score resting on a lot.
         </li>
       </ul>
       <p>

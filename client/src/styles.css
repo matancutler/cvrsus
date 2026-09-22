@@ -3925,6 +3925,22 @@ input:focus, select:focus, textarea:focus, .chip-input:focus-within {
   align-items: center;
   gap: 0.5rem;
   min-width: 0;
+  /*
+   * Room for the corner strip, which is positioned over this row.
+   *
+   * Below 640px this must be ZERO, because the mobile block reserves the same
+   * corner again on .result-lead — and the two compound. At 390px the pair
+   * left about twenty pixels for the name, the activity dot, the unread badge
+   * and the whole tag strip; .result-name is nowrap with an ellipsis, so it
+   * rendered as little more than the ellipsis. On an unrevealed row, which is
+   * the common case and reserves 11rem, the padding exceeded the column and
+   * border-box clamped the content to zero: no name at all.
+   *
+   * Two reservations for one strip is the bug. The mobile one wins there
+   * because it is measured against the actual button count at that width; this
+   * one is unset below 640px rather than made smaller, so there is exactly one
+   * of them at every size.
+   */
   padding-right: clamp(7rem, 30%, 11.5rem);
 }
 /*
@@ -8957,6 +8973,11 @@ html:has(.workspace-shell) { scrollbar-gutter: auto; }
    * second line on the narrowest phones. `:has()` asks the row itself rather
    * than asking the component to remember to say.
    */
+  /* One reservation, not two: the desktop rule on .result-headline is unset
+     here so this is the only padding standing between the corner strip and
+     the candidate's name. See the note on .result-headline. */
+  .result-headline { padding-right: 0; }
+
   .result-main:has(.result-menu) .result-lead { padding-right: 8.25rem; }
   /* Four of them on a row that can still be revealed, since the eye moved up
      there to become the button that does it. Asked of the row rather than of

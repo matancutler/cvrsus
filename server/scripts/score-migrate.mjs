@@ -883,6 +883,41 @@ if (!RUN) {
 
 db.prepare(`UPDATE score_migration_runs SET completed_at = ? WHERE id = ?`).run(now(), recordRun)
 
+/*
+ * Old manifests are dropped, because a manifest is a copy of the data.
+ *
+ * score_migration_rows holds the previous contents of every row this
+ * overwrote - for a Triage applicant, the whole criteria blob, with verbatim
+ * CV sentences inside it. That is precisely the objection this file raises
+ * against a backup table three paragraphs into its own header, and the
+ * manifest had the same shape: nothing pruned it, the retention sweep did not
+ * know about it, and an erased candidate left their quotes behind in it.
+ *
+ * Thirty days is the window in which a revert is a real operation. After a
+ * month of the new arithmetic being live, undoing a migration is not the plan
+ * anybody reaches for, and keeping a second copy of everybody's CV text
+ * against that possibility is the wrong trade.
+ *
+ * The run record stays - it is a few numbers and a timestamp, and it is what
+ * the boot gate reads. Only the row-by-row copies go.
+ */
+const PRUNE_AFTER_DAYS = Number(process.env.SCORE_MANIFEST_DAYS ?? 30)
+const cutoff = new Date(Date.now() - PRUNE_AFTER_DAYS * 24 * 60 * 60 * 1000).toISOString()
+
+const stale = db.prepare(`
+  SELECT id FROM score_migration_runs
+  WHERE completed_at IS NOT NULL AND completed_at < ? AND id <> ?
+`).all(cutoff, recordRun).map((row) => row.id)
+
+if (stale.length > 0) {
+  const dropped = db.prepare(
+    `DELETE FROM score_migration_rows WHERE run_id IN (${stale.map(() => '?').join(',')})`,
+  ).run(...stale).changes
+  console.log(`Pruned ${dropped} manifest row(s) from ${stale.length} run(s) older than `
+    + `${PRUNE_AFTER_DAYS} days. Those runs can no longer be reverted.`)
+  console.log('')
+}
+
 console.log('ROW COUNTS AFTER')
 for (const row of db.prepare(
   `SELECT scoring_version AS v, COUNT(*) AS n FROM candidate_job_analyses GROUP BY scoring_version ORDER BY v`,

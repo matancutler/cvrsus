@@ -1210,6 +1210,23 @@ export const SCHEMA = `
  * database with real rows in it upgrades in place.
  */
 export const ADDED_COLUMNS = {
+  job_match_profiles: [
+    /*
+     * C1 — the other names each requirement goes by.
+     *
+     * The profile object carried these from the day C1 shipped and the INSERT
+     * named every column except this one, so they were built on every job
+     * parse and dropped on the way to disk. The taxonomy half of C1 survived
+     * by accident, because those alternative names are also resolved into
+     * `concepts`, which was stored — so the feature looked half-working: jobs
+     * matched on adjacent concepts and never on the alternative words, which
+     * is the half the deterministic scorer reads.
+     *
+     * Null on every profile written before this column, which reads back as
+     * an empty list and behaves exactly as it did.
+     */
+    ['expansions', 'TEXT'],
+  ],
   folders: [
     /*
      * Which company the folder belongs to.

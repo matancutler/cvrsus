@@ -64,7 +64,20 @@ const UNKNOWN = 'no_evidence'
  * doing.
  */
 const SILENCE = (() => {
-  const raw = Number(process.env.MATCH_SILENCE_FRACTION ?? 0.35)
+  /*
+   * Trimmed and length-checked before Number(), because Number('') is 0.
+   *
+   * An empty or whitespace-only MATCH_SILENCE_FRACTION - which is what a
+   * dashboard field cleared rather than deleted leaves behind - passed the
+   * range guard as a perfectly valid zero and silently un-priced silence.
+   * Every subsequent analysis, and any bulk rescore run in that environment,
+   * would have gone back to the arithmetic B1 exists to replace, with nothing
+   * anywhere saying so. An unset variable and a blank one must mean the same
+   * thing here, and that thing is the default.
+   */
+  const set = String(process.env.MATCH_SILENCE_FRACTION ?? '').trim()
+  if (!set) return 0.35
+  const raw = Number(set)
   return Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : 0.35
 })()
 
@@ -293,16 +306,31 @@ export function quoteIsInText(quote, cvText, flatHaystack = null) {
   if (!haystack) return true
 
   let from = 0
+  let checked = 0
   for (const part of raw.split(ELLIPSIS)) {
     const needle = flattenForQuote(part)
     if (!needle) continue
     /* Too short to be evidence of anything, and too short to fail honestly:
        "sql" appears in half the CVs on the platform by accident. */
     if (needle.length < 12) continue
+    checked += 1
     const at = haystack.indexOf(needle, from)
     if (at === -1) return false
     from = at + needle.length
   }
+
+  /*
+   * And a quote that was never actually checked does not pass by default.
+   *
+   * Each part under twelve characters is skipped as too short to judge, which
+   * is right on its own and wrong in aggregate: a long invented quote broken
+   * into short pieces by ellipses skipped every piece and returned true having
+   * compared nothing. Under twelve characters TOTAL is still waved through -
+   * that is the case the exemption was written for - but anything longer has
+   * to have had at least one part actually looked for.
+   */
+  if (checked === 0) return flattenForQuote(raw).length < 12
+
   return true
 }
 
@@ -329,7 +357,18 @@ export function checkQuotes(breakdown, cvText) {
   const examples = []
 
   const checked = (breakdown ?? []).map((row) => {
-    if (row.status === UNKNOWN) return row
+    /*
+     * A silent verdict with a quote attached is checked like any other.
+     *
+     * The exemption was "there is nothing to quote for a silence", which is
+     * true of the verdict and not of the row: deriveHighlights publishes
+     * anything with a non-empty quote into the Evidence list regardless of
+     * status, so a no_evidence row carrying an invented quote skipped the
+     * check AND appeared to a recruiter as evidence. Only a row with nothing
+     * in the quote field is skipped now, which costs nothing because
+     * quoteIsInText returns true for an empty needle anyway.
+     */
+    if (row.status === UNKNOWN && !String(row.quote ?? '').trim()) return row
 
     if (quoteIsInText(row.quote, cvText, haystack)) {
       /* Clear a stale flag rather than leave it: this can be re-run over a

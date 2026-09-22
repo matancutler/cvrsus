@@ -977,6 +977,36 @@ export function deleteCandidateCompletely(candidateId) {
     db.prepare(`DELETE FROM view_events WHERE candidate_id = ?`).run(candidateId)
     db.prepare(`DELETE FROM reveals WHERE candidate_id = ?`).run(candidateId)
     db.prepare(`DELETE FROM scoring_audit WHERE candidate_id = ?`).run(candidateId)
+
+    /*
+     * The scoring migration's manifest, which holds copies of analyses.
+     *
+     * score_migration_rows stores, for every row the migration overwrote, the
+     * previous contents of that row - and for an analysis that is the whole
+     * criteria blob: verdicts each carrying a verbatim sentence lifted from
+     * this person's CV, the reasons, and the derived evidence list. The
+     * migration's own header rejected a backup TABLE partly on the grounds
+     * that it would sit outside this function; the manifest reproduced that
+     * exactly, and an erasure that leaves the reading of somebody's CV behind
+     * is not an erasure.
+     *
+     * Addressed through key_json, which is how the manifest identifies a row:
+     * an analysis key carries candidate_id. Created by score-migrate.mjs and
+     * absent from schema.js, so the table may not exist on a database that has
+     * never run the migration.
+     */
+    try {
+      db.prepare(`
+        DELETE FROM score_migration_rows
+        WHERE kind IN ('analysis_insert', 'analysis_update')
+          AND json_extract(key_json, '$.candidate_id') = ?
+      `).run(candidateId)
+    } catch (error) {
+      /* The table is created by score-migrate.mjs and is absent from
+         schema.js, so a database that has never run the migration does not
+         have it. A missing manifest is nothing to erase, not a failure. */
+      void error
+    }
     db.prepare(`DELETE FROM freshness_checkins WHERE candidate_id = ?`).run(candidateId)
     db.prepare(`DELETE FROM login_codes WHERE candidate_id = ?`).run(candidateId)
     db.prepare(`DELETE FROM outreach_drafts WHERE candidate_id = ?`).run(candidateId)
