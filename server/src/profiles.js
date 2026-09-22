@@ -334,6 +334,10 @@ export function effectiveProfile(candidateId) {
 export const MAX_BLOCKED_COMPANIES = 200
 
 export function setBlockedCompanies(candidateId, names) {
+  /* Before the write, not after: a throw halfway through must not leave a stale
+     answer behind, and clearing twice costs nothing. */
+  forgetBlockedCompanies()
+
   const capped = Array.isArray(names) ? names.slice(0, MAX_BLOCKED_COMPANIES) : []
   if (Array.isArray(names) && names.length > MAX_BLOCKED_COMPANIES) {
     console.warn(`  blocked companies: candidate ${candidateId} sent ${names.length}, `
@@ -404,21 +408,51 @@ export function candidatesBlockingRecruiter(recruiterId) {
  * follows the number of different companies anybody has blocked rather than the
  * number of people who blocked them.
  */
+/*
+ * The answer, held until the blocklist changes.
+ *
+ * The walk itself is not cheap and it is not rare. This runs on every recruiter
+ * route that names a candidate — the profile, the photo, the CV, notes, tags,
+ * messaging — and a results page rendering twenty-five avatars is twenty-five
+ * separate HTTP requests, each scanning every distinct blocked name on the
+ * platform and tokenising it against the viewer's organisation. listFolders,
+ * revealLog, the recruiter's threads and both search paths ask again on top.
+ *
+ * The comment below says the check is made per request rather than cached, so
+ * that somebody who adds a blocker is out of reach on the next click rather
+ * than the next search. That promise is kept here, not broken: the cache is
+ * dropped by the ONLY thing that writes to this table, so the next click after
+ * a block sees the block. What it stops paying for is asking the same
+ * unchanged question twenty-five times in two seconds.
+ */
+const blockingCache = new Map()
+
+/** Called by every writer. Cheap, and correctness depends on it. */
+export function forgetBlockedCompanies() {
+  blockingCache.clear()
+}
+
 export function candidatesBlocking(orgName) {
   const normalizedOrg = normalizeCompanyName(orgName)
   if (!normalizedOrg) return new Set()
+
+  const cached = blockingCache.get(normalizedOrg)
+  if (cached) return cached
 
   const names = db.prepare(`SELECT DISTINCT normalized FROM blocked_companies`)
     .all().map((row) => row.normalized)
 
   const matched = matchingBlockedNames(names, normalizedOrg)
-  if (matched.length === 0) return new Set()
 
-  const rows = db.prepare(
+  const rows = matched.length === 0 ? [] : db.prepare(
     `SELECT candidate_id FROM blocked_companies WHERE normalized IN (${matched.map(() => '?').join(', ')})`,
   ).all(...matched)
 
-  return new Set(rows.map((row) => row.candidate_id))
+  /* An empty answer is cached too. "Nobody has blocked this employer" is the
+     common case and it is the one that was paying the full walk every time. */
+  const blocking = new Set(rows.map((row) => row.candidate_id))
+  blockingCache.set(normalizedOrg, blocking)
+  return blocking
 }
 
 /**
@@ -998,6 +1032,11 @@ export function deleteCandidateCompletely(candidateId) {
     db.prepare(`DELETE FROM extracted_profiles WHERE candidate_id = ?`).run(candidateId)
     db.prepare(`DELETE FROM profile_overrides WHERE candidate_id = ?`).run(candidateId)
     db.prepare(`DELETE FROM blocked_companies WHERE candidate_id = ?`).run(candidateId)
+    /* The other writer to that table. An erased candidate's blocks going stale
+       in the cache would only over-hide somebody who no longer exists, which is
+       the harmless direction — but a cache with one writer that remembers and
+       one that does not is a cache nobody can reason about. */
+    forgetBlockedCompanies()
     db.prepare(`DELETE FROM embeddings WHERE candidate_id = ?`).run(candidateId)
     db.prepare(`DELETE FROM view_events WHERE candidate_id = ?`).run(candidateId)
     db.prepare(`DELETE FROM reveals WHERE candidate_id = ?`).run(candidateId)

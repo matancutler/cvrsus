@@ -14,7 +14,9 @@
  * 25 analyses, not 50, and still returns scores that are comparable with the
  * first page because normalisation reads the full analysed universe.
  */
-import db, { getCandidate, listCandidatesWithText } from '../db.js'
+import db, {
+  getCandidate, candidatesWithTextByIds, listCandidatesForRetrieval,
+} from '../db.js'
 import { activityStatus, candidatesHiddenFrom } from '../profiles.js'
 import { preferenceIndex, preferencePermitsJob } from './preferences.js'
 import { MATCHING } from './config.js'
@@ -91,7 +93,11 @@ export async function runSearch({
     if (previous.visibleIds.length > 0) return previous
   }
 
-  const candidates = listCandidatesWithText()
+  /* Without the CV text: the hard filter and the ranking below read structured
+     columns and the stored embedding, never the document. Reading cv_text for
+     the whole table was several megabytes per search, twice on a first search,
+     to rank on fields that were not in it. */
+  const candidates = listCandidatesForRetrieval()
   const { eligible, excluded } = hardFilter({
     candidates,
     matchProfile,
@@ -266,12 +272,16 @@ async function finishBatch({
   }
 }
 
-/** Candidate rows for a set of ids, in the order the ids were given. */
+/**
+ * Candidate rows WITH their CV text, for a set of ids, in the order given.
+ *
+ * This read the entire candidates table — cv_text included — filtered it down
+ * to the twenty-five ids it wanted, and threw the rest away. On every search
+ * and again on every Show More, on top of the identical full read retrieval had
+ * just done. Now it asks for the ids.
+ */
 function rowsFor(ids) {
-  const wanted = new Set(ids)
-  const byId = new Map(
-    listCandidatesWithText().filter((row) => wanted.has(row.id)).map((row) => [row.id, row]),
-  )
+  const byId = candidatesWithTextByIds(ids)
 
   return ids
     .map((id) => byId.get(id))

@@ -951,9 +951,47 @@ export function referencedUploadNames() {
   return names
 }
 
+/**
+ * Everyone, WITHOUT the CV text.
+ *
+ * Retrieval reads the whole universe on every search, because a hard filter has
+ * to see everybody before it can exclude anybody. It does not read cv_text —
+ * hardFilter and rankAndPool work from the structured columns and the stored
+ * embedding — and cv_text is the one genuinely large column, so pulling it for
+ * the whole table meant marshalling several megabytes of prose out of SQLite,
+ * on a synchronous driver, to rank rows on fields that were not in it.
+ *
+ * Named for what retrieval actually wants. The batch that genuinely needs CV
+ * text asks for it by id, below.
+ */
+export function listCandidatesForRetrieval() {
+  return db.prepare(
+    `SELECT ${CARD_COLUMNS} FROM candidates ORDER BY created_at DESC`,
+  ).all().map(hydrate)
+}
+
 /** The matcher needs cv_text for every candidate, so it gets its own query. */
 export function listCandidatesWithText() {
   return db.prepare(`SELECT * FROM candidates ORDER BY created_at DESC`).all().map(hydrate)
+}
+
+/**
+ * The CV text for a named handful, which is the only place it is needed.
+ *
+ * Deep analysis reads the document; everything before it ranks on structure. So
+ * this is the one query that pays for cv_text, and it pays for twenty-five rows
+ * rather than for the table — which is what rowsFor was doing, by reading every
+ * candidate on the platform and then discarding all but the page.
+ */
+export function candidatesWithTextByIds(ids) {
+  const wanted = [...new Set(ids)].filter((id) => Number.isInteger(id))
+  if (!wanted.length) return new Map()
+
+  const rows = db.prepare(
+    `SELECT * FROM candidates WHERE id IN (${wanted.map(() => '?').join(', ')})`,
+  ).all(...wanted)
+
+  return new Map(rows.map((row) => [row.id, hydrate(row)]))
 }
 
 /**

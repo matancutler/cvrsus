@@ -4613,6 +4613,26 @@ app.get('/api/recruiter/me', recruiterOnly, (req, res) => {
   const recruiter = getRecruiter(req.session.id)
   if (!recruiter) return res.status(401).json({ error: 'Account no longer exists.' })
 
+  /*
+   * Asked once each, rather than once per place they appear.
+   *
+   * This is the route the panel hits on every mount and after every purchase,
+   * and it was asking the same four questions repeatedly while building one
+   * object: getCompany twice, companyRevealsUsed twice, seatEntitlement twice
+   * (once at `seats`, once inside `wallet.seats`) and revealBalance twice. Each
+   * is a synchronous query on the one event loop, so the duplicates are not
+   * free and they are not hidden anywhere a reader would look for them — they
+   * are simply the same expression written out in two places.
+   *
+   * Hoisting also makes the payload readable: every figure below now names a
+   * value rather than re-deriving one.
+   */
+  const companyId = recruiter.company_id
+  const company = getCompany(companyId)
+  const entitlement = seatEntitlement(companyId)
+  const balance = revealBalance(companyId)
+  const revealsUsed = companyRevealsUsed(companyId)
+
   res.json({
     recruiter: {
       id: recruiter.id,
@@ -4638,17 +4658,14 @@ app.get('/api/recruiter/me', recruiterOnly, (req, res) => {
      * SEE it even though they may not change it. The version is the same sha1
      * of the filename the photos use, so a replaced logo busts its own cache.
      */
-    company: (() => {
-      const company = getCompany(recruiter.company_id)
-      return {
-        name: recruiter.company_name,
-        hasLogo: Boolean(company?.logo_name),
-        logoVersion: photoVersion(company?.logo_name),
-      }
-    })(),
+    company: {
+      name: recruiter.company_name,
+      hasLogo: Boolean(company?.logo_name),
+      logoVersion: photoVersion(company?.logo_name),
+    },
     // §15 — so the workspace can say why it is empty rather than showing a
     // wall of failed requests to someone who has done nothing wrong.
-    approval: getCompany(recruiter.company_id)?.approval_status ?? 'approved',
+    approval: company?.approval_status ?? 'approved',
     /*
      * The demo search this company registered from, if there was one.
      *
@@ -4675,14 +4692,14 @@ app.get('/api/recruiter/me', recruiterOnly, (req, res) => {
     }),
     // Everyone sees the seat count, so a recruiter can tell a colleague why
     // their sign-up was refused. Only the admin sees prices and history.
-    seats: seatEntitlement(recruiter.company_id),
+    seats: entitlement,
     /*
      * Pricing §8 and §16 — the organization balance is visible to every seat,
      * because a recruiter about to reveal needs to know whether they can. What
      * stays admin-only is buying, the ledger and the billing screen.
      */
     wallet: {
-      balance: revealBalance(recruiter.company_id),
+      balance,
       /*
        * What the usage meters need, for every seat rather than only for admins.
        *
@@ -4691,9 +4708,11 @@ app.get('/api/recruiter/me', recruiterOnly, (req, res) => {
        * team's allowance they were. Seats are still admin-only and are read
        * from the billing payload, not from here.
        */
-      used: companyRevealsUsed(recruiter.company_id),
-      everHeld: companyRevealsUsed(recruiter.company_id) + revealBalance(recruiter.company_id),
-      seats: seatEntitlement(recruiter.company_id),
+      used: revealsUsed,
+      /* Everything the company has ever held: what it has spent plus what is
+         left. Both halves are already in hand. */
+      everHeld: revealsUsed + balance,
+      seats: entitlement,
       // §7.2 — this seat's own share, if the admin divided the balance, and
       // how much of it is left. Null means it draws freely from the pool.
       allocation: recruiter.reveal_allocation ?? null,
@@ -7646,9 +7665,27 @@ app.get('/api/hr/triage/:id/results', recruiterOnly, (req, res, next) => {
     let queued = null
     if (req.query.advance === '1') queued = requestNextTranche(triage.id)
 
+    /*
+     * The row mustOwn already read, unless something has just changed it.
+     *
+     * mustOwn IS getTriage — same query, same triageView, same multi-kilobyte
+     * parse of the stored match profile — so this route was running it twice
+     * for every request. That matters here more than it would elsewhere,
+     * because the client polls this route every two and a half seconds for as
+     * long as a Triage tab is open.
+     *
+     * Re-read only after an advance, which is the one thing between the two
+     * calls that can move the counters this object carries.
+     */
+    const view = queued ? getTriage({ companyId, id: triage.id }) : triage
+
+    /* Asked once. It walks the ledger, and Infinity has to be turned into null
+       either way. */
+    const allowanceLeft = triageAllowanceRemaining(req.session.id)
+
     res.json({
       ...page,
-      triage: getTriage({ companyId, id: triage.id }),
+      triage: view,
       states: pipelineStates(triage.id),
       working: queueDepth(triage.id) > 0,
       queued,
@@ -7669,10 +7706,9 @@ app.get('/api/hr/triage/:id/results', recruiterOnly, (req, res, next) => {
            analysed, and counting them against the session ceiling means a
            recruiter re-forwarding the same mailbox across deliveries burns
            room on CVs the product has already decided not to use. */
-        room: Math.max(0, triage.fileCap - (triage.counts.total - (triage.counts.superseded ?? 0))),
+        room: Math.max(0, view.fileCap - (view.counts.total - (view.counts.superseded ?? 0))),
         balance: triageBalance(companyId),
-        allowance: triageAllowanceRemaining(req.session.id) === Infinity
-          ? null : triageAllowanceRemaining(req.session.id),
+        allowance: allowanceLeft === Infinity ? null : allowanceLeft,
       },
       /*
        * Whether the model is doing the reading.

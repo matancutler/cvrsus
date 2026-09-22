@@ -1203,6 +1203,39 @@ export const SCHEMA = `
   );
 
   CREATE INDEX IF NOT EXISTS idx_folder_triage ON folder_triage_items(folder_id);
+
+  /*
+   * Five indexes behind columns that hot queries were already filtering on.
+   *
+   * Every one of these is a full table scan today, on a synchronous driver, on
+   * a single instance - so each is not one slow query but a pause in front of
+   * every other request in flight.
+   *
+   * folder_items(candidate_id) - the table declares UNIQUE (folder_id,
+   *   candidate_id), which SQLite can only use when the folder id is known.
+   *   Three writes filter on the candidate alone: setting a status across a
+   *   company's folders, placing a candidate, and removing them. Filing one
+   *   person scanned every folder item in the database.
+   *
+   * folders(company_id) - listFolders, folderIndex and triageFolderIndex are
+   *   all scoped to a company and all scanned every folder on the platform to
+   *   find that company's.
+   *
+   * search_chats(folder_id) and jobs(chat_id) - recoveredReading joins both,
+   *   once per folder row whose saved score predates the score column, which is
+   *   most rows. A three-folder company with 25 items each ran 75 pairs of
+   *   scans to draw one screen.
+   *
+   * triage_applicants(drop_id) - listDrops counts applicants per delivery, and
+   *   the three existing indexes all lead with triage_id. A rolling session
+   *   with ten deliveries and 800 CVs scanned 8,000 rows, every 2.5-second
+   *   poll, per open tab.
+   */
+  CREATE INDEX IF NOT EXISTS idx_folder_items_candidate ON folder_items(candidate_id);
+  CREATE INDEX IF NOT EXISTS idx_folders_company ON folders(company_id);
+  CREATE INDEX IF NOT EXISTS idx_search_chats_folder ON search_chats(folder_id);
+  CREATE INDEX IF NOT EXISTS idx_jobs_chat ON jobs(chat_id);
+  CREATE INDEX IF NOT EXISTS idx_triage_applicants_drop ON triage_applicants(drop_id);
 `
 
 /**
