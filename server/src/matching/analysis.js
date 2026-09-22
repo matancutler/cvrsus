@@ -258,6 +258,11 @@ export async function analyseBatch({
     }
   }
 
+  /* How many candidates this batch scored without the model. Reported rather
+     than silent: a search that quietly fell back on half its page is the kind
+     of thing that should show up in a log before it shows up in a complaint. */
+  let notCached = 0
+
   for (const row of misses) {
     const id = row.candidate.id
     const ai = aiResults.get(id)
@@ -346,13 +351,45 @@ export async function analyseBatch({
         cached: false,
       }
 
-    writeCached({
-      candidateId: id, jobId: job.id, jdVersion: job.jd_version,
-      absoluteFit: record.absoluteFit, criteria: record.criteria,
-      explanation: record.explanation, source: record.source, model,
-    })
+    /*
+     * A fallback is used for this request and NOT written to the cache.
+     *
+     * The cache key is (candidate, job, jd_version, analysis_model,
+     * scoring_version), and analysisModel() returns the real model name
+     * whenever a key is configured. So a candidate the model never answered
+     * for - aborted, timed out, rate-limited, refused, or over the daily
+     * ceiling - had their keyword score filed under 'claude-opus-5' and
+     * served back on every later search as the product's judgement. Nothing
+     * expires it: there is no TTL on candidate_job_analyses, `refresh` is
+     * explicitly not a re-analysis, and the migration inserts ON CONFLICT DO
+     * NOTHING. The row outlives the outage that caused it.
+     *
+     * The trigger is ordinary. The search route aborts in-flight work when
+     * the recruiter closes the tab OR searches again, so an impatient
+     * re-click abandons run one - whose handler keeps going and writes the
+     * whole page as keyword scores - and run two reads them straight back as
+     * cache hits. It returns unusually fast, which reads as the product
+     * working well.
+     *
+     * So: still ranked, still shown, nothing cached. The next search asks the
+     * model about the candidates the model never saw.
+     */
+    if (ai) {
+      writeCached({
+        candidateId: id, jobId: job.id, jdVersion: job.jd_version,
+        absoluteFit: record.absoluteFit, criteria: record.criteria,
+        explanation: record.explanation, source: record.source, model,
+      })
+    } else {
+      notCached += 1
+    }
 
     results.set(id, record)
+  }
+
+  if (notCached > 0) {
+    console.warn(`  match-analysis: ${notCached} of ${misses.length} candidate(s) were scored `
+      + 'without the model and deliberately not cached, so the next search retries them')
   }
 
   return { results, analysed: misses.length, reused: results.size - misses.length }

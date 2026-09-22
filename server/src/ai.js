@@ -1525,8 +1525,22 @@ export async function analyseMatch({
    */
   const ask = () => anthropic.messages.create({
       model,
-      // Room for the reasoning plus quoted evidence for several claims.
-      max_tokens: 8000,
+      /*
+       * Room for the reasoning, the quoted evidence, AND the thinking.
+       *
+       * Adaptive thinking is billed and counted inside this budget, so a hard
+       * job that thinks for a long time can leave too little for the answer —
+       * and the answer is then cut off mid-JSON. That surfaced as
+       * "SyntaxError: Unexpected end of JSON input" from the parse, caught as
+       * a generic failure, and the candidate quietly dropped to keyword
+       * scoring with nothing saying why. Twice in one eval run over 22 CVs.
+       *
+       * 16000 rather than 8000 because the ceiling is not a cost: tokens are
+       * billed as they are produced, and a request that needed 3,000 is
+       * charged for 3,000 whatever the cap says. The only thing a low cap buys
+       * is truncation.
+       */
+      max_tokens: 16000,
       /* A block rather than a string, so it can carry a cache breakpoint. The
          system prompt is the largest fixed thing in the request. */
       system: [{ type: 'text', text: MATCH_SYSTEM, cache_control: { type: 'ephemeral' } }],
@@ -1587,13 +1601,29 @@ export async function analyseMatch({
       return null
     }
 
-    const firstProblem = degenerate(text)
+    /*
+     * Truncation is its own failure and is named as one.
+     *
+     * stop_reason tells us the model was cut off rather than finished, which
+     * is knowable BEFORE parsing and was being discovered afterwards as a
+     * syntax error. Treated like degeneration: ask once more, since a second
+     * pass usually thinks less, and say plainly what happened if it does not.
+     */
+    const truncated = response.stop_reason === 'max_tokens'
+
+    const firstProblem = truncated ? 'the answer was cut off' : degenerate(text)
     if (firstProblem) {
       console.warn(`  match-analysis: unusable prose (${firstProblem}); asking once more`)
       response = await ask()
       if (response.stop_reason === 'refusal') return null
       const retried = response.content.find((block) => block.type === 'text')?.text
       if (retried) text = retried
+
+      if (response.stop_reason === 'max_tokens') {
+        console.warn('  match-analysis: cut off twice, so this candidate falls back to '
+          + 'keyword scoring. Raise max_tokens if this recurs.')
+        return null
+      }
     }
 
     /* The provider's own token counts, carried out with the analysis.

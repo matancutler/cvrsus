@@ -314,7 +314,32 @@ export function effectiveProfile(candidateId) {
 
 // ------------------------------------------------------ blocked companies ---
 
+/*
+ * A ceiling, not a feature — and it belongs here rather than on one route.
+ *
+ * There is no product reason to cap this list; a candidate may genuinely have
+ * worked at a great many places they would rather not hear from. It exists so
+ * that a script cannot write an unbounded number of rows against one account.
+ *
+ * It used to live only on PATCH /api/candidate/me/blocked-companies, which is
+ * the route the account page uses — so the cap held for everyone using the
+ * product and held for nobody scripting it, because the profile save
+ * (applyIntakeExtras) reaches this same function with the same effect and never
+ * counted. A limit enforced at one of two doors is decoration.
+ *
+ * Kept as a silent trim rather than a throw because this function is also the
+ * bulk path, and the route above still answers a too-long list with a plain 400
+ * saying so.
+ */
+export const MAX_BLOCKED_COMPANIES = 200
+
 export function setBlockedCompanies(candidateId, names) {
+  const capped = Array.isArray(names) ? names.slice(0, MAX_BLOCKED_COMPANIES) : []
+  if (Array.isArray(names) && names.length > MAX_BLOCKED_COMPANIES) {
+    console.warn(`  blocked companies: candidate ${candidateId} sent ${names.length}, `
+      + `stored the first ${MAX_BLOCKED_COMPANIES}`)
+  }
+
   db.prepare(`DELETE FROM blocked_companies WHERE candidate_id = ?`).run(candidateId)
 
   const insert = db.prepare(`
@@ -323,7 +348,7 @@ export function setBlockedCompanies(candidateId, names) {
   `)
   const now = new Date().toISOString()
 
-  for (const raw of names) {
+  for (const raw of capped) {
     const trimmed = String(raw ?? '').trim()
     const normalized = normalizeCompanyName(trimmed)
     if (trimmed && normalized) insert.run(candidateId, trimmed, normalized, now)

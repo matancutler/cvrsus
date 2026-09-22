@@ -326,6 +326,7 @@ import {
   onModelFailure,
   isConfigured as aiConfigured,
   SUMMARY_MAX_CHARS,
+  MATCH_MODEL,
 } from './ai.js'
 import { track } from './analytics.js'
 import { ensureSummary, repairSummaries } from './summary.js'
@@ -442,6 +443,7 @@ import {
   saveDocument,
   saveExtraction,
   setBlockedCompanies,
+  MAX_BLOCKED_COMPANIES,
   getBlockedCompanies,
   setOverride,
   recordViewEvent,
@@ -474,7 +476,7 @@ import {
   validatePreferences,
 } from './matching/preferences.js'
 import { runSearch, showMore } from './matching/pipeline.js'
-import { attachExplanation, readCached } from './matching/analysis.js'
+import { attachExplanation, readCached, withinDailyCeiling } from './matching/analysis.js'
 import { recordCost } from './costs.js'
 import { getSession } from './matching/session.js'
 import { getJob } from './matching/jobProfile.js'
@@ -528,7 +530,6 @@ const SESSION_HOURS = Number(process.env.SESSION_HOURS) || 12
  * Not a product limit. The list is as long as the candidate's career needs it
  * to be; these stop one account from writing rows without bound.
  */
-const MAX_BLOCKED_COMPANIES = 200
 const MAX_COMPANY_NAME_LENGTH = 120
 
 /** Bumped whenever the consent wording changes, so old consents are auditable. */
@@ -3059,21 +3060,28 @@ app.delete('/api/candidate/me', candidateOnly, async (req, res, next) => {
       ...deletionPreview(candidate.id),
     })
 
-    /* Read before the erasure, said after it. The row is about to stop
-       existing, and a churn notification with no name in it tells nobody
-       anything. */
-    const erased = {
-      name: candidate.name ?? [candidate.first_name, candidate.last_name].filter(Boolean).join(' '),
-      email: candidate.email,
-    }
-
     const files = deleteCandidateCompletely(candidate.id)
     for (const stored of files) {
       await fs.promises.unlink(path.join(UPLOAD_DIR, stored)).catch(() => {})
     }
 
+    /*
+     * The account number, not the person.
+     *
+     * This sent the erased candidate's name and email address to Slack, and
+     * printed them to the server log on the way — so the one action whose
+     * entire purpose is removing somebody's identity from the platform
+     * finished by copying that identity somewhere our erasure does not reach
+     * and cannot reach: a third party's message history, retained on their
+     * schedule rather than ours. A later "delete everything about me" request
+     * would be answered truthfully and still be wrong.
+     *
+     * The internal id is what an operator actually needs to reconcile a
+     * deletion against a support ticket or a billing line, and it means
+     * nothing to anyone outside.
+     */
     notifySlack('Candidate account deleted', [
-      `${erased.name} · ${erased.email}`,
+      `candidate #${candidate.id}`,
       stamp(),
     ])
 
@@ -3092,6 +3100,28 @@ app.get('/api/candidate/threads/:recruiterId', candidateOnly, (req, res) => {
   const recruiter = getRecruiter(recruiterId)
   if (!recruiter) return res.status(404).json({ error: 'Recruiter not found.' })
 
+  /*
+   * The thread has to exist before the recruiter behind it is named.
+   *
+   * This route took a recruiter id straight off the URL and answered with that
+   * recruiter's display name and employer, for any signed-in candidate, with no
+   * check that the two had ever exchanged a word. Ids are sequential, so a
+   * single account plus a loop from 1 upwards returned the name and company of
+   * every recruiter on the platform — which is the customer list, assembled by
+   * anyone willing to sign up as a candidate.
+   *
+   * Its sibling POST already gets this right and refuses to deliver a message
+   * into an empty thread ("you can only reply to a recruiter who has messaged
+   * you"); reading was simply never held to the same rule. The 404 is
+   * deliberately the same one an unknown id returns, so the response cannot be
+   * used to tell "no such recruiter" apart from "not one of yours".
+   *
+   * markThreadRead moved below the check for the same reason it exists: it
+   * wrote a read-receipt row for a conversation that had never happened.
+   */
+  const messages = listThread(req.session.id, recruiterId)
+  if (messages.length === 0) return res.status(404).json({ error: 'Recruiter not found.' })
+
   markThreadRead({ candidateId: req.session.id, recruiterId, reader: 'candidate' })
 
   res.json({
@@ -3100,7 +3130,7 @@ app.get('/api/candidate/threads/:recruiterId', candidateOnly, (req, res) => {
       name: recruiterDisplayName(recruiter),
       company: recruiter.company_name,
     },
-    messages: listThread(req.session.id, recruiterId),
+    messages,
     status: threadStatus(req.session.id, recruiterId),
   })
 })
@@ -5719,14 +5749,74 @@ app.post('/api/hr/match', recruiterOnly, async (req, res, next) => {
      */
     const retrieval = await shortlistFor(criteria, results)
     const shortlist = retrieval.rows.slice(0, AI_RANK_LIMIT)
-    const analyses = await analyseMatches({
-      jobDescription: criteria.jobDescription,
-      criteria,
-      candidates: shortlist.map((row) => ({
-        candidate: { ...row.candidate, cv_text: row.cvText },
-        profile: effectiveProfile(row.candidate.id),
-      })),
+
+    /*
+     * The three guards every other model path has, which this one did not.
+     *
+     * This is the superseded one-shot search. The client stopped calling it -
+     * wiring-check asserts the bundle no longer contains the URL - but the
+     * route stayed mounted and reachable by any recruiter session, and it
+     * never consulted the analysis cache, never asked the daily ceiling, and
+     * never wrote a cost row. So it was 25 Opus calls at high effort per
+     * request, repeatable as fast as a loop could send them, invisible to the
+     * circuit breaker that exists to stop exactly that, and invisible to
+     * ai-cost.mjs afterwards.
+     *
+     * Guarded rather than deleted because two suites still drive it, and a
+     * route that behaves is worth more than a route that is gone from one
+     * place and remembered in another. Over the ceiling it does what every
+     * other path does: keyword scores, still ranked, nothing pretended.
+     */
+    const allowed = withinDailyCeiling({
+      context: 'search',
+      companyId: req.session?.company_id ?? null,
+      wanted: shortlist.length,
     })
+
+    const startedAt = Date.now()
+    const analyses = allowed
+      ? await analyseMatches({
+        jobDescription: criteria.jobDescription,
+        criteria,
+        candidates: shortlist.map((row) => ({
+          candidate: { ...row.candidate, cv_text: row.cvText },
+          profile: effectiveProfile(row.candidate.id),
+        })),
+        /* So closing the tab stops the work rather than paying for all of it
+           and throwing the answers away. */
+        signal: abortOnClose(req, res),
+      })
+      : new Map()
+
+    if (!allowed) {
+      console.warn('  /api/hr/match: over the daily ceiling, scoring on keywords only')
+    }
+
+    /* And the spend is recorded, so the ceiling can see it next time and the
+       cost report is not silently short by everything this route did. */
+    if (allowed && analyses.size > 0) {
+      const spent = [...analyses.values()].reduce((sum, a) => ({
+        calls: sum.calls + (a?.usage?.calls ?? 1),
+        inputTokens: sum.inputTokens + (a?.usage?.inputTokens ?? 0),
+        cacheWriteTokens: sum.cacheWriteTokens + (a?.usage?.cacheWriteTokens ?? 0),
+        cacheReadTokens: sum.cacheReadTokens + (a?.usage?.cacheReadTokens ?? 0),
+        outputTokens: sum.outputTokens + (a?.usage?.outputTokens ?? 0),
+      }), { calls: 0, inputTokens: 0, cacheWriteTokens: 0, cacheReadTokens: 0, outputTokens: 0 })
+
+      try {
+        recordCost({
+          context: 'search',
+          stage: 'match-analysis',
+          model: MATCH_MODEL,
+          companyId: req.session?.company_id ?? null,
+          items: analyses.size,
+          durationMs: Date.now() - startedAt,
+          ...spent,
+        })
+      } catch (error) {
+        console.warn(`  /api/hr/match: cost not recorded — ${error.message}`)
+      }
+    }
 
     for (const row of results) {
       const analysis = analyses.get(row.candidate.id)

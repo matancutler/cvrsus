@@ -1758,6 +1758,17 @@ function ChatWindow({
       const data = await post(`/api/candidate/threads/${recruiterId}`, { body }, 'candidate')
       setThread((prev) => ({ ...prev, messages: data.messages, status: data.status }))
       await onRead?.()
+    } catch (err) {
+      /*
+       * This had no catch at all, so a failed reply rejected out of the form's
+       * submit handler as an unhandled rejection: no toast, no error, nothing
+       * on screen — the send button simply stopped spinning and the message
+       * was gone. The candidate side is the side least able to guess what
+       * happened, since the usual cause is the recruiter having closed the
+       * thread from theirs.
+       */
+      onError?.(err.message)
+      return false
     } finally {
       setSending(false)
     }

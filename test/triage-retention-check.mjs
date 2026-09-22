@@ -204,14 +204,33 @@ check('the reasons are named',
   && due.find((row) => row.triageId === longClosed)?.because === 'ninety days since the session closed',
   JSON.stringify([...new Set(due.map((row) => row.because))]))
 
-const reported = runRetention({})
+/*
+ * `deletes: false` explicitly, never by default.
+ *
+ * runRetention's default is TRIAGE.retentionDeletes, which reads
+ * TRIAGE_RETENTION_DELETES from the environment — the switch the operator
+ * manual tells you to turn on in production. So this call was log-only by
+ * accident: run the suite on a machine with that variable set, on any
+ * database holding real Triage data, and an UNSCOPED sweep deletes every CV
+ * past its retention date, files included, with no marker and no undo.
+ *
+ * A test must never be safe only because a setting happens to be off.
+ */
+const reported = runRetention({ deletes: false })
 check('running it changes nothing', reported.deletedAnything === false)
+check('and it was told not to delete rather than trusted not to',
+  /runRetention\(\{ deletes: false \}\)/.test(
+    fs.readFileSync(new URL(import.meta.url), 'utf8'),
+  ),
+  'the default reads an environment variable that is on in production')
 check('and every row is still there',
   db.prepare(`SELECT COUNT(*) AS n FROM triage_applicants WHERE triage_id = ?`).get(longClosed).n === 2)
 
 section('And deletes exactly what it named when told to')
 
 const before = db.prepare(`SELECT COUNT(*) AS n FROM triage_applicants`).get().n
+/* Scoped to this suite's own session. The destructive call must never be
+   able to reach a row this test did not create. */
 const acted = runRetention({ deletes: true, triageId: longClosed })
 
 check('it deletes only that session', acted.deleted === 2, `${acted.deleted}`)

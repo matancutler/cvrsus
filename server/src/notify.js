@@ -321,17 +321,35 @@ export async function sendRevealNotice({ to, name, companyName }) {
 export async function sendMessageEmail({ to, candidateName, recruiterName, companyName, recruiterId }) {
   const link = `${APP_URL}/account?thread=${encodeURIComponent(recruiterId)}`
   const from = [recruiterName, companyName].filter(Boolean).join(' from ')
+  const subject = `${from} sent you a message`
 
-  console.log('')
-  console.log('  ┌─ new message ────────────────────────────────────────')
-  console.log(`  │  to:      ${to}`)
-  console.log(`  │  subject: ${from} sent you a message`)
-  console.log(`  │  hi:      ${candidateName ?? 'there'}`)
-  console.log(`  │  read it: ${link}`)
-  console.log('  └──────────────────────────────────────────────────────')
-  console.log('')
+  /*
+   * Through deliver(), like every other template in this file.
+   *
+   * This one printed to the server console and returned
+   * { delivered: 'console' } unconditionally - with a mail provider
+   * configured and working, and every other notification going out fine. So a
+   * recruiter messaged a candidate, the product said the message was sent,
+   * and the only copy went to a log the candidate cannot read. The candidate
+   * finds out if and when they next sign in; the recruiter never learns their
+   * message did not arrive.
+   *
+   * deliver() keeps the console behaviour when there is no key, which is what
+   * made the old code look correct on a developer's machine.
+   */
+  const sent = await deliver({
+    to,
+    subject,
+    lines: [
+      `Hi ${candidateName ?? 'there'},`,
+      `${from} sent you a message on Cursus.`,
+      `Read it and reply here: ${link}`,
+      'If you would rather not hear from employers, you can hide your profile '
+      + 'from your account page at any time.',
+    ],
+  })
 
-  return { delivered: 'console', link, subject: `${from} sent you a message` }
+  return { ...sent, link, subject }
 }
 
 /**
@@ -340,17 +358,25 @@ export async function sendMessageEmail({ to, candidateName, recruiterName, compa
  * assuming the service is broken rather than obeying them.
  */
 export async function sendDeactivationEmail({ to, name }) {
-  console.log('')
-  console.log('  ┌─ profile deactivated ────────────────────────────────')
-  console.log(`  │  to:   ${to}`)
-  console.log(`  │  hi:   ${name ?? 'there'}`)
-  console.log('  │  Your profile is hidden from recruiters at your request,')
-  console.log('  │  and the monthly emails have stopped.')
-  console.log(`  │  Sign in to reactivate whenever you like: ${APP_URL}/portal`)
-  console.log('  └──────────────────────────────────────────────────────')
-  console.log('')
-
-  return { delivered: 'console' }
+  /*
+   * Also through deliver(). Same defect, and this one matters more than it
+   * looks: it is the acknowledgement somebody gets after asking to be left
+   * alone. Printed to a log, the person hears nothing back from a service
+   * they have just told to stop, which reads as being ignored rather than
+   * obeyed - the exact outcome the docstring above says it exists to prevent.
+   */
+  return deliver({
+    to,
+    subject: 'Your Cursus profile is hidden',
+    lines: [
+      `Hi ${name ?? 'there'},`,
+      'Your profile is hidden from recruiters at your request, and the monthly '
+      + 'emails have stopped.',
+      `You can turn it back on whenever you like: ${APP_URL}/portal`,
+      'Nothing has been deleted. If you would like your data erased instead, '
+      + 'reply to this email and we will do it.',
+    ],
+  })
 }
 
 /* ==========================================================================

@@ -1613,6 +1613,8 @@ function RecruiterChatWindow({
       await reloadThreads()
     } catch (err) {
       onError?.(err.message)
+      // Says "not sent", so ChatPanel keeps the draft rather than clearing it.
+      return false
     } finally {
       setSending(false)
     }
@@ -7123,6 +7125,7 @@ function CandidateDialog({
       setData((prev) => ({ ...prev, thread: sent.messages, threadStatus: sent.status }))
     } catch (err) {
       onError(err.message)
+      return false
     } finally {
       setSending(false)
     }

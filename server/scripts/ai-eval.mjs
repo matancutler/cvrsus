@@ -285,6 +285,17 @@ fs.mkdirSync(OUT, { recursive: true })
 const verdicts = new Map()
 const usage = new Map(chosen.map((name) => [name, { cost: 0, calls: 0, ms: 0 }]))
 
+/*
+ * Each job's requirement list, kept for the attributed dump.
+ *
+ * A disagreement on its own cannot be turned into a score swing: the swing is
+ * the requirement's weight over the job's TOTAL weight, and the total is only
+ * knowable from the whole list. Without this, reading the swing off
+ * disagreements.json means re-parsing every job description afterwards and
+ * hoping the model returns the same requirements the second time.
+ */
+const requirementsByJob = new Map()
+
 for (const job of jobs) {
   console.log(`\n${job.name}`)
   const profile = await analyseJobDescription({ jobDescription: job.text })
@@ -327,6 +338,7 @@ for (const job of jobs) {
   }
 
   const requirements = requirementsFrom(matchProfile)
+  requirementsByJob.set(job.name, requirements)
 
   if (requirements.filter((r) => r.tier === 'must_have').length === 0) {
     console.log('  no must-have requirements were read from this job description')
@@ -528,6 +540,12 @@ fs.writeFileSync(path.join(OUT, 'key.txt'), key, 'utf8')
  * .json nobody reads by accident.
  */
 fs.writeFileSync(
+  path.join(OUT, 'requirements.json'),
+  JSON.stringify(Object.fromEntries(requirementsByJob), null, 2),
+  'utf8',
+)
+
+fs.writeFileSync(
   path.join(OUT, 'disagreements.json'),
   JSON.stringify(disagreements.map((row, index) => ({
     n: index + 1,
@@ -542,7 +560,7 @@ fs.writeFileSync(
 fs.writeFileSync(path.join(OUT, 'summary.json'), JSON.stringify({ baseline, summary }, null, 2), 'utf8')
 
 console.log(`${disagreements.length} must-have disagreements written to ${path.relative(ROOT, OUT)}/disagreements.txt`)
-console.log('Read them first. The key is in ${path.relative(ROOT, OUT)}/key.txt.\n')
+console.log(`Read them first. The key is in ${path.relative(ROOT, OUT)}/key.txt.`)
 
 /** Rank correlation. Ties are averaged, which matters: fits repeat a lot. */
 function spearman(pairs) {

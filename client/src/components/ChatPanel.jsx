@@ -34,12 +34,33 @@ export default function ChatPanel({
     if (log) log.scrollTop = log.scrollHeight
   }, [messages.length])
 
+  /*
+   * The box is emptied only when the message actually went.
+   *
+   * This cleared the draft immediately after awaiting onSend, and every one of
+   * the three handlers behind it swallows its own failure — so a send that was
+   * refused (thread closed, session expired, network gone) took the recruiter's
+   * paragraph with it and left an empty composer behind a toast. The words were
+   * not recoverable anywhere: nothing had been stored, and the textarea was the
+   * only copy.
+   *
+   * A handler now says it failed either by returning false or by throwing, and
+   * both mean the same thing here: leave the text alone. The person can read
+   * the error, fix whatever it names and press send again, which is what they
+   * would expect to be able to do.
+   */
   async function submit(event) {
     event.preventDefault()
     const body = draft.trim()
     if (!body || sending) return
 
-    await onSend(body)
+    try {
+      if (await onSend(body) === false) return
+    } catch {
+      /* The handler reports it. All this layer owes the writer is their text. */
+      return
+    }
+
     setDraft('')
   }
 
