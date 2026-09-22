@@ -32,10 +32,35 @@ import { get, SESSION_ENDED, SIGNED_OUT } from './api.js'
 
 let counts = null
 let loading = null
-const listeners = new Set()
 
-function publish() {
+/*
+ * Subscribers by key, not one list of everybody.
+ *
+ * Every comment icon on the page held a listener in a single set, and any
+ * change woke all of them. Triage seeds a whole scope on every 2.5-second poll,
+ * so one unchanged poll re-rendered every comment button on screen — twenty-five
+ * of them, twenty-four times a minute, to show counts that had not moved.
+ *
+ * Keyed subscription means a count that changes wakes the one icon that shows
+ * it. `all` is for the two events that genuinely affect everything: the shared
+ * endpoint arriving, and a sign-out clearing the map.
+ */
+const byKey = new Map()
+const all = new Set()
+
+function wake(listeners) {
+  if (!listeners) return
   for (const listener of listeners) listener()
+}
+
+function publish(keys) {
+  if (!keys) {
+    wake(all)
+    for (const listeners of byKey.values()) wake(listeners)
+    return
+  }
+  for (const key of keys) wake(byKey.get(key))
+  wake(all)
 }
 
 /* One key space for two id sequences that overlap. */
@@ -70,23 +95,34 @@ function ensureLoaded() {
  */
 export function useCommentCount(candidateId, scope = 'candidate') {
   const [, rerender] = useState(0)
+  const mine = key(candidateId, scope)
 
   useEffect(() => {
     const listener = () => rerender((n) => n + 1)
+    let listeners = byKey.get(mine)
+    if (!listeners) {
+      listeners = new Set()
+      byKey.set(mine, listeners)
+    }
     listeners.add(listener)
     ensureLoaded()
-    return () => { listeners.delete(listener) }
-  }, [])
 
-  return counts?.get(key(candidateId, scope)) ?? 0
+    return () => {
+      listeners.delete(listener)
+      if (listeners.size === 0) byKey.delete(mine)
+    }
+  }, [mine])
+
+  return counts?.get(mine) ?? 0
 }
 
 /** Called after posting or deleting, with the notes the server now holds. */
 export function setCommentCount(candidateId, count, scope = 'candidate') {
   if (!counts) counts = new Map()
-  if (count > 0) counts.set(key(candidateId, scope), count)
-  else counts.delete(key(candidateId, scope))
-  publish()
+  const at = key(candidateId, scope)
+  if (count > 0) counts.set(at, count)
+  else counts.delete(at)
+  publish([at])
 }
 
 /**
@@ -102,11 +138,21 @@ export function setCommentCount(candidateId, count, scope = 'candidate') {
 export function seedCommentCounts(index, scope) {
   if (!index) return
   if (!counts) counts = new Map()
+
+  /* Only what moved. This runs on a 2.5-second poll and the counts are almost
+     always identical to the ones already held, so publishing unconditionally
+     meant re-rendering every icon on the page to redraw the same dots. */
+  const changed = []
   for (const [id, count] of Object.entries(index)) {
-    if (count > 0) counts.set(key(id, scope), count)
-    else counts.delete(key(id, scope))
+    const at = key(id, scope)
+    const was = counts.get(at) ?? 0
+    if (was === count) continue
+    if (count > 0) counts.set(at, count)
+    else counts.delete(at)
+    changed.push(at)
   }
-  publish()
+
+  if (changed.length > 0) publish(changed)
 }
 
 /**

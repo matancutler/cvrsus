@@ -993,6 +993,11 @@ function TriageResults({ id, initial, onBalanceChanged, meId = null, folders = [
    * second round trip would put a gap between reaching the boundary and the
    * work starting.
    */
+  /* What the last response looked like, for the comparison in refresh below.
+     A ref rather than state: nothing renders from it, and writing it must not
+     cause a render of its own. */
+  const lastSignature = useRef(null)
+
   const fetchPage = useCallback(async (offset, advance) => {
     const query = `offset=${offset}${advance ? '&advance=1' : ''}`
     return get(`/api/hr/triage/${id}/results?${query}`, 'recruiter')
@@ -1001,6 +1006,32 @@ function TriageResults({ id, initial, onBalanceChanged, meId = null, folders = [
   const refresh = useCallback(async () => {
     try {
       const data = await fetchPage(0, false)
+
+      /*
+       * A poll that changed nothing changes nothing on screen.
+       *
+       * This runs every 2.5 seconds for as long as the tab is open, and it
+       * handed React a brand-new array of row objects on every tick whether or
+       * not anything had moved — so all twenty-five cards reconciled
+       * twenty-four times a minute to redraw themselves unchanged.
+       *
+       * Against a ref rather than against `state`, so this callback keeps the
+       * empty dependency list it already relies on: reading `state` here would
+       * either capture a stale value — comparing every poll against the first
+       * one, which is never equal, so nothing would be saved — or rebuild the
+       * callback on every response and restart the interval with it.
+       *
+       * The compared fields are the ones a background pass can move: how many
+       * have been read, how many arrived, what stage each is at, and whether
+       * the worker is still going.
+       */
+      const signature = JSON.stringify([
+        data.triage?.analysed, data.triage?.total, data.triage?.status,
+        data.states, data.working, data.results?.length,
+      ])
+      const moved = signature !== lastSignature.current
+      lastSignature.current = signature
+
       setState(data)
       if (data.filed) setFiled(data.filed)
       /*
@@ -1026,7 +1057,11 @@ function TriageResults({ id, initial, onBalanceChanged, meId = null, folders = [
       /* Only the first page is re-read on a poll. Re-fetching everything the
          recruiter has scrolled through would reorder the list under their
          cursor every two and a half seconds. */
-      setRows((was) => (was.length <= data.results.length ? data.results : was))
+      /* The rows themselves only when something moved, so an idle Triage stops
+         handing every card a fresh object identity on every tick. */
+      if (moved) {
+        setRows((was) => (was.length <= data.results.length ? data.results : was))
+      }
       setError('')
     } catch (err) {
       setError(err.message)
