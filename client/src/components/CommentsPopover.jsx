@@ -33,6 +33,16 @@ import { StatusNotice } from './Notice.jsx'
 export default function CommentsPopover({
   candidateId, label = 'Comments', meId = null,
   basePath = candidateId == null ? null : `/api/hr/candidates/${candidateId}`,
+  /*
+   * What kind of id `candidateId` is.
+   *
+   * A marketplace candidate and a Triage applicant are numbered independently,
+   * and the shared count store was keyed on the number alone — so the two
+   * sequences overwrote each other's dots in both directions. Anything that
+   * comments on something other than a marketplace candidate passes its own
+   * scope; `basePath` already had to be passed for the same reason.
+   */
+  scope = 'candidate',
 }) {
   const [open, setOpen] = useState(false)
   const [comments, setComments] = useState(null)
@@ -119,7 +129,7 @@ export default function CommentsPopover({
         setComments(data.comments)
         /* The list just read is the truth; the shared count may predate a
            colleague's note or a deletion elsewhere. */
-        setCommentCount(candidateId, data.comments.length)
+        setCommentCount(candidateId, data.comments.length, scope)
       })
       .catch((err) => setError(err.message))
   }, [open, candidateId])
@@ -134,7 +144,7 @@ export default function CommentsPopover({
     try {
       const data = await post(`${basePath}/comments`, { body }, 'recruiter')
       setComments(data.comments)
-      setCommentCount(candidateId, data.comments.length)
+      setCommentCount(candidateId, data.comments.length, scope)
       setDraft('')
       setWriting(false)
     } catch (err) {
@@ -158,7 +168,7 @@ export default function CommentsPopover({
     try {
       const data = await del(`${basePath}/comments/${comment.id}`, 'recruiter')
       setComments(data.comments)
-      setCommentCount(candidateId, data.comments.length)
+      setCommentCount(candidateId, data.comments.length, scope)
     } catch (err) {
       setError(err.message)
     }
@@ -167,7 +177,7 @@ export default function CommentsPopover({
   const count = comments?.length ?? 0
   /* From the shared count while the panel is shut, so the dot shows before the
      notes themselves have been loaded. */
-  const known = useCommentCount(candidateId)
+  const known = useCommentCount(candidateId, scope)
 
   return (
     <span className="comments-anchor">

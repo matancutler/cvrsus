@@ -8,6 +8,7 @@ import Notice, { StatusNotice, useStandingNotice } from './Notice.jsx'
 import PopMenu from './PopMenu.jsx'
 import TagEditor, { TagStrip } from './CandidateTags.jsx'
 import CommentsPopover from './CommentsPopover.jsx'
+import { seedCommentCounts } from '../commented.js'
 import pastedImage from '../pastedImage.js'
 import personName from '../personName.js'
 import scoreBand from '../scoreBand.js'
@@ -998,6 +999,26 @@ function TriageResults({ id, initial, onBalanceChanged, meId = null, folders = [
       const data = await fetchPage(0, false)
       setState(data)
       if (data.filed) setFiled(data.filed)
+      /*
+       * The tags and note counts this response carries, which were dropped.
+       *
+       * The results route has always sent `tagged` and `commented` — the whole
+       * company's, indexed by applicant id — and the only place that read them
+       * was inside fileInto, from a response (POST folders/:id/triage-items)
+       * that returns neither. Both guards there were permanently false, so
+       * these two pieces of state were seeded empty at mount and never filled
+       * from the server again.
+       *
+       * What a recruiter saw: Triage rows with no tags at all, however many
+       * the team had written. Adding one on the row showed it, optimistically,
+       * until the next poll two and a half seconds later took it away.
+       */
+      if (data.tagged) setTagged(data.tagged)
+      if (data.commented) {
+        setCommented(data.commented)
+        /* And the dots, which read from the shared store rather than a prop. */
+        seedCommentCounts(data.commented, 'triage')
+      }
       /* Only the first page is re-read on a poll. Re-fetching everything the
          recruiter has scrolled through would reorder the list under their
          cursor every two and a half seconds. */
@@ -1083,6 +1104,13 @@ function TriageResults({ id, initial, onBalanceChanged, meId = null, folders = [
       const data = await fetchPage(loaded, true)
       setRows((was) => [...was, ...data.results])
       setState(data)
+      /* Show More brings rows the first page did not have; their tags and
+         notes arrive in the same response and are read the same way. */
+      if (data.tagged) setTagged(data.tagged)
+      if (data.commented) {
+        setCommented(data.commented)
+        seedCommentCounts(data.commented, 'triage')
+      }
     } catch (err) {
       setError(err.message)
     } finally {
@@ -1581,6 +1609,7 @@ function TriageResultCard({
             />
             <CommentsPopover
               candidateId={row.id}
+              scope="triage"
               meId={meId}
               basePath={`/api/hr/triage/${triageId}/applicants/${row.id}`}
               label={comments > 0 ? `${comments} note(s) on ${name}` : `Notes on ${name}`}

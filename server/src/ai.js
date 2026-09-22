@@ -177,12 +177,47 @@ recruiter — for example an Israeli company name or a military unit.
 Rules:
 - Report only what the CV states. Never infer a skill, employer, or qualification
   that is not written down, and never round a vague claim into a precise one.
+  This rule governs every field below EXCEPT inferred_capabilities, which is the
+  one place inference is asked for and is described on its own further down.
 - Use null for anything the CV does not say. An empty array is correct when the
   CV genuinely lists none of that category.
 - seniority is one of: intern, junior, mid, senior, lead, principal, executive.
   Judge it from the roles and responsibilities described, not from a year count.
 - skills are concrete and checkable — tools, languages, platforms, methods,
-  certifications. Not personality traits.
+  certifications. Not personality traits. This field is the candidate's OWN
+  claim: it holds what the CV says they can do, and nothing else.
+
+- inferred_capabilities is the one field where you may go beyond the words, and
+  the test is NECESSITY, not plausibility: include a capability only when the
+  work the CV describes could not have been done without it. "Ran month-end
+  close for a listed company" cannot be done without reconciliation and
+  financial reporting, so those belong here. It does not establish IFRS, audit
+  or tax, which are things a person in that job MIGHT also do — those are
+  plausible, and plausible is not enough.
+
+  Three further rules, each of which matters:
+
+    Infer from what this candidate wrote, never from what the job title
+    usually involves. A title is a label; the paragraph under it is the
+    evidence. Two people with the same title have different CVs and should
+    get different inferences.
+
+    Never restate something already in skills. An entry that duplicates the
+    candidate's own claim adds nothing and makes our list look longer than
+    it is.
+
+    Never infer a credential, an employer, a language, a qualification or a
+    number of years. Those are claims about the world that need a document
+    behind them, and a candidate is entitled to be the only one making them.
+
+  Eight is the ceiling and is not a target. Four is a normal answer and an
+  empty array is a perfectly good one — a CV that describes its work thinly
+  supports few inferences, and padding the list is inventing skills for
+  somebody who did not claim them.
+
+  These are shown to recruiters labelled as our reading rather than the
+  candidate's, and they are used to help find the person. They are never
+  treated as evidence when scoring a requirement.
 - employment_history is newest first. start and end are "YYYY-MM" or "YYYY";
   end is "present" for the current role.
 - summary is the candidate's OWN summary, copied out of the CV word for word —

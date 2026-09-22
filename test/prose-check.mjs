@@ -75,6 +75,39 @@ check('an explanation gets a longer rope than a reason',
   && proseProblem('word '.repeat(90), { kind: 'reason' }) === 'too long',
   'the schema asks for 180 on a reason and 400 on an explanation')
 
+section('The second shape: the answer stops being prose and becomes markup')
+
+/*
+ * Verbatim from the medium-effort run in the disagreement sample — a second
+ * copy of the field spliced onto the first with its JSON key still attached,
+ * and a training-data citation token trailing after it. Every repetition test
+ * passes it: varied tokens, healthy distinct ratio, under the length cap,
+ * mostly real words.
+ */
+const LEAKED = 'Benchmarking and range analysis show quantitative work, though not '
+  + 'transaction-grade analytics.reason:analysis at a professional services firm '
+  + 'evidences quantitative reasoning.:contentReference[oaicite:0]{index=0}'
+
+check('the leaked citation is refused', proseProblem(LEAKED) === 'leaked markup',
+  'it is not degenerate by any repetition measure, and it is still not a sentence '
+  + 'to put on a candidate’s card')
+check('and the repetition tests alone would have passed it',
+  proseProblem(LEAKED.replace(/:contentReference.*$/, '').replace('.reason:', '. ')) === null,
+  'which is why this needed a rule of its own rather than a wider repetition threshold')
+
+check('a JSON key spliced mid-sentence is refused',
+  proseProblem('No degree is listed."quote":"B.B.A - Reichman University"') === 'leaked markup')
+check('a bracketed citation is refused',
+  proseProblem('Six years in audit, not electrical design. 【4†15†source】') === 'leaked markup')
+
+check('but a plain colon after a common word is not',
+  proseProblem('The reason: no engineering degree is listed anywhere.') === null,
+  'a person may legitimately write that, and refusing it would delete honest text')
+check('nor is a quoted CV fragment',
+  proseProblem('Quote reads "Financial modeling & valuation", which implies Excel.') === null)
+check('nor is Hebrew reasoning',
+  proseProblem('הרקע האקדמי בהנדסת תעשייה, לא חשמל.') === null)
+
 section('What gets stored when it fails')
 
 check('a usable reason is stored as written',

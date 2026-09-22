@@ -10,6 +10,21 @@
  *
  * A colleague's new note elsewhere shows up on the next page load, which is the
  * right trade for a hint: it is never wrong about notes you wrote yourself.
+ *
+ * ---
+ *
+ * WHY EVERY ENTRY IS SCOPED
+ *
+ * Two different kinds of thing are commented on, and their ids are two
+ * independent sequences that collide constantly: a marketplace candidate, and
+ * a Triage applicant. This map was keyed on the number alone and loaded only
+ * from the marketplace endpoint, so Triage applicant #42 wore a dot when
+ * candidate #42 had notes and wore nothing when it had notes of its own — and
+ * worse in the other direction, writing a note on applicant #42 set the count
+ * for candidate #42 and put a dot on a stranger in Search, Folders and Reveal
+ * History for the rest of the session.
+ *
+ * The scope is part of the key. Nothing else changed.
  */
 import { useEffect, useState } from 'react'
 
@@ -23,11 +38,16 @@ function publish() {
   for (const listener of listeners) listener()
 }
 
+/* One key space for two id sequences that overlap. */
+const key = (id, scope) => `${scope}:${Number(id)}`
+
 function ensureLoaded() {
   if (counts || loading) return
   loading = get('/api/hr/comments/commented', 'recruiter')
     .then((data) => {
-      counts = new Map((data.commented ?? []).map((row) => [row.candidateId, row.count]))
+      counts = new Map((data.commented ?? []).map(
+        (row) => [key(row.candidateId, 'candidate'), row.count],
+      ))
     })
     .catch(() => {
       /* A hint that failed to load shows no dots, which is the state a page
@@ -40,8 +60,15 @@ function ensureLoaded() {
     })
 }
 
-/** How many notes this candidate has, as far as this page knows. */
-export function useCommentCount(candidateId) {
+/**
+ * How many notes this thing has, as far as this page knows.
+ *
+ * `scope` says what kind of thing the id names. It defaults to 'candidate'
+ * because that is what the shared endpoint returns and what every marketplace
+ * surface asks about; Triage passes 'triage' and seeds its own counts from the
+ * index the results page already sends.
+ */
+export function useCommentCount(candidateId, scope = 'candidate') {
   const [, rerender] = useState(0)
 
   useEffect(() => {
@@ -51,14 +78,34 @@ export function useCommentCount(candidateId) {
     return () => { listeners.delete(listener) }
   }, [])
 
-  return counts?.get(Number(candidateId)) ?? 0
+  return counts?.get(key(candidateId, scope)) ?? 0
 }
 
 /** Called after posting or deleting, with the notes the server now holds. */
-export function setCommentCount(candidateId, count) {
+export function setCommentCount(candidateId, count, scope = 'candidate') {
   if (!counts) counts = new Map()
-  if (count > 0) counts.set(Number(candidateId), count)
-  else counts.delete(Number(candidateId))
+  if (count > 0) counts.set(key(candidateId, scope), count)
+  else counts.delete(key(candidateId, scope))
+  publish()
+}
+
+/**
+ * Primes a whole scope from an index the server already sent.
+ *
+ * The Triage results payload carries `commented` — applicant id to note count
+ * — computed for the whole session. Without this the Triage dots would have to
+ * be fetched per row, or be wrong, and they were wrong.
+ *
+ * Merged rather than replacing the map, because the marketplace scope in it is
+ * loaded from somewhere else and both are on screen at once.
+ */
+export function seedCommentCounts(index, scope) {
+  if (!index) return
+  if (!counts) counts = new Map()
+  for (const [id, count] of Object.entries(index)) {
+    if (count > 0) counts.set(key(id, scope), count)
+    else counts.delete(key(id, scope))
+  }
   publish()
 }
 

@@ -29,6 +29,19 @@
  * Text with no letters is refused because a reason made of punctuation is not
  * a reason, and it is what several degeneration modes look like.
  *
+ * Leaked markup is refused because it is the other shape this has actually
+ * come back in. A medium-effort verdict in the disagreement sample ended:
+ *
+ *   "…though not transaction-grade analytics.reason:analysis at a
+ *    professional services firm evidences quantitative reasoning.
+ *    :contentReference[oaicite:0]{index=0}"
+ *
+ * — a second copy of the field spliced onto the first with its own JSON key
+ * still attached, and a citation token from somewhere in the model's training
+ * data trailing after it. Every repetition test passes that text: the tokens
+ * are varied, the ratio is healthy, it is under the length cap, and it is
+ * mostly real words. It is still not something to put on a candidate's card.
+ *
  * ---
  *
  * WHAT THIS DELIBERATELY DOES NOT DO
@@ -90,6 +103,32 @@ function looksDegenerate(words) {
   return commonest / words.length > 0.34
 }
 
+/*
+ * Markers that only appear when the answer stopped being prose.
+ *
+ * Deliberately narrow. Each of these is a token no recruiter-facing sentence
+ * about a CV would contain, which is what makes them safe to refuse outright:
+ *
+ *   contentReference / oaicite / citeturn — citation scaffolding from
+ *     training data, which surfaces when the model slips out of the task.
+ *   {index= and 【…†…】 — the bracketed forms of the same thing.
+ *   "key": mid-sentence — the model emitted another JSON field INSIDE the
+ *     string value of this one, so the structure it was asked for has broken
+ *     down even though the parse succeeded.
+ *
+ * Not included: a bare "reason:" or "note:", which a person might legitimately
+ * write. The rule is that a marker has to be structural, not merely a colon
+ * after a word this codebase happens to use as a field name.
+ */
+const LEAKED_MARKUP = [
+  /contentReference/i,
+  /oaicite/i,
+  /citeturn/i,
+  /\{index\s*=/,
+  /【[^】]*†[^】]*】/,
+  /\S"\s*[a-z_]{2,20}"\s*:/i,
+]
+
 /**
  * Why this text is not usable, or null if it is.
  *
@@ -105,6 +144,8 @@ export function proseProblem(value, { kind = 'reason' } = {}) {
   /* Letters in any script: this product reads Hebrew CVs, so an ASCII-only
      test would reject a perfectly good Hebrew reason. */
   if (!/\p{L}/u.test(text)) return 'no letters'
+
+  if (LEAKED_MARKUP.some((pattern) => pattern.test(text))) return 'leaked markup'
 
   const words = text.toLowerCase().match(/\p{L}+/gu) ?? []
   if (words.length < MIN_WORDS) return 'not a sentence'

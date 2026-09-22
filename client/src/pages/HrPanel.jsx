@@ -884,7 +884,7 @@ function Workspace({ me, onReload, onSignOut }) {
             <FoldersTab me={me} folders={folders} setFolders={setFolders} statuses={statuses} />
           )}
           {tab === 'reveals' && (
-            <RevealsTab me={me} folders={folders} setFolders={setFolders} statuses={statuses} />
+            <RevealsTab me={me} folders={folders} setFolders={setFolders} />
           )}
           {tab === 'triage' && (
             <TriageTab
@@ -5555,16 +5555,21 @@ function ResultCard({
   return (
     <li className="result">
       <div
-        className="result-main" onClick={onOpen} role="button" tabIndex={0}
-        title={`Open ${candidate.display_name ?? 'this candidate'}`}
+        className={onOpen ? 'result-main' : 'result-main result-main-flat'}
+        onClick={onOpen}
+        role={onOpen ? 'button' : undefined}
+        tabIndex={onOpen ? 0 : undefined}
+        title={onOpen ? `Open ${candidate.display_name ?? 'this candidate'}` : undefined}
         /* Only keystrokes that land on the card itself. The corner holds a tag
            editor and a comments panel with text boxes in them; without this,
            every space typed into a comment opened the candidate underneath. */
         onKeyDown={(e) => {
-          if (e.target !== e.currentTarget) return
+          if (!onOpen || e.target !== e.currentTarget) return
           if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen() }
         }}
-        draggable
+        /* Only a row with a candidate behind it. Dragging an applicant set the
+           string "null", which the drop target read as NaN and discarded. */
+        draggable={candidate.id != null}
         onDragStart={(e) => e.dataTransfer.setData('text/candidate-id', String(candidate.id))}
       >
         {/* Photograph and identity are one thing on the left, so the grid is
@@ -6048,7 +6053,7 @@ function FolderIcon() {
  * be added to it by hand, and removing from it would mean unpaying — so it
  * lives beside Folders in the rail rather than inside them.
  */
-function RevealsTab({ me, folders, setFolders, statuses = [] }) {
+function RevealsTab({ me, folders, setFolders }) {
   const [reveals, setReveals] = useState(null)
   const [error, setError] = useState('')
   const [filters, setFilters] = useState(EMPTY_RESULT_FILTERS)
@@ -6131,7 +6136,13 @@ function RevealsTab({ me, folders, setFolders, statuses = [] }) {
           shown={visible.length}
           matched={rows.length}
           total={rows.length}
-          statuses={statuses}
+          /*
+           * No status control here. A reveal-log row carries no status - the
+           * six stages are about a folder pipeline - so the dropdown rendered
+           * and choosing any stage emptied the screen to "Nothing here matches
+           * the filters". A filter that can only ever return nothing is worse
+           * than an absent one.
+           */
           showScore={false}
           tags={tagOptions}
           nameSearch
@@ -6208,12 +6219,29 @@ function RevealsTab({ me, folders, setFolders, statuses = [] }) {
       )}
 
       {openCandidate !== null && (
+        /*
+         * The props CandidateDialog actually takes.
+         *
+         * This passed `me` and `setFolders`, which it does not accept, and
+         * omitted `onError`, which it calls bare in four places - the profile
+         * fetch, the message send, close/reopen, and the CV download. Each of
+         * those failures raised "onError is not a function" inside a promise
+         * with no catch after it, so the error vanished: the dialog sat on
+         * "Loading..." for ever and the recruiter was told nothing.
+         *
+         * `meId` rather than `me` is the same mistake in the other direction -
+         * with it unset, a profile you revealed yourself said "Revealed by
+         * <your own name>" instead of "me". Filing and tag edits are wired
+         * through too, so the dialog behaves here as it does everywhere else.
+         */
         <CandidateDialog
           candidateId={openCandidate}
-          me={me}
+          meId={me?.recruiter?.id ?? null}
           folders={folders}
-          setFolders={setFolders}
+          onAddToFolder={(candidateId, folderId) => fileInto(candidateId, folderId)}
+          onTagsChanged={() => load()}
           onClose={() => setOpenCandidate(null)}
+          onError={setError}
         />
       )}
     </div>
@@ -6500,6 +6528,17 @@ function FoldersTab({ me = null, folders, setFolders, statuses = [] }) {
   async function removeItem(candidateId) {
     try {
       setFolders((await del(`/api/hr/folders/items/${candidateId}`, 'recruiter')).folders)
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  /* The applicant's own route. Its own function rather than a branch inside the
+     one above, because the two take different ids from different tables and
+     only the caller knows which kind of row it is holding. */
+  async function removeTriageItem(applicantId) {
+    try {
+      setFolders((await del(`/api/hr/folders/triage-items/${applicantId}`, 'recruiter')).folders)
     } catch (err) {
       setError(err.message)
     }
@@ -6797,7 +6836,33 @@ function FoldersTab({ me = null, folders, setFolders, statuses = [] }) {
                 missingRequired: [],
               }}
               meId={me?.recruiter?.id ?? null}
-              onOpen={() => setOpenCandidate(item.candidate_id)}
+              /*
+               * A Triage applicant filed into a folder is not a marketplace
+               * candidate, and every handler here was wired to a field that is
+               * NULL for one - listFolders sets candidate_id: null on them
+               * deliberately, because there is no candidate.
+               *
+               * So the row rendered a full-looking card, with a menu offering
+               * "Save in folder" and "Remove from <folder>", and a clickable
+               * body, and all four gestures did nothing at all:
+               *
+               *   open   - setOpenCandidate(null), and the dialog is gated on
+               *            !== null, so no dialog and no request
+               *   file   - setFiling(null), same gate, same nothing
+               *   remove - DELETE /api/hr/folders/items/null, which parses to
+               *            NaN, deletes no rows, and answers 200 with the
+               *            unchanged folder list: the row stayed where it was
+               *            and nothing said why
+               *   drag   - dataTransfer carried the string "null"
+               *
+               * The applicant has its own removal route, which this screen
+               * never called. Opening and filing genuinely do not exist for an
+               * applicant, so they are withheld rather than faked: a menu entry
+               * that does nothing is worse than an absent one.
+               */
+              onOpen={item.candidate_id == null
+                ? undefined
+                : () => setOpenCandidate(item.candidate_id)}
               onTagsChanged={tagsChanged}
               /*
                * Filing, from a card that is already filed.
@@ -6808,9 +6873,11 @@ function FoldersTab({ me = null, folders, setFolders, statuses = [] }) {
                * another was otherwise two gestures through two screens — take
                * them out here, find them again in a search, put them back.
                */
-              canSave
+              canSave={item.candidate_id != null}
               onFile={() => setFiling(item.candidate_id)}
-              onRemove={() => removeItem(item.candidate_id)}
+              onRemove={() => (item.candidate_id == null
+                ? removeTriageItem(item.triage_applicant_id)
+                : removeItem(item.candidate_id))}
               /* Short, because it is a line in a menu now rather than the
                  accessible name of an unlabelled ×. */
               removeLabel={`Remove from ${opened.name}`}

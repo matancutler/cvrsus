@@ -10878,3 +10878,21 @@ html:has(.workspace-shell) { scrollbar-gutter: auto; }
   border-color: var(--warn-border);
   font-weight: var(--w-semi);
 }
+
+/*
+ * A result row with nothing behind it to open.
+ *
+ * Only a Triage applicant filed into a folder: it is a CV somebody uploaded,
+ * not a marketplace profile, so there is no page to go to. The card keeps its
+ * shape - the tags, the chips and the menu all still work - and loses only the
+ * affordances that were lying: the pointer, the hover lift and the focus ring
+ * of a button that could not be pressed.
+ */
+.result-main-flat {
+  cursor: default;
+}
+
+.result-main-flat:hover {
+  background: inherit;
+  box-shadow: none;
+}
