@@ -1640,6 +1640,14 @@ export async function analyseMatch({
      * Once, not twice - the second failure is a signal about the input, and
      * paying a third time for the same document does not change it.
      */
+    /* Which ids carry a must-have, for the retry rule inside degenerate(). Built
+       once per analysis rather than per row: requirementsFrom emits them in tier
+       order with R-prefixed ids, and this is the only place the tier and the raw
+       model row meet. */
+    const mustHaveIds = new Set(
+      requirements.filter((row) => row?.tier === 'must_have').map((row) => row?.id),
+    )
+
     const degenerate = (raw) => {
       let parsed
       try {
@@ -1654,17 +1662,35 @@ export async function analyseMatch({
         if (bad(row?.reason, 'reason')) return `reason on ${row?.requirement_id ?? '?'}`
 
         /*
-         * And whether the sentence argues for the verdict beside it.
+         * And whether the sentence argues for the verdict beside it - but only
+         * on a must-have, and this is a cost decision rather than a quality one.
          *
          * Here rather than after the parse, for two reasons. It shares the one
-         * retry that already exists, which is the whole point - a model that
+         * retry that already exists, which is the whole point: a model that
          * wrote a reason contradicting its own verdict was not attending, and
          * the cheapest response is to ask again before deciding anything. And
          * it sees the reason BEFORE normalizeMatch caps it at 25 words, which
-         * matters: capWords can amputate a trailing "but not X" and turn an
-         * honest partial into one this check would convict.
+         * matters, because capWords can amputate a trailing "but not X" and
+         * turn an honest partial into one this check would convict.
+         *
+         * Scoped to must-haves because degenerate() returns on the FIRST bad
+         * row and a retry re-runs the WHOLE analysis. The check flags about
+         * 0.8% of verdicts, and an analysis carries fifteen to twenty-five of
+         * them, so an unscoped rule retried roughly one analysis in eight -
+         * measured at 12% over a 25-candidate re-score, which is a 12% rise in
+         * the cost of the most expensive step in the product, much of it spent
+         * re-reading a whole CV because one contextual requirement's sentence
+         * was terse.
+         *
+         * A must-have is where the money is: it carries three times the weight
+         * of a preferred and six times a contextual, and it is the tier the
+         * score is mostly made of. A mismatch there is worth a second ask. One
+         * on a contextual requirement is worth a mark, which it still gets
+         * after the parse, along with every other tier.
          */
-        const mismatch = reasonDisagrees(row?.status, row?.reason)
+        const mismatch = mustHaveIds.has(row?.requirement_id)
+          ? reasonDisagrees(row?.status, row?.reason)
+          : null
         if (mismatch) return `${mismatch}, on ${row?.requirement_id ?? '?'}`
       }
       return null

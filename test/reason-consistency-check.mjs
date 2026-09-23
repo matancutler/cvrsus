@@ -129,9 +129,30 @@ const ai = read('../server/src/ai.js')
 const score = read('../server/src/matching/score.js')
 
 check('the check runs inside the existing retry',
-  /const mismatch = reasonDisagrees\(row\?\.status, row\?\.reason\)/.test(ai),
+  /const mismatch = mustHaveIds\.has\(row\?\.requirement_id\)/.test(ai)
+  && /reasonDisagrees\(row\?\.status, row\?\.reason\)/.test(ai),
   'sharing degenerate() means one retry, not two, and it sees the reason before '
   + 'capWords can amputate a trailing limiting clause')
+
+/*
+ * degenerate() returns on the FIRST bad row and a retry re-runs the WHOLE
+ * analysis, so an unscoped rule at 0.8% per verdict, over fifteen to
+ * twenty-five verdicts, retries roughly one analysis in eight - measured at
+ * 12% over a real 25-candidate re-score. That is a 12% rise in the cost of the
+ * most expensive step, much of it spent re-reading a CV because one contextual
+ * requirement's sentence was terse.
+ *
+ * A must-have carries three times a preferred and six times a contextual, and
+ * is what the score is mostly made of. Buying a second opinion there is worth
+ * it; buying one for a contextual is not, and it still gets the mark.
+ */
+check('but only a must-have buys a second ask',
+  /requirements\.filter\(\(row\) => row\?\.tier === 'must_have'\)/.test(ai),
+  'a retry re-runs the whole analysis, so the trigger has to be worth a whole '
+  + 'analysis')
+check('while every tier still gets the mark',
+  /const disagrees = reasonDisagrees\(row\.status, reason\)/.test(ai),
+  'the post-retry pass is unscoped: flagging is free, asking again is not')
 check('and the retry is still bounded to one',
   (ai.match(/^\s*response = await ask\(\)/gm) ?? []).length === 1,
   'the second failure is a signal about the input; paying a third time does not '
