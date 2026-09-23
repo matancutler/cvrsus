@@ -144,11 +144,25 @@ function seedCandidate(id, name) {
  * left other rows at a version its revert then had to undo. The scope flag
  * exists for this and for a cautious first run against production.
  */
+/*
+ * Every migration in this file is the 2-to-3 ARITHMETIC bump, and it has to
+ * keep being that however far the live version moves.
+ *
+ * score-migrate derives the version it migrates FROM by stepping back one from
+ * the target, and the target is whatever VERSIONS.scoring says. Once that
+ * reached 4 these runs silently became 3-to-4 migrations against version-2
+ * fixtures, found nothing, and reported success - a green suite testing an
+ * empty set. Pinning the target here keeps each suite testing the thing it was
+ * written to test, and the new shape gets its own section at the foot of the
+ * file.
+ */
+const AT_V3 = { ...process.env, MATCH_V_SCORING: '3' }
+
 function migrate(...flags) {
   return execFileSync(
     process.execPath,
     ['server/scripts/score-migrate.mjs', '--job', String(JOB_ID), ...flags],
-    { cwd: root, encoding: 'utf8' },
+    { cwd: root, encoding: 'utf8', env: AT_V3 },
   )
 }
 
@@ -159,7 +173,7 @@ function migrateAt(fraction, ...flags) {
   return execFileSync(
     process.execPath,
     ['server/scripts/score-migrate.mjs', '--job', String(JOB_ID), ...flags],
-    { cwd: root, encoding: 'utf8', env: { ...process.env, MATCH_SILENCE_FRACTION: String(fraction) } },
+    { cwd: root, encoding: 'utf8', env: { ...AT_V3, MATCH_SILENCE_FRACTION: String(fraction) } },
   )
 }
 
@@ -168,7 +182,7 @@ function migrateTriage(...flags) {
   return execFileSync(
     process.execPath,
     ['server/scripts/score-migrate.mjs', '--triage', String(TRIAGE_ID), ...flags],
-    { cwd: root, encoding: 'utf8' },
+    { cwd: root, encoding: 'utf8', env: AT_V3 },
   )
 }
 
@@ -568,6 +582,108 @@ db.prepare(`DELETE FROM triages WHERE id = ?`).run(TRIAGE_ID)
 for (const id of [CAND_A, CAND_B, CAND_C, CAND_D]) {
   db.prepare(`DELETE FROM candidates WHERE id = ? AND email LIKE ?`).run(id, `%${RUN}@example.com`)
 }
+
+section('A rubric bump is a different kind of change, and moves different rows')
+
+/*
+ * 2 to 3 was ARITHMETIC: the verdicts stood and the number was recomputed from
+ * them, which is why every row could move without asking a model anything.
+ *
+ * 3 to 4 is a RUBRIC bump. What changed is what the model is TOLD a verdict
+ * means, so the verdicts themselves are what moved — and no arithmetic over the
+ * old ones produces the new ones. The migration therefore has to split the
+ * table by who wrote each row:
+ *
+ *   a keyword-scored row never saw the prompt, the arithmetic is unchanged, so
+ *   carrying it forward verbatim is the same row under a new label;
+ *
+ *   a model-written row is exactly what the new rule revises, so writing it
+ *   forward would file the old judgement under the new rule's name. It is left
+ *   where it is, which makes it a cache miss at the new version, which makes
+ *   the next search ask again.
+ *
+ * Getting this backwards is not a visible failure. It is a database of verdicts
+ * labelled as having been judged by a rule they were never judged by.
+ */
+const RUBRIC_JOB = JOB_ID - 7
+const CAND_MODEL = BASE - 11
+const CAND_KEYWORD = BASE - 12
+
+seedCandidate(CAND_MODEL, 'Rubric Model')
+seedCandidate(CAND_KEYWORD, 'Rubric Keyword')
+
+const seedAtV3 = (candidateId, source) => db.prepare(`
+  INSERT INTO candidate_job_analyses (
+    candidate_id, profile_version, job_id, jd_version, analysis_model,
+    scoring_version, absolute_fit, criteria_results, explanation, source, created_at
+  ) VALUES (?, 1, ?, 1, 'claude-opus-5', '3', 61, ?, ?, ?, ?)
+`).run(
+  candidateId, RUBRIC_JOB,
+  JSON.stringify({
+    verdicts: [{
+      id: 'R1', requirement: 'Five years of something', tier: 'must_have', weight: 30,
+      status: 'partial', quote: 'four years', reason: 'Four years against the five asked for.',
+    }],
+    coverage: 70, locationNudge: 0,
+  }),
+  `seeded by score-migration-check ${RUN}`,
+  source,
+  new Date().toISOString(),
+)
+
+seedAtV3(CAND_MODEL, 'claude')
+seedAtV3(CAND_KEYWORD, 'deterministic')
+
+const rubricRun = execFileSync(
+  process.execPath,
+  ['server/scripts/score-migrate.mjs', '--job', String(RUBRIC_JOB), '--run'],
+  { cwd: root, encoding: 'utf8', env: { ...process.env, MATCH_V_SCORING: '4' } },
+)
+
+const atVersion = (candidateId, version) => db.prepare(`
+  SELECT absolute_fit AS fit, criteria_results, source FROM candidate_job_analyses
+  WHERE candidate_id = ? AND job_id = ? AND scoring_version = ?
+`).get(candidateId, RUBRIC_JOB, version)
+
+check('the plan says which kind of bump it is',
+  /Kind of change\s*:\s*rubric/.test(rubricRun),
+  'an operator reading the log should not have to infer it from the row counts')
+
+check('the keyword-scored row is carried forward',
+  Boolean(atVersion(CAND_KEYWORD, '4')),
+  'it never saw the prompt and the arithmetic did not move, so the new row is '
+  + 'the old row under a new label')
+check('and carried forward unchanged',
+  atVersion(CAND_KEYWORD, '4')?.fit === 61
+  && atVersion(CAND_KEYWORD, '4')?.criteria_results === atVersion(CAND_KEYWORD, '3')?.criteria_results,
+  'carrying forward means carrying, not recomputing')
+
+check('the model-written row is NOT carried forward',
+  atVersion(CAND_MODEL, '4') === undefined,
+  'its verdicts are the thing the new rubric revises; a twin at the new version '
+  + 'would be the old judgement filed under the new rule’s name')
+check('and is left intact where it is',
+  atVersion(CAND_MODEL, '3')?.fit === 61,
+  'deferred is not deleted — the row stays readable, and revertible')
+
+check('the report counts both',
+  /carried forward\s*:\s*1/.test(rubricRun) && /left for the model\s*:\s*1/.test(rubricRun),
+  rubricRun.split('\n').filter((l) => /carried forward|left for the model/.test(l))
+    .map((l) => l.trim()).join(' / '))
+
+check('and the arithmetic path is not reported for a rubric bump',
+  !/rescored from verdicts/.test(rubricRun),
+  'nothing was rescored, and saying so would be a number that means nothing')
+
+/* Cleaned up here rather than in the sweep below, which is scoped to JOB_ID. */
+db.prepare(`DELETE FROM candidate_job_analyses WHERE job_id = ?`).run(RUBRIC_JOB)
+db.prepare(`DELETE FROM candidates WHERE id IN (?, ?)`).run(CAND_MODEL, CAND_KEYWORD)
+
+check('rubric fixtures removed',
+  db.prepare(`SELECT COUNT(*) AS n FROM candidate_job_analyses WHERE job_id = ?`)
+    .get(RUBRIC_JOB).n === 0
+  && db.prepare(`SELECT COUNT(*) AS n FROM candidates WHERE id IN (?, ?)`)
+    .get(CAND_MODEL, CAND_KEYWORD).n === 0)
 
 /*
  * Only the backups this run caused.

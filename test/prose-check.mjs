@@ -134,7 +134,13 @@ section('And it is actually wired in')
 const ai = read('../server/src/ai.js')
 
 check('the analysis checks before it returns', /usableOrPlaceholder\(answer\.reasoning/.test(ai))
-check('every verdict reason too', /reason: usableOrPlaceholder\(row\.reason/.test(ai))
+/* The call moved out of the object literal when the reason-vs-verdict gate
+   landed beside it, so the assertion follows the call rather than the line it
+   used to sit on. It still tests the thing that matters: every verdict's reason
+   goes through the gate on its way to storage. */
+check('every verdict reason too',
+  /const reason = usableOrPlaceholder\(row\.reason, \{ kind: 'reason'/.test(ai)
+  && /return \{ \.\.\.row, reason,/.test(ai))
 check('and it asks once more before giving up',
   /asking once more/.test(ai) && /const ask = \(\) =>/.test(ai),
   'a model that degenerated in one field was not attending to the others either')

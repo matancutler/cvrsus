@@ -1750,6 +1750,85 @@ node server/scripts/contact.mjs show <span class="c">&lt;id&gt;</span></pre>
 
         <article class="cmd-card">
           <div class="cmd-head">
+            <span class="cmd">npm run score:rubric</span>
+            <span class="risk risk-read">Read</span>
+          </div>
+          <p class="what">
+            Counts the analyses a <em>rubric</em> version bump could not carry forward, and what
+            asking the model to redo them would cost. A rubric bump changes what the model is
+            told a verdict means, so the verdicts themselves move &mdash; no arithmetic over the
+            old ones produces the new ones. <code>score:migrate</code> carries forward every
+            keyword-scored row, because those never saw the prompt, and leaves the model-written
+            ones alone.
+          </p>
+          <p class="when">
+            After a deploy that raised <code>MATCH_V_SCORING</code> for a rubric change. Reading
+            it is free and tells you the size of the decision.
+          </p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">npm run score:rubric <span class="flag">-- --run</span></span>
+            <span class="risk risk-wreck">Spends</span>
+          </div>
+          <p class="what">
+            Re-asks the model for every deferred analysis, through the same function a live
+            search calls &mdash; same prompt, same quote check, same cache key &mdash; so the rows
+            it writes are indistinguishable from the ones a search would have written. Records
+            each one in the migration manifest, so
+            <code>npm run score:migrate -- --revert --run</code> undoes it.
+            <code>-- --limit 25</code> does a first tranche; <code>-- --job 12</code> does one job.
+          </p>
+          <p class="when">
+            Only if you would rather not wait. <strong>Doing nothing is also correct</strong>: a
+            row left at the old version is a cache miss at the new one, so the next search of
+            that job asks the model anyway and writes the answer. This only brings the bill
+            forward. Re-running after a crash costs nothing for the work already done.
+          </p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">npm run unpoison</span>
+            <span class="risk risk-read">Read</span>
+          </div>
+          <p class="what">
+            Finds cached analyses that are keyword guesses filed under a model&rsquo;s name. Until
+            September 2026 a candidate the model never answered for &mdash; aborted, timed out,
+            rate-limited, or reached while the Anthropic balance was spent &mdash; had their
+            fallback score written into the cache under the real model&rsquo;s name, and served
+            back on every later search as the product&rsquo;s judgement. Nothing expires it.
+            <code>-- --show</code> prints a line per row; <code>-- --since 2026-09-01</code>
+            narrows the window.
+          </p>
+          <p class="when">
+            Once, after the September 2026 deploy, on any database that ran while the balance was
+            exhausted. A count of zero is the expected answer on a box that always had credit.
+          </p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
+            <span class="cmd">npm run unpoison <span class="flag">-- --delete --all</span></span>
+            <span class="risk risk-wreck">Deletes</span>
+          </div>
+          <p class="what">
+            Removes them, so the next search of each job asks the model about those candidates
+            again. <code>--delete</code> without <code>--all</code> or a <code>--job</code> is
+            refused. Only rows carrying all three marks are deleted &mdash; the model/source
+            disagreement, no verdicts in the blob, and no explanation; anything carrying one but
+            not the others is printed and kept.
+          </p>
+          <p class="when">
+            After reading the plan. It names how many are the last analysis for a candidate
+            filed in a folder, because those cards lose their score and their reasoning until
+            somebody runs that search again. <strong>There is no undo.</strong>
+          </p>
+        </article>
+
+        <article class="cmd-card">
+          <div class="cmd-head">
             <span class="cmd">npm run seed:candidates <span class="flag">-- --run</span></span>
             <span class="risk risk-wreck">Spends</span>
           </div>
@@ -1827,7 +1906,7 @@ node server/scripts/contact.mjs show <span class="c">&lt;id&gt;</span></pre>
         <span>test:usage</span><span>test:export</span><span>test:folders</span>
         <span>test:workspace</span><span>test:shared-folders</span><span>test:reveal</span>
         <span>test:triage</span><span>test:triage-funnel</span><span>test:triage-capacity</span>
-        <span>test:triage-charge</span><span>test:triage-retention</span><span>test:score-migration</span><span>test:prose</span><span>test:triage-skip</span>
+        <span>test:triage-charge</span><span>test:triage-retention</span><span>test:score-migration</span><span>test:prose</span><span>test:reason</span><span>test:triage-skip</span>
         <span>test:cost</span><span>test:explain</span><span>test:triage-drop</span>
         <span>test:name-case</span><span>test:jd-image</span><span>test:paste-image</span>
         <span>test:score-fairness</span><span>test:criterion-scoring</span><span>test:analysis-depth</span>
