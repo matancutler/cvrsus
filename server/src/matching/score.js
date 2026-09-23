@@ -158,6 +158,10 @@ export function scoreAgainst(requirements, verdicts) {
        * grow a field of `false`.
        */
       ...(verdict?.quoteUnverified ? { quoteUnverified: true } : {}),
+      /* The same, for a reason that argues the other way. Flag-only, like the
+         quote above it: a lexical check with a measured 0.8% false-positive
+         rate is fine as a retry trigger and is not fine as a ranking input. */
+      ...(verdict?.reasonUnverified ? { reasonUnverified: true } : {}),
     })
 
     /*
@@ -454,10 +458,23 @@ export function deriveHighlights(breakdown, { limit = 8 } = {}) {
      what was being asked. */
   const said = (row) => (String(row.reason ?? '').trim() || String(row.requirement ?? '').trim())
 
+  /*
+   * A reason that argues for a different verdict is not republished as a
+   * strength.
+   *
+   * `said` copies row.reason straight into this list, which is rendered to the
+   * recruiter as what the candidate has going for them. A flagged row's
+   * sentence is the one string here we have reason to doubt, so the row keeps
+   * its verdict and its place and loses only its wording - the requirement text
+   * stands in, which at least says what was being asked. Same treatment the
+   * quote check gets at `evidence` below.
+   */
   const strengths = rows
     .filter((row) => row.status === 'meets')
     .sort(byTier)
-    .map(said)
+    .map((row) => (row.reasonUnverified === true
+      ? String(row.requirement ?? '').trim()
+      : said(row)))
     .filter(Boolean)
     .slice(0, limit)
 
@@ -483,6 +500,7 @@ export function deriveHighlights(breakdown, { limit = 8 } = {}) {
    */
   const evidence = rows
     .filter((row) => row.quoteUnverified !== true)
+    .filter((row) => row.reasonUnverified !== true)
     .filter((row) => String(row.quote ?? '').trim().length > 0)
     .sort(byTier)
     .map((row) => ({ claim: said(row), quote: String(row.quote).trim() }))

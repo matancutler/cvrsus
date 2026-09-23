@@ -154,6 +154,142 @@ export function proseProblem(value, { kind = 'reason' } = {}) {
   return null
 }
 
+/*
+ * Whether a reason argues for a different verdict than the one beside it.
+ *
+ * Two of twenty-one hand-read disagreements had this defect. One verdict came
+ * back as `partial` with the reason "Led a listed company out of crisis to a
+ * tenfold shareholder return, evidencing resilience under pressure." - which is
+ * an argument for `meets`, written next to a score that says otherwise. The
+ * recruiter reads the sentence, not the enum, so a row like that is the one
+ * they raise a ticket about.
+ *
+ * This is a floor, exactly like proseProblem above it: no model, no network, no
+ * opinion about whether the verdict is CORRECT. It asks one mechanical
+ * question - does the sentence carry the shape its verdict requires?
+ *
+ * ---
+ *
+ * WHY THE RULE IS ASYMMETRIC
+ *
+ * Measured over the 625 verdicts stored on this machine (meets 106, partial
+ * 138, no_evidence 375, contradicted 6), a limiting or negating word appears in
+ * 93% of partial reasons, 100% of no_evidence, 100% of contradicted - and 17%
+ * of meets. Those numbers set the two rules:
+ *
+ *   Anything that is NOT `meets` is a claim that something is missing or
+ *   incomplete, so its reason has to say so. A reason with no limiting word
+ *   anywhere is a reason for `meets`.
+ *
+ *   `meets` is the other way round and needs a much narrower test, because a
+ *   perfectly good meets reason often contains a stray "not" or "rather than"
+ *   - "Roughly twenty years of experience, far beyond the five-year bar",
+ *   "Twelve years of commercial experience, though in sales rather than
+ *   engineering". A bare-negation rule fires on 18 of the 106 real ones. So
+ *   `meets` is flagged only on a hard, unhedged statement that something is
+ *   not evidenced at all.
+ *
+ * Together they flag 5 of the 625 stored rows - 0.8% - and catch the real
+ * failure. That rate is affordable because of what a flag costs: one retry,
+ * and then a mark. It never moves a status and it never moves a score.
+ */
+
+/* Words that carry a limit, a gap or a hedge. Matched as whole tokens against
+   the same /\p{L}+/gu split proseProblem uses, never with \b - \b is defined on
+   ASCII word characters, so /\bלא\b/ is false inside Hebrew text. */
+const CONTRAST = new Set([
+  'but', 'though', 'although', 'however', 'albeit', 'yet', 'while', 'whereas',
+  'rather', 'instead', 'other', 'outside', 'beyond', 'short', 'below', 'less',
+  'only', 'still', 'limited', 'partial', 'partially', 'adjacent', 'indirect',
+  'implies', 'imply', 'implied', 'suggests', 'appears', 'unclear',
+  'not', 'never', 'none', 'nothing', 'without', 'lacks', 'lacking', 'absent',
+  'neither', 'nor', 'different', 'no', 'non',
+  /* Comparatives. A terse partial often names the shortfall as a comparison
+     rather than as a negation - "Two years against a five-year requirement" is
+     the rubric's own example of what partial means, and it carries no negating
+     word at all. Erring towards more contrast words is the safe direction: a
+     word missing from this set costs a flag that should not fire, and a word
+     wrongly in it costs only a flag that does not. */
+  'against', 'versus', 'despite', 'slightly', 'barely', 'somewhat',
+  'narrow', 'narrower', 'shy', 'stops',
+  /* The Hebrew half. Reasons are English today, but this file deliberately
+     protects Hebrew prose everywhere else, and a check that silently
+     mis-handles it is a regression waiting to be written. */
+  'לא', 'אין', 'אינו', 'אינה', 'אינם', 'אינן', 'ללא', 'בלי', 'מבלי',
+  'חסר', 'חסרה', 'חסרים', 'חוסר', 'אך', 'אבל', 'אולם', 'אלא', 'ברם',
+  'למרות', 'אמנם', 'רק', 'בלבד', 'חלקי', 'חלקית', 'מוגבל', 'מוגבלת',
+  'פחות', 'מתחת', 'מעולם', 'שום', 'במקום', 'לכאורה', 'כמעט', 'בקושי',
+  'עקיף', 'עקיפה', 'בלתי', 'ובלתי',
+])
+
+/* Two-word forms the token set cannot see, tested on the lowercased string. */
+const CONTRAST_PHRASES = [
+  'rather than', 'instead of', 'other than', 'less than', 'short of',
+  'no evidence', 'does not', 'did not', 'not mentioned', 'stops short',
+]
+
+/*
+ * The only shape that convicts a `meets`.
+ *
+ * Every one of these asserts that the thing is not in the document at all,
+ * which cannot sit beside a verdict claiming the document plainly evidences it.
+ * Deliberately not "not" or "no" on their own - see the note above.
+ */
+const HARD_ABSENCE = /no (evidence|mention)|not (mentioned|listed|stated|described|evidenced|shown|named|present)|never (mentioned|named|listed|described|stated)|does not (mention|say|state|show)|nowhere/i
+
+/** Whether the text is mostly written in a non-Latin script. */
+function mostlyNonLatin(words) {
+  if (words.length === 0) return false
+  const latin = words.filter((word) => /^[a-z]+$/.test(word)).length
+  return latin / words.length < 0.5
+}
+
+/**
+ * Why this reason does not match its verdict, or null if it does.
+ *
+ * A string rather than a boolean, so the caller can log which requirement and
+ * a scan over stored rows can report the shape of what it found.
+ */
+export function reasonDisagrees(status, reason) {
+  const text = String(reason ?? '').trim()
+
+  /* Nothing to disagree with. A verdict with no reason is proseProblem's
+     business, not this function's. */
+  if (!text) return null
+
+  const lowered = text.toLowerCase()
+  const words = lowered.match(/\p{L}+/gu) ?? []
+  if (words.length < MIN_WORDS) return null
+
+  if (status === 'meets') {
+    return HARD_ABSENCE.test(lowered)
+      ? 'a meets whose reason says the evidence is absent'
+      : null
+  }
+
+  if (status !== 'partial' && status !== 'contradicted' && status !== 'no_evidence') {
+    return null
+  }
+
+  const limited = words.some((word) => CONTRAST.has(word))
+    || CONTRAST_PHRASES.some((phrase) => lowered.includes(phrase))
+    || /\bnon-/.test(lowered)
+
+  if (limited) return null
+
+  /*
+   * No opinion on text this function cannot read.
+   *
+   * The English list is measured; the Hebrew list is hand-built and certainly
+   * incomplete, and Hebrew fuses its prefixes (ללא, שלא and מבלי all contain
+   * לא), so a miss is likelier there. Silence is the right answer when the
+   * evidence for flagging is the absence of a word we might simply not know.
+   */
+  if (mostlyNonLatin(words)) return null
+
+  return `a ${status} whose reason names no limit`
+}
+
 export function isUsableProse(value, options) {
   return proseProblem(value, options) === null
 }

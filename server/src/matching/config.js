@@ -125,7 +125,16 @@ export const VERSIONS = {
      stored analyses were MIGRATED to it rather than left behind, because
      this key is what the cache reads on and abandoning them would have paid
      a model to recompute what was already on disk. See score-migrate.mjs. */
-  scoring: process.env.MATCH_V_SCORING ?? '3',
+  /* 4: the judgement rubric gained a rule separating a CV that CONTRADICTS a
+     requirement from one that is merely SILENT on it - describing a different
+     career is silence; contradiction is reserved for a CV that answers the
+     requirement directly with the wrong answer. That changes which verdict the
+     model returns, so it changes the score, so the two cannot share a cache
+     key. Unlike 2 to 3, this one cannot be migrated arithmetically: a verdict
+     is something only the model can produce. See score-migrate.mjs, which
+     carries forward every row the rubric never touched and leaves the rest to
+     be asked again. */
+  scoring: process.env.MATCH_V_SCORING ?? '4',
 }
 
 /**

@@ -15,7 +15,7 @@
  * first page because normalisation reads the full analysed universe.
  */
 import db, {
-  getCandidate, candidatesWithTextByIds, listCandidatesForRetrieval,
+  candidatesByIds, candidatesWithTextByIds, listCandidatesForRetrieval,
 } from '../db.js'
 import { activityStatus, candidatesHiddenFrom } from '../profiles.js'
 import { preferenceIndex, preferencePermitsJob } from './preferences.js'
@@ -241,8 +241,28 @@ async function finishBatch({
    */
   const blocked = candidatesHiddenFrom(recruiterId ?? session.recruiterId ?? null)
 
-  const visibleIds = [...displayedIds(session.id)].filter((id) => {
-    const candidate = getCandidate(id)
+  const shown = [...displayedIds(session.id)]
+
+  /*
+   * One query for everyone displayed so far, in place of a getCandidate() per
+   * id.
+   *
+   * Each of those was SELECT * - the whole row including cv_text, the one
+   * genuinely large column - to read six date and flag columns and throw the
+   * rest away, plus a JSON.parse of skills and links that nothing here looks
+   * at. The id set is deliberately everyone shown SO FAR rather than this
+   * batch (see the note above), which is correct and is also what made the
+   * cost grow with the page count: twenty-five reads on page one, a hundred by
+   * page four, every one of them synchronous.
+   *
+   * candidatesByIds returns every column except cv_text, which is a superset of
+   * what activityStatus reads. The order is set by `shown` and the Map is only
+   * a lookup, so nothing here depends on IN(...) preserving anything.
+   */
+  const people = candidatesByIds(shown)
+
+  const visibleIds = shown.filter((id) => {
+    const candidate = people.get(id)
     if (!candidate) return false
     if (blocked.has(id)) return false
     if (!activityStatus(candidate).visibleToRecruiters) return false

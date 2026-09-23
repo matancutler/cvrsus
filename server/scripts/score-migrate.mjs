@@ -133,11 +133,56 @@ const {
 const { VERSIONS } = await import('../src/matching/config.js')
 const { profileVersion } = await import('../src/matching/intelligence.js')
 
-/* The version rows are migrated FROM. Only 2 — version 1 is the era of the
-   model-invented 0-100 that the version-2 bump existed to retire, and
-   sweeping those into 3 would resurrect them into the same ranking. */
-const FROM = '2'
 const TARGET = String(VERSIONS.scoring)
+
+/*
+ * The version rows are migrated FROM: the one immediately below the target.
+ *
+ * This was the literal '2', which was right exactly once. On the 3-to-4 bump it
+ * made the whole script a no-op against every version-3 row while still
+ * recording a completed run, so the boot gate would then have made sure nobody
+ * ever came back for them - a silent, permanent skip of the entire database.
+ *
+ * One step at a time is deliberate rather than incidental. Version 1 is the era
+ * of the model-invented 0-100 that version 2 existed to retire, and sweeping
+ * those forward would resurrect them into the same ranking; the same argument
+ * applies at every step, so each bump moves the rows one version and no more.
+ * SCORE_MIGRATE_FROM is the override for an operator who knows better.
+ */
+const FROM = process.env.SCORE_MIGRATE_FROM ?? String(Number(TARGET) - 1)
+
+/*
+ * And WHAT KIND of change this bump is, which decides what can be migrated at
+ * all.
+ *
+ * An ARITHMETIC bump changes how stored verdicts are turned into a number. That
+ * is pure computation over data already on disk, which is why 2 to 3 could move
+ * every row without asking a model anything.
+ *
+ * A RUBRIC bump changes what the model is told a verdict MEANS. No amount of
+ * arithmetic over the old verdicts produces the new ones, because the verdicts
+ * themselves are what moved - only the model can produce a status. So a rubric
+ * migration does the one honest thing it can do for free: it carries forward
+ * every row the rubric could not have touched, and leaves the rest to be asked
+ * again.
+ *
+ * A row scored deterministically never saw the prompt. Its verdicts came from
+ * keyword matching, the rubric is a paragraph in a model prompt, and the
+ * arithmetic is unchanged - so carrying it forward verbatim is not an
+ * approximation, it is the same row under a new label.
+ *
+ * A row the model produced is the opposite: its verdicts are exactly what the
+ * new rule would revise. Those are deliberately NOT written forward, which
+ * makes them a cache miss at the new version, which makes the next search of
+ * that job ask the model about them under the new rubric. Nothing is lost - the
+ * old row stays where it is, readable and revertible - and nothing is spent
+ * until somebody actually looks. rescore-rubric.mjs is there for an operator
+ * who would rather buy it all up front.
+ */
+const SHAPE = ({
+  '2->3': 'arithmetic',
+  '3->4': 'rubric',
+})[`${FROM}->${TARGET}`] ?? 'arithmetic'
 
 const pad = (v, w) => String(v ?? '').padEnd(w)
 const padL = (v, w) => String(v ?? '').padStart(w)
@@ -194,6 +239,9 @@ console.log('')
 console.log('Cursus — rescoring stored analyses under the new arithmetic')
 console.log(`From version           : ${FROM}`)
 console.log(`Target version         : ${TARGET}`)
+console.log(`Kind of change         : ${SHAPE === 'rubric'
+  ? 'rubric (verdicts move, so only the model can restate them)'
+  : 'arithmetic (verdicts stand, the number is recomputed)'}`)
 console.log(`Silence fraction       : ${silenceFraction()}`)
 console.log(`Mode                   : ${REVERT ? 'REVERT' : RUN ? 'WRITE' : 'dry run (nothing is written)'}`)
 console.log(`Scope                  : ${
@@ -528,6 +576,9 @@ function rescoreOne({ criteria, storedFit }) {
 const blank = () => ({
   seen: 0, rescored: 0, carried: 0, preVersion: 0, stale: 0, skipped: 0,
   clamped: 0, moved: [],
+  /* Rows a rubric bump cannot move for free: the model wrote them, so only the
+     model can rewrite them. Counted, reported, and left exactly where they are. */
+  deferred: 0,
 })
 const searchStats = blank()
 const triageStats = blank()
@@ -678,10 +729,9 @@ while (DO_SEARCH) {
         criteria = null
       }
 
-      const result = criteria ? rescoreOne({
-        criteria,
-        storedFit: row.absolute_fit,
-      }) : { skip: 'unreadable' }
+      const result = SHAPE === 'rubric'
+        ? { skip: row.source === 'claude' ? 'model-written' : 'rubric-untouched' }
+        : (criteria ? rescoreOne({ criteria, storedFit: row.absolute_fit }) : { skip: 'unreadable' })
 
       const key = {
         candidate_id: row.candidate_id,
@@ -712,6 +762,14 @@ while (DO_SEARCH) {
         )
         if (changes === 1) noteRow.run(recordRun, 'analysis_insert', JSON.stringify(key), null)
         else searchStats.skipped += 1
+      }
+
+      if (result.skip === 'model-written') {
+        /* Left at the old version on purpose. See SHAPE above: this row's
+           verdicts are the thing the new rubric revises, so writing it forward
+           would file the old judgement under the new rule's name. */
+        searchStats.deferred += 1
+        continue
       }
 
       if (result.skip) {
@@ -763,7 +821,7 @@ const writeApplicant = db.prepare(`
 let lastId = 0
 while (DO_TRIAGE) {
   const page = db.prepare(`
-    SELECT id, triage_id, absolute_fit, criteria, scoring_version
+    SELECT id, triage_id, absolute_fit, criteria, scoring_version, analysis_source
     FROM triage_applicants
     WHERE criteria IS NOT NULL AND (scoring_version IS NULL OR scoring_version = ?)
       ${ONLY_TRIAGE === null ? '' : 'AND triage_id = ?'}
@@ -798,14 +856,31 @@ while (DO_TRIAGE) {
        * would otherwise leave it mixed in unlabelled forever.
        */
       const preVersion = row.scoring_version === null
-      const result = criteria && !preVersion
-        ? rescoreOne({ criteria, storedFit: row.absolute_fit })
-        : { skip: preVersion ? 'pre-version' : 'unreadable' }
+
+      /*
+       * The same split as the Search half, with one difference that matters:
+       * Triage has no cache. Its score is written once and read forever with no
+       * version filter, so a deferred applicant is not re-asked by anything -
+       * it simply keeps the number it has, under the version it was judged at,
+       * beside applicants judged under the new rule. That is worth saying out
+       * loud rather than discovering on a ranking, and it is what the deferred
+       * count in the report is for.
+       */
+      const result = SHAPE === 'rubric'
+        ? { skip: row.analysis_source === 'claude' ? 'model-written' : 'rubric-untouched' }
+        : (criteria && !preVersion
+          ? rescoreOne({ criteria, storedFit: row.absolute_fit })
+          : { skip: preVersion ? 'pre-version' : 'unreadable' })
 
       const before = JSON.stringify({
         absolute_fit: row.absolute_fit, criteria: row.criteria,
         scoring_version: row.scoring_version,
       })
+
+      if (result.skip === 'model-written') {
+        triageStats.deferred += 1
+        continue
+      }
 
       if (result.skip) {
         if (result.skip === 'pre-version') triageStats.preVersion += 1
@@ -856,8 +931,13 @@ for (const [name, st, ran] of [
   if (!ran) continue
   console.log(name)
   console.log(`  version-${FROM} rows seen           : ${st.seen}`)
-  console.log(`  rescored from verdicts       : ${st.rescored}`)
-  console.log(`  carried forward, no verdicts : ${st.carried}   (scored deterministically)`)
+  if (SHAPE === 'rubric') {
+    console.log(`  carried forward             : ${st.carried}   (keyword-scored; the rubric never reached them)`)
+    console.log(`  left for the model          : ${st.deferred}   (it wrote them, so only it can restate them)`)
+  } else {
+    console.log(`  rescored from verdicts       : ${st.rescored}`)
+    console.log(`  carried forward, no verdicts : ${st.carried}   (scored deterministically)`)
+  }
   if (st.preVersion > 0) {
     console.log(`  stamped, pre-version         : ${st.preVersion}   (no scoring_version; score left as it was)`)
   }

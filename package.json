@@ -39,6 +39,7 @@
     "ai:prefix": "node server/scripts/ai-prefix.mjs",
     "ai:eval": "node server/scripts/ai-eval.mjs",
     "score:migrate": "node server/scripts/score-migrate.mjs",
+    "score:rubric": "node server/scripts/rescore-rubric.mjs",
     "triage:audit": "node server/scripts/triage-audit.mjs",
     "triage:retention": "node server/scripts/triage-retention.mjs",
     "sweep:quarantine": "node server/scripts/sweep-quarantine.mjs",
@@ -85,7 +86,9 @@
     "recall:test": "node server/scripts/recall-test.mjs",
     "seed:candidates": "node server/scripts/seed-candidates.mjs",
     "prose:scan": "node server/scripts/prose-scan.mjs",
-    "test:prose": "node test/prose-check.mjs"
+    "unpoison": "node server/scripts/unpoison.mjs",
+    "test:prose": "node test/prose-check.mjs",
+    "test:reason": "node test/reason-consistency-check.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",

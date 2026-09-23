@@ -2,7 +2,7 @@ import Anthropic from '@anthropic-ai/sdk'
 
 import { detectSkills } from './skills.js'
 import { checkQuotes } from './matching/score.js'
-import { proseProblem, usableOrPlaceholder } from './matching/prose.js'
+import { proseProblem, reasonDisagrees, usableOrPlaceholder } from './matching/prose.js'
 
 /**
  * Every Claude call in the product goes through here.
@@ -1259,6 +1259,26 @@ no_evidence as unknown and excludes it, and treats contradicted as a genuine
 failure; confusing the two is how a good candidate gets buried by what their CV
 happened not to say.
 
+A CV that describes a different career is SILENT on this requirement, not
+contradicting it. "Their whole history is in marketing" is an argument from what
+the CV does not say, and CVs are routinely partial. Reserve contradicted for a CV
+that answers this requirement directly with the wrong answer: a named degree that
+is not the one required, a stated proficiency below the one required, or a total
+career shorter than the years asked for.
+
+Those three are the shape of a real contradiction, and they are worth seeing once
+each. A requirement for a bachelor's in electrical engineering, against a CV whose
+only named degree is a business administration degree in progress: contradicted,
+because the CV answered the question and the answer was a different degree. A
+requirement for high proficiency in English, against a CV that grades its own
+English as professional working proficiency: contradicted, because the candidate
+named a rung and it is below the one asked for. A requirement for five years of
+something, against a CV stating a total working life of three and a half years:
+contradicted, because no career of that length contains five years of anything.
+
+An accountant, a lawyer or a marketer whose CV simply never touches the subject is
+none of these. That is no_evidence, however complete their history looks.
+
 Your status must be earnable from the quote you give. If you cannot quote it,
 the honest answer is no_evidence.
 
@@ -1632,6 +1652,20 @@ export async function analyseMatch({
       if (bad(parsed?.reasoning, 'explanation')) return 'reasoning'
       for (const row of parsed?.criteria ?? []) {
         if (bad(row?.reason, 'reason')) return `reason on ${row?.requirement_id ?? '?'}`
+
+        /*
+         * And whether the sentence argues for the verdict beside it.
+         *
+         * Here rather than after the parse, for two reasons. It shares the one
+         * retry that already exists, which is the whole point - a model that
+         * wrote a reason contradicting its own verdict was not attending, and
+         * the cheapest response is to ask again before deciding anything. And
+         * it sees the reason BEFORE normalizeMatch caps it at 25 words, which
+         * matters: capWords can amputate a trailing "but not X" and turn an
+         * honest partial into one this check would convict.
+         */
+        const mismatch = reasonDisagrees(row?.status, row?.reason)
+        if (mismatch) return `${mismatch}, on ${row?.requirement_id ?? '?'}`
       }
       return null
     }
@@ -1681,10 +1715,36 @@ export async function analyseMatch({
     const note = () => { replaced += 1 }
 
     answer.reasoning = usableOrPlaceholder(answer.reasoning, { kind: 'explanation', onProblem: note })
-    answer.criteria = (answer.criteria ?? []).map((row) => ({
-      ...row,
-      reason: usableOrPlaceholder(row.reason, { kind: 'reason', onProblem: note }),
-    }))
+    /*
+     * And the reason-versus-verdict check again, this time as a mark.
+     *
+     * The first pass is inside degenerate(), where it buys a retry. A row that
+     * still disagrees after the retry keeps its verdict, its quote and its
+     * score, and gains a flag - the same discipline the quote check below
+     * follows, and for the same reason: this is a lexical rule with a measured
+     * false-positive rate, which is a fine trigger for asking again and not
+     * something that should move a ranking.
+     *
+     * What the flag does downstream is withhold the sentence. deriveHighlights
+     * stops republishing a flagged reason as a strength or as an evidence
+     * claim, and falls back to the requirement text - so the recruiter reads
+     * what was asked rather than a sentence arguing for a different answer.
+     */
+    let mismatched = 0
+    answer.criteria = (answer.criteria ?? []).map((row) => {
+      const reason = usableOrPlaceholder(row.reason, { kind: 'reason', onProblem: note })
+      const disagrees = reasonDisagrees(row.status, reason)
+      if (disagrees) mismatched += 1
+
+      return { ...row, reason, ...(disagrees ? { reasonUnverified: true } : {}) }
+    })
+
+    if (mismatched > 0) {
+      /* The count and nothing else. The reason itself is about a named person
+         and this goes to a log, exactly as the quote check below. */
+      console.warn(`  match-analysis: ${mismatched} verdict(s) kept a reason that argues for a `
+        + 'different verdict; flagged, not downgraded')
+    }
 
     if (replaced > 0) {
       console.warn(`  match-analysis: ${replaced} field(s) replaced with a placeholder `
@@ -1725,6 +1785,7 @@ export async function analyseMatch({
       ...answer,
       criteria: checked.breakdown,
       quotesUnverified: checked.unverified,
+      reasonsUnverified: mismatched,
       source: 'claude',
       model_version: response.model,
       usage: usageOf(response),
