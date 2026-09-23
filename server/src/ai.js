@@ -94,6 +94,27 @@ function usageOf(response) {
   }
 }
 
+/**
+ * Two attempts, added together.
+ *
+ * A retried analysis is two billed calls. `calls` rides along so recordCost can
+ * report the count honestly rather than assuming one per analysis, and the
+ * model name of the attempt that produced the answer is the one kept: the two
+ * are always the same model, and a null would lose the price lookup.
+ */
+function addUsage(kept, discarded) {
+  if (!discarded) return { ...kept, calls: 1 }
+
+  return {
+    inputTokens: kept.inputTokens + discarded.inputTokens,
+    cacheWriteTokens: kept.cacheWriteTokens + discarded.cacheWriteTokens,
+    cacheReadTokens: kept.cacheReadTokens + discarded.cacheReadTokens,
+    outputTokens: kept.outputTokens + discarded.outputTokens,
+    model: kept.model ?? discarded.model,
+    calls: 2,
+  }
+}
+
 const EXTRACTION_SCHEMA = {
   type: 'object',
   additionalProperties: false,
@@ -1707,6 +1728,24 @@ export async function analyseMatch({
     const truncated = response.stop_reason === 'max_tokens'
 
     const firstProblem = truncated ? 'the answer was cut off' : degenerate(text)
+
+    /*
+     * The discarded call was still billed, and was being counted nowhere.
+     *
+     * `response` is reassigned to the retry below, so usageOf(response) reports
+     * the second call only - and the first was a full adaptive-thinking pass
+     * over the whole CV, including the cache write on the shared prefix.
+     * recordCost then filed a retried analysis as ONE call at one call's
+     * tokens, which means the cost report understated real spend by the whole
+     * of every discarded attempt.
+     *
+     * It was a rare gap when the only trigger was unreadable prose. The
+     * reason-versus-verdict gate is a second, more frequent trigger, so a rare
+     * accounting gap would have become a routine one on the same deploy that
+     * introduced it.
+     */
+    const discarded = firstProblem ? usageOf(response) : null
+
     if (firstProblem) {
       console.warn(`  match-analysis: unusable prose (${firstProblem}); asking once more`)
       response = await ask()
@@ -1814,7 +1853,8 @@ export async function analyseMatch({
       reasonsUnverified: mismatched,
       source: 'claude',
       model_version: response.model,
-      usage: usageOf(response),
+      /* Both attempts, where there were two. Anthropic billed for both. */
+      usage: addUsage(usageOf(response), discarded),
     }
   } catch (error) {
     reportFailure('match-analysis', error)

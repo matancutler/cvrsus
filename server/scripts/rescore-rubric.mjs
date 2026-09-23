@@ -47,11 +47,35 @@
 import './env.mjs'
 import process from 'node:process'
 
+/*
+ * Flag values are validated rather than trusted.
+ *
+ * `--limit` with nothing after it made LIMIT NaN, and `done >= NaN` is false
+ * for ever, so a typo silently became an unlimited run. `--job` with nothing
+ * after it made ONLY_JOB NaN, which matched no rows and printed "nothing left
+ * to re-score" - a typo reported as success on a command whose whole purpose is
+ * to find work. Both now refuse.
+ */
 const argv = process.argv.slice(2)
 const has = (f) => argv.includes(`--${f}`)
+
+const refuse = (message) => {
+  console.error('')
+  console.error(`  ${message}`)
+  console.error('')
+  process.exit(1)
+}
+
 const num = (f) => {
   const at = argv.indexOf(`--${f}`)
-  return at > -1 ? Number(argv[at + 1]) : null
+  if (at < 0) return null
+
+  const raw = argv[at + 1]
+  if (raw === undefined || raw.startsWith('--')) refuse(`--${f} needs a number after it.`)
+
+  const value = Number(raw)
+  if (!Number.isFinite(value) || value < 0) refuse(`--${f} needs a number, not "${raw}".`)
+  return value
 }
 
 const RUN = has('run')
@@ -59,33 +83,52 @@ const LIMIT = num('limit')
 const ONLY_JOB = num('job')
 
 const db = (await import('../src/db.js')).default
-const { VERSIONS } = await import('../src/matching/config.js')
-const { analyseBatch, withinDailyCeiling } = await import('../src/matching/analysis.js')
+const { VERSIONS, MATCHING } = await import('../src/matching/config.js')
+const {
+  analyseBatch, withinDailyCeiling, analysisModel,
+} = await import('../src/matching/analysis.js')
 const { getJob, ensureJobMatchProfile } = await import('../src/matching/jobProfile.js')
 const { candidatesWithTextByIds } = await import('../src/db.js')
 const { effectiveProfile } = await import('../src/profiles.js')
+const { profileVersion } = await import('../src/matching/intelligence.js')
 const { isConfigured, MATCH_MODEL } = await import('../src/ai.js')
 const { costOf } = await import('../src/costs.js')
 
 const TARGET = String(VERSIONS.scoring)
 const FROM = process.env.SCORE_MIGRATE_FROM ?? String(Number(TARGET) - 1)
 
+/* The key analyseBatch will actually write under. Everything below asks about
+   THIS, never about the key the old row happens to carry. */
+const WRITE_MODEL = analysisModel(MATCH_MODEL)
+
 /* ------------------------------------------------------------- the work --- */
 
 /*
  * Rows the model wrote at the old version with no twin at the new one.
  *
- * `source = 'claude'` is the whole selector: those are the rows whose verdicts
- * the new rubric revises. A keyword-scored row is score-migrate's business and
- * has already been carried forward by the time anybody runs this.
+ * Three narrowings, each of which was a defect before it was a clause:
  *
- * The NOT EXISTS is what makes a second run free rather than a second bill.
+ * `source = 'claude'` is the selector proper: those are the rows whose verdicts
+ * the new rubric revises. A keyword-scored row is score-migrate's business.
+ *
+ * `analysis_model = WRITE_MODEL` is there because analyseBatch writes under the
+ * CURRENT model. Without it this command picked up public-demo rows, which are
+ * judged on Sonnet and stored under the Sonnet key, re-judged them at full Opus
+ * price, wrote the answer under the Opus key - which the demo never reads - and
+ * then reported them as failures for ever, because the NOT EXISTS below was
+ * looking for a Sonnet-keyed row that was never going to appear.
+ *
+ * And the profile_version check, in JS below, because the cache is read at the
+ * candidate's CURRENT profile version: a row whose candidate has re-profiled
+ * since is already unreachable, so re-judging it buys an answer nothing will
+ * ever read. score-migrate skips those as stale; this used to buy them.
  */
-const pending = db.prepare(`
+const candidates = db.prepare(`
   SELECT a.candidate_id, a.job_id, a.jd_version, a.analysis_model, a.profile_version
   FROM candidate_job_analyses a
   WHERE a.scoring_version = ?
     AND a.source = 'claude'
+    AND a.analysis_model = ?
     ${ONLY_JOB === null ? '' : 'AND a.job_id = ?'}
     AND NOT EXISTS (
       SELECT 1 FROM candidate_job_analyses b
@@ -94,7 +137,16 @@ const pending = db.prepare(`
         AND b.analysis_model = a.analysis_model AND b.scoring_version = ?
     )
   ORDER BY a.job_id, a.candidate_id
-`).all(...(ONLY_JOB === null ? [FROM, TARGET] : [FROM, ONLY_JOB, TARGET]))
+`).all(...(ONLY_JOB === null
+  ? [FROM, WRITE_MODEL, TARGET]
+  : [FROM, WRITE_MODEL, ONLY_JOB, TARGET]))
+
+const stale = []
+const pending = []
+for (const row of candidates) {
+  if (profileVersion(row.candidate_id) !== row.profile_version) stale.push(row)
+  else pending.push(row)
+}
 
 const byJob = new Map()
 for (const row of pending) {
@@ -117,6 +169,9 @@ console.log(`  Model                    : ${MATCH_MODEL}`)
 console.log(`  Analyses still to redo   : ${pending.length}`)
 console.log(`  Across jobs              : ${byJob.size}`)
 console.log(`  Rough cost               : $${(PER_ANALYSIS * pending.length).toFixed(2)}`)
+if (stale.length > 0) {
+  console.log(`  Skipped, profile moved   : ${stale.length}   (unreachable by the cache either way)`)
+}
 if (LIMIT !== null) console.log(`  Limited this run to      : ${LIMIT}`)
 console.log('')
 
@@ -151,6 +206,16 @@ if (!isConfigured()) {
  * it was a different command. The tables are created by that script; this one
  * refuses to invent them, because a manifest that exists only when this runs is
  * a manifest the revert cannot find.
+ *
+ * The scope carries `rubric: true`, and that marker is load-bearing.
+ * score-migrate's boot gate looks for a completed, un-reverted run with
+ * from_version, to_version AND scope exactly '{"job":null,"triage":null}'. An
+ * unscoped run of THIS command wrote a byte-identical row - so one use of it
+ * before score-migrate had finished its own pass would have satisfied that gate
+ * for ever, and the free carry-forward would simply never happen: every
+ * keyword-scored row stranded at the old version, invisible to the new cache,
+ * re-analysed and re-paid on every search, with nothing ever coming back for
+ * them. --refresh marks its runs for exactly this reason; this one had not.
  */
 const hasManifest = db.prepare(
   `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'score_migration_runs'`,
@@ -171,20 +236,30 @@ const runId = db.prepare(`
   VALUES (?, ?, ?, ?, ?, ?)
 `).run(
   `rubric re-score on ${MATCH_MODEL}`, FROM, TARGET, 0,
-  JSON.stringify({ job: ONLY_JOB, triage: null }), now(),
+  JSON.stringify({ job: ONLY_JOB, triage: null, rubric: true }), now(),
 ).lastInsertRowid
 
 const noteRow = db.prepare(
   `INSERT INTO score_migration_rows (run_id, kind, key_json, payload) VALUES (?, ?, ?, ?)`,
 )
 
+/*
+ * Whether a row exists under the key analyseBatch WRITES: the current model and
+ * the candidate's current profile version, not whatever the old row carried.
+ * Asking the old row's key meant a successful write was reported as a failure,
+ * left out of the manifest - so unrevertible, and unrefundable - and counted as
+ * outstanding by a closing query that could then never reach zero.
+ */
 const existsAt = db.prepare(`
   SELECT 1 FROM candidate_job_analyses
   WHERE candidate_id = ? AND profile_version = ? AND job_id = ? AND jd_version = ?
     AND analysis_model = ? AND scoring_version = ?
 `).pluck()
 
-/* --------------------------------------------------------------- the run --- */
+const writtenAlready = (row) => Boolean(existsAt.get(
+  row.candidate_id, profileVersion(row.candidate_id), row.job_id, row.jd_version,
+  WRITE_MODEL, TARGET,
+))
 
 /*
  * What this run cost, from its own telemetry.
@@ -205,10 +280,20 @@ const spendSince = (mark) => db.prepare(`
 
 const costMark = db.prepare(`SELECT COALESCE(MAX(id), 0) AS n FROM ai_cost_events`).pluck().get()
 
+/* --------------------------------------------------------------- the run --- */
+
 let done = 0
 let written = 0
 let skipped = 0
 let failed = 0
+let ceilingHits = 0
+
+/* The same size a live search analyses in one go. A whole job group used to be
+   handed to analyseBatch and to the ceiling check in one piece, so a job with
+   more pending rows than the daily cap failed the check on every run however
+   empty the window was - and the response was `break`, which abandoned every
+   job after it too. A blocked chunk now moves to the next group. */
+const CHUNK = Math.max(1, MATCHING.deepAnalysisBatch)
 
 for (const group of byJob.values()) {
   if (LIMIT !== null && done >= LIMIT) break
@@ -220,95 +305,102 @@ for (const group of byJob.values()) {
     continue
   }
 
-  let take = group.rows
-  if (LIMIT !== null) take = take.slice(0, LIMIT - done)
-
-  /*
-   * The ceiling is asked BEFORE the call, and a refusal stops the run rather
-   * than falling through. Falling through is what analyseBatch does for a live
-   * search, and it is right there: a recruiter gets keyword scores and is told.
-   * Here it would write a keyword score into the cache under the model's name,
-   * which is the exact defect the unpoison command exists to clean up after.
-   */
-  if (!withinDailyCeiling({ context: 'rubric-migration', companyId: null, wanted: take.length })) {
-    console.log('  Daily analysis ceiling reached. Stopping here; re-run tomorrow and this')
-    console.log('  picks up exactly where it left off.')
-    break
-  }
-
-  const people = candidatesWithTextByIds(take.map((row) => row.candidate_id))
-  const rows = take
-    .map((row) => {
-      const candidate = people.get(row.candidate_id)
-      if (!candidate) return null
-      return {
-        candidate: { ...candidate, cv_text: candidate.cv_text },
-        cvText: candidate.cv_text,
-        profile: effectiveProfile(row.candidate_id),
-      }
-    })
-    .filter(Boolean)
-
-  if (rows.length === 0) {
-    skipped += take.length
-    continue
-  }
-
   const matchProfile = await ensureJobMatchProfile(job)
+  let analysedHere = 0
 
-  try {
-    const out = await analyseBatch({
-      job, matchProfile, rows, context: 'rubric-migration', companyId: job.company_id ?? null,
-    })
+  for (let at = 0; at < group.rows.length; at += CHUNK) {
+    if (LIMIT !== null && done >= LIMIT) break
 
-    /* What actually landed, asked of the database rather than inferred from the
-       return: a candidate the model refused is not in the cache and must not be
-       recorded as this run's to undo. */
-    for (const row of take) {
-      if (existsAt.get(
-        row.candidate_id, row.profile_version, row.job_id, row.jd_version,
-        row.analysis_model, TARGET,
-      )) {
-        written += 1
-        noteRow.run(runId, 'analysis_insert', JSON.stringify({
-          candidate_id: row.candidate_id,
-          profile_version: row.profile_version,
-          job_id: row.job_id,
-          jd_version: row.jd_version,
-          analysis_model: row.analysis_model,
-        }), null)
-      } else {
-        failed += 1
-      }
+    let take = group.rows.slice(at, at + CHUNK)
+    if (LIMIT !== null) take = take.slice(0, LIMIT - done)
+    if (take.length === 0) break
+
+    /*
+     * The ceiling is asked BEFORE the call, and a refusal skips rather than
+     * falling through. Falling through is what analyseBatch does for a live
+     * search, and it is right there: a recruiter gets keyword scores and is
+     * told. Here it would write a keyword score into the cache under the
+     * model's name, which is the exact defect unpoison exists to clean up.
+     *
+     * companyId is omitted rather than passed as null. itemsInWindow turns an
+     * explicit null into `company_id IS NULL`, and the spend this is meant to
+     * count is booked by analyseBatch under the job's real company id - so the
+     * guard was counting a bucket nothing ever writes to, read zero every time,
+     * and could not fire.
+     */
+    if (!withinDailyCeiling({ context: 'rubric-migration', wanted: take.length })) {
+      ceilingHits += 1
+      console.log(`  job ${group.jobId}: daily analysis ceiling reached, ${take.length} left here`)
+      break
     }
 
-    done += take.length
-    console.log(`  job ${group.jobId}: ${out.analysed} analysed, ${out.reused} already cached`)
-  } catch (error) {
-    failed += take.length
-    console.log(`  job ${group.jobId}: ${error.message}`)
+    /* Which of these already had a row at the written key BEFORE the call.
+       Authorship cannot be inferred from existence afterwards: a live search
+       running alongside this writes real v4 rows of its own, and recording
+       those as this run's would have `--revert` delete a judgement somebody
+       paid for, under a message promising only this run's writes were touched. */
+    const before = new Set(take.filter(writtenAlready).map((row) => row.candidate_id))
+
+    const people = candidatesWithTextByIds(take.map((row) => row.candidate_id))
+    const rows = take
+      .map((row) => {
+        const candidate = people.get(row.candidate_id)
+        if (!candidate) return null
+        return { candidate, cvText: candidate.cv_text, profile: effectiveProfile(row.candidate_id) }
+      })
+      .filter(Boolean)
+
+    if (rows.length === 0) {
+      skipped += take.length
+      continue
+    }
+
+    try {
+      const out = await analyseBatch({
+        job, matchProfile, rows, context: 'rubric-migration', companyId: job.company_id ?? null,
+      })
+      analysedHere += out.analysed
+
+      for (const row of take) {
+        if (before.has(row.candidate_id)) { skipped += 1; continue }
+
+        if (writtenAlready(row)) {
+          written += 1
+          noteRow.run(runId, 'analysis_insert', JSON.stringify({
+            candidate_id: row.candidate_id,
+            profile_version: profileVersion(row.candidate_id),
+            job_id: row.job_id,
+            jd_version: row.jd_version,
+            analysis_model: WRITE_MODEL,
+          }), null)
+        } else {
+          failed += 1
+        }
+      }
+
+      done += take.length
+    } catch (error) {
+      failed += take.length
+      console.log(`  job ${group.jobId}: ${error.message}`)
+    }
   }
+
+  if (analysedHere > 0) console.log(`  job ${group.jobId}: ${analysedHere} analysed`)
 }
 
 db.prepare(`UPDATE score_migration_runs SET completed_at = ? WHERE id = ?`).run(now(), runId)
 
-const left = db.prepare(`
-  SELECT COUNT(*) AS n FROM candidate_job_analyses a
-  WHERE a.scoring_version = ? AND a.source = 'claude'
-    AND NOT EXISTS (
-      SELECT 1 FROM candidate_job_analyses b
-      WHERE b.candidate_id = a.candidate_id AND b.job_id = a.job_id
-        AND b.jd_version = a.jd_version AND b.profile_version = a.profile_version
-        AND b.analysis_model = a.analysis_model AND b.scoring_version = ?
-    )
-`).pluck().get(FROM, TARGET)
+const left = pending.filter((row) => !writtenAlready(row)).length
 
 console.log('')
 console.log('DONE')
 console.log(`  written at version ${TARGET}   : ${written}`)
-console.log(`  unreachable, skipped    : ${skipped}`)
+console.log(`  already there, skipped  : ${skipped}`)
 console.log(`  not written             : ${failed}`)
 console.log(`  still at version ${FROM}      : ${left}`)
+if (ceilingHits > 0) {
+  console.log(`  stopped by the ceiling  : ${ceilingHits} chunk(s); re-run and it picks up here`)
+}
 console.log(`  ACTUAL COST             : $${spendSince(costMark).toFixed(4)}`)
 console.log(`  manifest run id         : ${runId}   (npm run score:migrate -- --revert)`)
 console.log('')

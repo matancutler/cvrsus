@@ -167,7 +167,19 @@ check('the flag has a route to storage',
   + 'quoteUnverified once already')
 check('a flagged reason is not republished as a strength',
   /row\.reasonUnverified === true/.test(score))
-check('nor as an evidence claim',
-  /\.filter\(\(row\) => row\.reasonUnverified !== true\)/.test(score))
+/*
+ * But it keeps its quote.
+ *
+ * reasonUnverified says the model's own summary argues for a different verdict.
+ * It says nothing about the QUOTE, which checkQuotes located in the exact text
+ * the model was shown — so dropping the whole evidence entry threw away the one
+ * piece of proof here that was independently confirmed, on the rows a recruiter
+ * most needs it for. The claim is swapped for the requirement text; the
+ * quotation stays.
+ */
+check('and an evidence claim loses its wording rather than its quote',
+  /claim: row\.reasonUnverified === true/.test(score)
+  && !/\.filter\(\(row\) => row\.reasonUnverified !== true\)/.test(score),
+  'a doubtful sentence does not make a verified quote doubtful')
 
 finish()

@@ -66,17 +66,58 @@ import process from 'node:process'
 
 const argv = process.argv.slice(2)
 const has = (f) => argv.includes(`--${f}`)
+
+const refuse = (message) => {
+  console.error('')
+  console.error(`  ${message}`)
+  console.error('')
+  process.exit(1)
+}
+
+/*
+ * A missing flag value cannot be allowed to fall through here, because the
+ * failure is asymmetric and silent.
+ *
+ * `--delete --all --since` left SINCE undefined, the narrowing clause never
+ * ran, and every matching row in the database was deleted by an operator who
+ * believed they had scoped the run to a window. `--since --delete` was worse:
+ * SINCE became the string "--delete", and `created_at >= '--delete'` is true of
+ * every ISO timestamp because "-" sorts below "2" - so the filter matched
+ * everything while the report said "Narrowed by: since --delete".
+ *
+ * A bad --until narrows to nothing and wastes a run. A bad --since widens to
+ * everything and there is no undo.
+ */
 const value = (f) => {
   const at = argv.indexOf(`--${f}`)
-  return at > -1 ? argv[at + 1] : null
+  if (at < 0) return null
+
+  const raw = argv[at + 1]
+  if (raw === undefined || raw.startsWith('--')) refuse(`--${f} needs a value after it.`)
+  return raw
+}
+
+const date = (f) => {
+  const raw = value(f)
+  if (raw === null) return null
+  if (Number.isNaN(Date.parse(raw))) refuse(`--${f} needs a date, not "${raw}".`)
+  return raw
+}
+
+const jobNumber = () => {
+  const raw = value('job')
+  if (raw === null) return null
+  const parsed = Number(raw)
+  if (!Number.isInteger(parsed)) refuse(`--job needs a job id, not "${raw}".`)
+  return parsed
 }
 
 const DELETE = has('delete')
 const ALL = has('all')
 const SHOW = has('show')
-const SINCE = value('since')
-const UNTIL = value('until')
-const JOB = value('job') === null ? null : Number(value('job'))
+const SINCE = date('since')
+const UNTIL = date('until')
+const JOB = jobNumber()
 
 const db = (await import('../src/db.js')).default
 

@@ -608,17 +608,28 @@ section('A rubric bump is a different kind of change, and moves different rows')
 const RUBRIC_JOB = JOB_ID - 7
 const CAND_MODEL = BASE - 11
 const CAND_KEYWORD = BASE - 12
+const CAND_POISON = BASE - 13
 
 seedCandidate(CAND_MODEL, 'Rubric Model')
 seedCandidate(CAND_KEYWORD, 'Rubric Keyword')
+seedCandidate(CAND_POISON, 'Rubric Poison')
 
-const seedAtV3 = (candidateId, source) => db.prepare(`
+/*
+ * The model column matters as much as the source column.
+ *
+ * A genuinely keyword-scored row records BOTH as 'deterministic'. A row saying
+ * source='deterministic' while analysis_model names a real model is not a
+ * keyword score honestly labelled — it is the poisoning defect, and carrying
+ * one forward is much worse than leaving it, because it re-files a keyword
+ * guess as a live cache hit at the current version under the model's own name.
+ */
+const seedAtV3 = (candidateId, source, model) => db.prepare(`
   INSERT INTO candidate_job_analyses (
     candidate_id, profile_version, job_id, jd_version, analysis_model,
     scoring_version, absolute_fit, criteria_results, explanation, source, created_at
-  ) VALUES (?, 1, ?, 1, 'claude-opus-5', '3', 61, ?, ?, ?, ?)
+  ) VALUES (?, 1, ?, 1, ?, '3', 61, ?, ?, ?, ?)
 `).run(
-  candidateId, RUBRIC_JOB,
+  candidateId, RUBRIC_JOB, model,
   JSON.stringify({
     verdicts: [{
       id: 'R1', requirement: 'Five years of something', tier: 'must_have', weight: 30,
@@ -631,8 +642,9 @@ const seedAtV3 = (candidateId, source) => db.prepare(`
   new Date().toISOString(),
 )
 
-seedAtV3(CAND_MODEL, 'claude')
-seedAtV3(CAND_KEYWORD, 'deterministic')
+seedAtV3(CAND_MODEL, 'claude', 'claude-opus-5')
+seedAtV3(CAND_KEYWORD, 'deterministic', 'deterministic')
+seedAtV3(CAND_POISON, 'deterministic', 'claude-opus-5')
 
 const rubricRun = execFileSync(
   process.execPath,
@@ -666,8 +678,23 @@ check('and is left intact where it is',
   atVersion(CAND_MODEL, '3')?.fit === 61,
   'deferred is not deleted — the row stays readable, and revertible')
 
+/*
+ * The row that says 'deterministic' in one column and names a model in the
+ * other. Before the version bump it was about to become harmless — the bump
+ * makes it a cache miss and the next search asks the model. Carrying it forward
+ * re-files it at the CURRENT version under the model's name, so the one event
+ * that would have flushed the poison instead renews it, automatically, on the
+ * deploy that ships the new rubric.
+ */
+check('a poisoned row is deferred, not carried forward',
+  atVersion(CAND_POISON, '4') === undefined,
+  'carrying one forward turns a keyword guess into a live cache hit filed as an '
+  + 'Opus judgement')
+check('and is left where it is, where the next search will miss it',
+  atVersion(CAND_POISON, '3')?.fit === 61)
+
 check('the report counts both',
-  /carried forward\s*:\s*1/.test(rubricRun) && /left for the model\s*:\s*1/.test(rubricRun),
+  /carried forward\s*:\s*1/.test(rubricRun) && /left for the model\s*:\s*2/.test(rubricRun),
   rubricRun.split('\n').filter((l) => /carried forward|left for the model/.test(l))
     .map((l) => l.trim()).join(' / '))
 
@@ -677,13 +704,14 @@ check('and the arithmetic path is not reported for a rubric bump',
 
 /* Cleaned up here rather than in the sweep below, which is scoped to JOB_ID. */
 db.prepare(`DELETE FROM candidate_job_analyses WHERE job_id = ?`).run(RUBRIC_JOB)
-db.prepare(`DELETE FROM candidates WHERE id IN (?, ?)`).run(CAND_MODEL, CAND_KEYWORD)
+db.prepare(`DELETE FROM candidates WHERE id IN (?, ?, ?)`)
+  .run(CAND_MODEL, CAND_KEYWORD, CAND_POISON)
 
 check('rubric fixtures removed',
   db.prepare(`SELECT COUNT(*) AS n FROM candidate_job_analyses WHERE job_id = ?`)
     .get(RUBRIC_JOB).n === 0
-  && db.prepare(`SELECT COUNT(*) AS n FROM candidates WHERE id IN (?, ?)`)
-    .get(CAND_MODEL, CAND_KEYWORD).n === 0)
+  && db.prepare(`SELECT COUNT(*) AS n FROM candidates WHERE id IN (?, ?, ?)`)
+    .get(CAND_MODEL, CAND_KEYWORD, CAND_POISON).n === 0)
 
 /*
  * Only the backups this run caused.

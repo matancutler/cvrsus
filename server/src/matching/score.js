@@ -500,10 +500,25 @@ export function deriveHighlights(breakdown, { limit = 8 } = {}) {
    */
   const evidence = rows
     .filter((row) => row.quoteUnverified !== true)
-    .filter((row) => row.reasonUnverified !== true)
     .filter((row) => String(row.quote ?? '').trim().length > 0)
     .sort(byTier)
-    .map((row) => ({ claim: said(row), quote: String(row.quote).trim() }))
+    /*
+     * A doubtful sentence does not make a verified quote doubtful.
+     *
+     * reasonUnverified says the model's own summary argues for a different
+     * verdict. It says nothing about the QUOTE, which checkQuotes located in
+     * the exact text the model was shown - so dropping the whole entry threw
+     * away the one piece of evidence here that was independently confirmed,
+     * on precisely the rows a recruiter most needs proof for. The claim is
+     * swapped for the requirement text, the way `strengths` does it, and the
+     * quotation stays on screen.
+     */
+    .map((row) => ({
+      claim: row.reasonUnverified === true
+        ? String(row.requirement ?? '').trim()
+        : said(row),
+      quote: String(row.quote).trim(),
+    }))
     .slice(0, limit)
 
   return { strengths, gaps, evidence }

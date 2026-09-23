@@ -60,16 +60,44 @@ export async function runSearch({
    * that existed when it was created. So a refresh skips the resume and builds
    * a new session against the pool as it stands now.
    *
-   * It is not a re-analysis: the per-candidate judgements are cached against
-   * the job, so anyone already read is reused and only newcomers cost anything.
+   * It is not a re-analysis - EXCEPT on the first reopen after a scoring-version
+   * bump, and that exception is worth stating because it costs money.
+   *
+   * The judgements are cached against (candidate, job, jd_version, model,
+   * scoring_version). An ARITHMETIC bump migrates every stored row forward, so
+   * this stays a pure cache read. A RUBRIC bump cannot: only the model can
+   * produce a verdict, so score-migrate deliberately leaves model-written rows
+   * at the old version and they become misses here. This path hands
+   * analyseBatch every id shown so far, not one page - so a recruiter reopening
+   * a search that had reached a hundred candidates buys a hundred judgements,
+   * inside one request, once.
+   *
+   * That is the bump working rather than a defect: those are exactly the rows
+   * whose verdicts the new rule revises. It is stated here, logged below, and
+   * an operator who would rather pay it up front and off the critical path has
+   * rescore-rubric.mjs for that.
    */
   const resumed = created || refresh ? null : latestSession({
     jobId: job.id, jdVersion: job.jd_version, recruiterId,
   })
 
   if (resumed) {
+    /*
+     * Said out loud when a reopen is about to become a purchase.
+     *
+     * The ordinary reopen analyses nothing and this never prints. After a
+     * rubric bump the same click can analyse everything the session ever
+     * showed, and the difference should be visible in a log before it is
+     * visible in an invoice.
+     */
+    const shown = [...displayedIds(resumed.id)]
+    if (shown.length > MATCHING.deepAnalysisBatch) {
+      console.warn(`  search: resuming a session of ${shown.length} candidate(s); any whose `
+        + 'analysis predates the current scoring version will be re-read by the model')
+    }
+
     const previous = await finishBatch({
-      job, matchProfile, session: resumed, ids: [...displayedIds(resumed.id)],
+      job, matchProfile, session: resumed, ids: shown,
       batchIndex: 0, resumed: true, recruiterId, signal, context, companyId, model,
     })
 

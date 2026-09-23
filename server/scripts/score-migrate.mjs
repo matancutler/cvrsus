@@ -729,8 +729,33 @@ while (DO_SEARCH) {
         criteria = null
       }
 
+      /*
+       * Carried forward ONLY if the row is genuinely keyword-scored, which
+       * takes both columns and not just `source`.
+       *
+       * A row can say source='deterministic' while its analysis_model names a
+       * real model. That pair is not a keyword score honestly labelled - it is
+       * the poisoning defect unpoison.mjs hunts for: analysisModel() records
+       * the model whenever a key is CONFIGURED, `source` records whether one
+       * actually answered, and an exhausted balance makes them disagree.
+       *
+       * Testing `source` alone carried those forward, and carrying one forward
+       * is much worse than leaving it. At the old version a poisoned row was
+       * about to become harmless: the version bump would have made it a cache
+       * miss and the next search would have asked the model. Re-filing it at
+       * the CURRENT version under the model's own name turns it back into a
+       * live cache hit - so the one event that would have flushed the poison
+       * instead renewed it, automatically, on the deploy that shipped the new
+       * rubric. It would then be served as an Opus judgement under a rule Opus
+       * never applied to it.
+       *
+       * Deferring it costs nothing and fixes it: like every other deferred row
+       * it becomes a miss, and the next search asks properly.
+       */
+      const keywordScored = row.source !== 'claude' && row.analysis_model === 'deterministic'
+
       const result = SHAPE === 'rubric'
-        ? { skip: row.source === 'claude' ? 'model-written' : 'rubric-untouched' }
+        ? { skip: keywordScored ? 'rubric-untouched' : 'model-written' }
         : (criteria ? rescoreOne({ criteria, storedFit: row.absolute_fit }) : { skip: 'unreadable' })
 
       const key = {
@@ -821,7 +846,8 @@ const writeApplicant = db.prepare(`
 let lastId = 0
 while (DO_TRIAGE) {
   const page = db.prepare(`
-    SELECT id, triage_id, absolute_fit, criteria, scoring_version, analysis_source
+    SELECT id, triage_id, absolute_fit, criteria, scoring_version,
+           analysis_source, analysis_model
     FROM triage_applicants
     WHERE criteria IS NOT NULL AND (scoring_version IS NULL OR scoring_version = ?)
       ${ONLY_TRIAGE === null ? '' : 'AND triage_id = ?'}
@@ -866,8 +892,15 @@ while (DO_TRIAGE) {
        * loud rather than discovering on a ranking, and it is what the deferred
        * count in the report is for.
        */
+      /* Same two-column test as the Search half. Triage cannot currently
+         produce the disagreeing pair - both of its fallback paths write
+         model and source together - but a rule that is right for one table and
+         coincidentally right for the other is a rule waiting to be wrong. */
+      const keywordScored = row.analysis_source !== 'claude'
+        && row.analysis_model === 'deterministic'
+
       const result = SHAPE === 'rubric'
-        ? { skip: row.analysis_source === 'claude' ? 'model-written' : 'rubric-untouched' }
+        ? { skip: keywordScored ? 'rubric-untouched' : 'model-written' }
         : (criteria && !preVersion
           ? rescoreOne({ criteria, storedFit: row.absolute_fit })
           : { skip: preVersion ? 'pre-version' : 'unreadable' })
